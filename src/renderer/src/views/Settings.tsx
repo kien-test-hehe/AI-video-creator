@@ -1,5 +1,5 @@
 import { useMemo,useState } from 'react';
-import type { GenerationMode,ModelFamily,RuntimeBackend,WorkflowBinding,WorkflowBindingKey,WorkflowProfile,WorkflowPurpose } from '../../../shared/types';
+import type { AppMachineSettings,GenerationMode,ModelFamily,RuntimeBackend,WorkflowBinding,WorkflowBindingKey,WorkflowProfile,WorkflowPurpose } from '../../../shared/types';
 import { useAppStore } from '../store';
 import { Card,Empty,Page,Pill } from '../components/Ui';
 
@@ -12,8 +12,8 @@ export function Settings(){
   const{project,machine,updateProject,updateMachine,setProject,setError,setNotice}=useAppStore();
   const[family,setFamily]=useState<ModelFamily>('ltx-2.5-fast'),[mode,setMode]=useState<GenerationMode>('i2v'),[purpose,setPurpose]=useState<WorkflowPurpose>('video'),[selectedProfileId,setSelectedProfileId]=useState<string>(),[provisionBusy,setProvisionBusy]=useState(false),[newKey,setNewKey]=useState<WorkflowBindingKey>('prompt'),[newNodeId,setNewNodeId]=useState(''),[newClassType,setNewClassType]=useState(''),[newInput,setNewInput]=useState(''),[newJsonPath,setNewJsonPath]=useState('');
   const selected=useMemo(()=>project?.settings.workflowProfiles.find(p=>p.id===selectedProfileId),[project,selectedProfileId]);
-  if(!project)return <Page title="Settings"><Empty>Open a project first.</Empty></Page>;
   if(!machine)return <Page title="Settings"><Empty>Loading machine settings…</Empty></Page>;
+  if(!project)return <MachineOnlySettings machine={machine} updateMachine={updateMachine} setError={setError} setNotice={setNotice}/>;
 
   const provisionWanGp=async()=>{try{setProvisionBusy(true);await Promise.all([useAppStore.getState().persist(),useAppStore.getState().persistMachine()]);const probe=await window.cineforge.system.probe();updateMachine(m=>{m.wangp.profile=probe.hardwarePlan.recommendedWanGpProfile;m.wangp.attention=probe.hardwarePlan.recommendedAttention;});await useAppStore.getState().persistMachine();const next=await window.cineforge.workflow.provisionRecommendedWanGp();setProject(next);setNotice('Managed WanGP profiles created from the installed model catalog. Model weights download on first use.');}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setProvisionBusy(false);}};
   const testComfy=async()=>{try{await useAppStore.getState().persistMachine();const r=await window.cineforge.system.pingComfy(machine.comfy.url);setNotice(r.reachable?'ComfyUI connected.':`ComfyUI offline: ${r.error}`);}catch(e){setError(e instanceof Error?e.message:String(e));}};
@@ -79,5 +79,37 @@ export function Settings(){
       {selected.validation?.lastError&&<pre className="error-box">{selected.validation.lastError}</pre>}
       {selectedRuntime==='wangp'?<><div className="binding-table"><div className="binding-row binding-head"><b>Value</b><b>JSON path</b><b>Transform</b><b>Required</b><b/></div>{selected.bindings.map((binding,i)=><div className="binding-row" key={`${binding.key}-${i}`}><code>{binding.key}</code><code>{binding.jsonPath||'—'}</code><span>{binding.transform||'identity'}</span><input type="checkbox" checked={Boolean(binding.required)} onChange={e=>updateProfile(selected.id,p=>p.bindings[i].required=e.target.checked)}/><button className="mini danger" onClick={()=>updateProfile(selected.id,p=>p.bindings.splice(i,1))}>×</button></div>)}</div><div className="binding-add"><select value={newKey} onChange={e=>setNewKey(e.target.value as WorkflowBindingKey)}>{BINDING_KEYS.map(k=><option key={k}>{k}</option>)}</select><input placeholder="JSON path" value={newJsonPath} onChange={e=>setNewJsonPath(e.target.value)}/><button className="ghost" onClick={addBinding}>Add binding</button></div></>:<><div className="binding-table"><div className="binding-row binding-head"><b>Value</b><b>Node</b><b>Input</b><b>Required</b><b/></div>{selected.bindings.map((binding,i)=><div className="binding-row" key={`${binding.key}-${i}`}><code>{binding.key}</code><span>{binding.selector?.nodeId||binding.selector?.classType||binding.selector?.titleIncludes||'—'}</span><code>{binding.input||'—'}</code><input type="checkbox" checked={Boolean(binding.required)} onChange={e=>updateProfile(selected.id,p=>p.bindings[i].required=e.target.checked)}/><button className="mini danger" onClick={()=>updateProfile(selected.id,p=>p.bindings.splice(i,1))}>×</button></div>)}</div><div className="binding-add"><select value={newKey} onChange={e=>setNewKey(e.target.value as WorkflowBindingKey)}>{BINDING_KEYS.map(k=><option key={k}>{k}</option>)}</select><input placeholder="node id" value={newNodeId} onChange={e=>setNewNodeId(e.target.value)}/><input placeholder="class type" value={newClassType} onChange={e=>setNewClassType(e.target.value)}/><input placeholder="input name" value={newInput} onChange={e=>setNewInput(e.target.value)}/><button className="ghost" onClick={addBinding}>Add binding</button></div></>}
     </Card>}
+  </Page>;
+}
+
+
+function MachineOnlySettings({machine,updateMachine,setError,setNotice}:{machine:AppMachineSettings;updateMachine:(mutator:(settings:AppMachineSettings)=>void)=>void;setError:(message?:string)=>void;setNotice:(message?:string)=>void}){
+  const testComfy=async()=>{try{await useAppStore.getState().persistMachine();const result=await window.cineforge.system.pingComfy(machine.comfy.url);setNotice(result.reachable?'ComfyUI connected.':`ComfyUI offline: ${result.error}`);}catch(error){setError(error instanceof Error?error.message:String(error));}};
+  return <Page title="Machine settings" subtitle="Configure this workstation before creating a film. Project workflow profiles and CapCut policy appear after a project is open.">
+    <Card title="No project open" kicker="WORKSTATION FIRST"><p className="muted">These settings live in Electron userData and are independent from portable projects. Hardware inspection is also available under System.</p></Card>
+    <div className="grid two">
+      <Card title="WanGP production backend" kicker="MACHINE SETTINGS">
+        <label>Execution mode<select value={machine.wangp.executionMode} onChange={event=>updateMachine(next=>next.wangp.executionMode=event.target.value as 'native'|'docker')}><option value="native">Native</option><option value="docker">Docker</option></select></label>
+        <label>WanGP root<input value={machine.wangp.rootPath} onChange={event=>updateMachine(next=>next.wangp.rootPath=event.target.value)} placeholder="D:\Wan2GP or /opt/Wan2GP"/></label>
+        {machine.wangp.executionMode==='native'?<div className="form-grid two-col"><label>Python<input value={machine.wangp.pythonPath} onChange={event=>updateMachine(next=>next.wangp.pythonPath=event.target.value)}/></label><label>Entrypoint<input value={machine.wangp.entrypoint} onChange={event=>updateMachine(next=>next.wangp.entrypoint=event.target.value)}/></label></div>:<><label>Docker image<input value={machine.wangp.docker.image} onChange={event=>updateMachine(next=>next.wangp.docker.image=event.target.value)}/></label><label>Docker command<input value={machine.wangp.docker.command} onChange={event=>updateMachine(next=>next.wangp.docker.command=event.target.value)}/></label></>}
+        <div className="form-grid two-col"><label>Profile<select value={machine.wangp.profile} onChange={event=>updateMachine(next=>next.wangp.profile=Number(event.target.value) as 1|2|3|4|5)}>{[1,2,3,4,5].map(value=><option key={value} value={value}>{value}{value===4?' · recommended':''}</option>)}</select></label><label>Attention<select value={machine.wangp.attention} onChange={event=>updateMachine(next=>next.wangp.attention=event.target.value as AppMachineSettings['wangp']['attention'])}><option value="auto">auto</option><option value="sdpa">sdpa</option><option value="flash">flash</option><option value="sage">sage</option><option value="sage2">sage2</option></select></label></div>
+      </Card>
+      <Card title="ComfyUI lab / fallback" kicker="LOOPBACK ONLY">
+        <label>Base URL<input value={machine.comfy.url} onChange={event=>updateMachine(next=>next.comfy.url=event.target.value)}/></label>
+        <label>Input directory<input value={machine.comfy.inputDir} onChange={event=>updateMachine(next=>next.comfy.inputDir=event.target.value)}/></label>
+        <label className="check"><input type="checkbox" checked={machine.comfy.dedicatedInstance} onChange={event=>updateMachine(next=>next.comfy.dedicatedInstance=event.target.checked)}/>Dedicated CineForge instance</label>
+        <button className="ghost" onClick={testComfy}>Test ComfyUI</button>
+      </Card>
+      <Card title="FFmpeg & QC" kicker="MACHINE SETTINGS">
+        <label>FFmpeg<input value={machine.ffmpeg.path} onChange={event=>updateMachine(next=>next.ffmpeg.path=event.target.value)}/></label>
+        <label>FFprobe<input value={machine.ffmpeg.ffprobePath} onChange={event=>updateMachine(next=>next.ffmpeg.ffprobePath=event.target.value)}/></label>
+        <label>H.264 encoder<select value={machine.ffmpeg.preferredH264Encoder} onChange={event=>updateMachine(next=>next.ffmpeg.preferredH264Encoder=event.target.value as 'libx264'|'h264_nvenc')}><option value="h264_nvenc">h264_nvenc · RTX</option><option value="libx264">libx264 · CPU</option></select></label>
+      </Card>
+      <Card title="Local AI Director" kicker="LOOPBACK ONLY">
+        <label>Base URL<input value={machine.director.baseUrl} onChange={event=>updateMachine(next=>next.director.baseUrl=event.target.value)}/></label>
+        <label>Model<input value={machine.director.model} onChange={event=>updateMachine(next=>next.director.model=event.target.value)}/></label>
+        <label>Temperature<input type="number" min="0" max="2" step="0.1" value={machine.director.temperature} onChange={event=>updateMachine(next=>next.director.temperature=Number(event.target.value))}/></label>
+      </Card>
+    </div>
   </Page>;
 }
