@@ -19,11 +19,11 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
 
   const lexical = assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`);
   const safe = await assertExistingPathInside(join(project.rootPath,'workflows'),lexical,`workflow path for ${profile.name}`);
-  const sourceSha256 = await sha256File(safe);
-  const fingerprintBefore=await fingerprintRuntime(machine,profile);
+  const sourceSha256 = await sha256File(safe),safeProfile={...structuredClone(profile),workflowPath:safe};
+  const fingerprintBefore=await fingerprintRuntime(machine,safeProfile);
   const runtime = profile.runtime ?? (profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
   const modeErrors=profilePurposeModeErrors(profile);
-  const runtimeErrors = runtime === 'wangp' ? await validateWanGpProfile(profile) : await validateProfileBindings(profile);
+  const runtimeErrors = runtime === 'wangp' ? await validateWanGpProfile(safeProfile) : await validateProfileBindings(safeProfile);
   const probe=await probeSystem(project,machine);
   const environmentErrors:string[]=[],runtimeNodeErrors:string[]=[];
   if(runtime==='wangp'){
@@ -32,13 +32,13 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
   }else{
     if(!probe.comfy.reachable)environmentErrors.push(`ComfyUI is offline: ${probe.comfy.error||machine.comfy.url}`);
     else{
-      try{runtimeNodeErrors.push(...await validateComfyNodeAvailability(profile,await new ComfyClient(machine.comfy.url,true).objectInfo()));}
+      try{runtimeNodeErrors.push(...await validateComfyNodeAvailability(safeProfile,await new ComfyClient(machine.comfy.url,true).objectInfo()));}
       catch(error){runtimeNodeErrors.push(`ComfyUI node catalog validation failed: ${error instanceof Error?error.message:String(error)}`);}
     }
     if(!machine.comfy.dedicatedInstance)environmentErrors.push('ComfyUI production profiles require a dedicated CineForge instance for workload isolation, deterministic recovery, and safe legacy cancellation fallback.');
   }
   const errors=[...modeErrors,...runtimeErrors,...runtimeNodeErrors,...environmentErrors];
-  const fingerprint = await fingerprintRuntime(machine, profile);
+  const fingerprint = await fingerprintRuntime(machine, safeProfile);
   if(fingerprint.environmentSha256!==fingerprintBefore.environmentSha256)throw new Error('Local AI runtime changed while profile validation was running. Validate again against the stable runtime.');
   if(await sha256File(safe)!==sourceSha256)throw new Error('Workflow file changed while profile validation was running. Validate again.');
   const now = new Date().toISOString();
