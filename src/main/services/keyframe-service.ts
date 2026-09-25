@@ -33,7 +33,7 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   if(profile.validation?.sourceSha256&&await sha256File(workflowPath)!==profile.validation.sourceSha256)throw new Error('Keyframe profile changed after validation. Revalidate it first.');
 
   const values:WorkflowValues={prompt:keyframePrompt(shot,request.role),negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:1,fps:1,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed+(request.role==='end'?1:0),filenamePrefix:`cineforge/keyframes/${shot.id}/${request.role}`};
-  const continuityIds=[...shot.characterAssetIds,...shot.propAssetIds,...(shot.locationAssetId?[shot.locationAssetId]:[])];
+  const continuityIds=[...shot.characterAssetIds,...(shot.referenceAssetIds??[]),...(shot.locationAssetId?[shot.locationAssetId]:[]),...shot.propAssetIds];
   const continuityPaths:string[]=[];
   for(const id of [...new Set(continuityIds)].slice(0,10)){
     const asset=project.assets.find(a=>a.id===id);if(asset)continuityPaths.push(await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`));
