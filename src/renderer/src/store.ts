@@ -30,7 +30,7 @@ export const useAppStore=create<AppState>((set,get)=>({
     if(!state.projectDirty)for(const server of mainProject.settings.workflowProfiles)if(!next.settings.workflowProfiles.some(local=>local.id===server.id))next.settings.workflowProfiles.push(structuredClone(server));
     return{project:next};
   }),
-  updateProject:mutator=>{const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotProjectRenderInputKey(current,shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotProjectRenderInputKey(next,shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist(),450);},
+  updateProject:mutator=>{const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotProjectRenderInputKey(current,shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotProjectRenderInputKey(next,shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist().catch(()=>undefined),450);},
   persist:async()=>{
     clearTimeout(projectTimer);projectTimer=undefined;const project=get().project;if(!project)return;
     const revision=projectEditRevision;
@@ -41,16 +41,16 @@ export const useAppStore=create<AppState>((set,get)=>({
         if(projectEditRevision!==revision)return{error:undefined};
         return{project:saved,projectDirty:false,error:undefined};
       });
-    }catch(error){set({error:error instanceof Error?error.message:String(error)});}
+    }catch(error){set({error:error instanceof Error?error.message:String(error)});throw error;}
   },
   setMachine:machine=>{clearTimeout(machineTimer);machineTimer=undefined;set({machine,machineDirty:false});},
-  updateMachine:mutator=>{const current=get().machine;if(!current)return;const next=structuredClone(current);mutator(next);set({machine:next,machineDirty:true});clearTimeout(machineTimer);machineTimer=setTimeout(()=>void get().persistMachine(),450);},
+  updateMachine:mutator=>{const current=get().machine;if(!current)return;const next=structuredClone(current);mutator(next);set({machine:next,machineDirty:true});clearTimeout(machineTimer);machineTimer=setTimeout(()=>void get().persistMachine().catch(()=>undefined),450);},
   persistMachine:async()=>{
     clearTimeout(machineTimer);machineTimer=undefined;const machine=get().machine;if(!machine)return;
     try{
       const saved=await window.cineforge.settings.save(machine);
       set(state=>state.machine===machine?{machine:saved,machineDirty:false,error:undefined}:{error:undefined});
-    }catch(error){set({error:error instanceof Error?error.message:String(error)});}
+    }catch(error){set({error:error instanceof Error?error.message:String(error)});throw error;}
   },
   setView:activeView=>set({activeView}),selectShot:selectedShotId=>set({selectedShotId}),setQueue:queue=>set({queue}),setProbe:probe=>set({probe}),setBusy:busy=>{busyCount=Math.max(0,busyCount+(busy?1:-1));set({busy:busyCount>0});},setError:error=>set({error}),setNotice:notice=>set({notice})
 }));
