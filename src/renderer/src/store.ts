@@ -9,10 +9,11 @@ interface AppState{
   setView(view:ViewId):void;selectShot(id?:string):void;setQueue(queue:QueueSnapshot):void;setProbe(probe?:SystemProbe):void;setBusy(busy:boolean):void;setError(error?:string):void;setNotice(notice?:string):void;
 }
 let projectTimer:ReturnType<typeof setTimeout>|undefined,machineTimer:ReturnType<typeof setTimeout>|undefined;
+let projectEditRevision=0;
 
 export const useAppStore=create<AppState>((set,get)=>({
   project:null,machine:null,activeView:'studio',queue:{jobs:[]},busy:false,projectDirty:false,machineDirty:false,
-  setProject:project=>{clearTimeout(projectTimer);projectTimer=undefined;set({project,projectDirty:false});},
+  setProject:project=>{clearTimeout(projectTimer);projectTimer=undefined;projectEditRevision+=1;set({project,projectDirty:false});},
   syncRuntime:mainProject=>set(state=>{
     const current=state.project;if(!current||current.id!==mainProject.id)return{project:mainProject,projectDirty:false};
     const next=structuredClone(current);
@@ -28,15 +29,15 @@ export const useAppStore=create<AppState>((set,get)=>({
     if(!state.projectDirty)for(const server of mainProject.settings.workflowProfiles)if(!next.settings.workflowProfiles.some(local=>local.id===server.id))next.settings.workflowProfiles.push(structuredClone(server));
     return{project:next};
   }),
-  updateProject:mutator=>{const current=get().project;if(!current)return;const next=structuredClone(current);mutator(next);next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist(),450);},
+  updateProject:mutator=>{const current=get().project;if(!current)return;const next=structuredClone(current);mutator(next);projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist(),450);},
   persist:async()=>{
     clearTimeout(projectTimer);projectTimer=undefined;const project=get().project;if(!project)return;
-    const revision=project.updatedAt;
+    const revision=projectEditRevision;
     try{
       const saved=await window.cineforge.project.save(project);
       set(state=>{
         if(!state.project||state.project.id!==project.id)return{};
-        if(state.project.updatedAt!==revision)return{error:undefined};
+        if(projectEditRevision!==revision)return{error:undefined};
         return{project:saved,projectDirty:false,error:undefined};
       });
     }catch(error){set({error:error instanceof Error?error.message:String(error)});}
