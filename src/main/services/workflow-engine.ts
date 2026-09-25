@@ -23,6 +23,7 @@ export interface WorkflowValues {
   characterImage4?: string;
   propImage1?: string;
   propImage2?: string;
+  referenceImages?: string[];
   referenceImage1?: string;
   referenceImage2?: string;
   referenceImage3?: string;
@@ -95,7 +96,7 @@ const INPUT_NAME_HINTS: Record<WorkflowBindingKey, string[]> = {
   resolution: ['resolution', 'size'],
   frames: ['length', 'frames', 'frame_count', 'num_frames', 'video_length'],
   fps: ['fps', 'frame_rate', 'force_fps'],
-  steps: ['steps', 'num_steps'],
+  steps: ['steps', 'num_steps', 'num_inference_steps'],
   cfg: ['cfg', 'guidance', 'guidance_scale'],
   seed: ['seed', 'noise_seed'],
   startImage: ['image', 'start_image', 'first_frame'],
@@ -107,6 +108,7 @@ const INPUT_NAME_HINTS: Record<WorkflowBindingKey, string[]> = {
   characterImage4: ['character_image_4', 'character4', 'person_image_4'],
   propImage1: ['prop_image_1', 'prop1', 'object_image_1'],
   propImage2: ['prop_image_2', 'prop2', 'object_image_2'],
+  referenceImages: ['image_refs', 'reference_images'],
   referenceImage1: ['reference_image_1', 'reference1', 'ref_image_1'],
   referenceImage2: ['reference_image_2', 'reference2', 'ref_image_2'],
   referenceImage3: ['reference_image_3', 'reference3', 'ref_image_3'],
