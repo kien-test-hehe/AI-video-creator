@@ -47,13 +47,19 @@ function sanitizeMachineSettings(raw:any):AppMachineSettings{
   const defaults=structuredClone(DEFAULT_APP_MACHINE_SETTINGS),source=raw&&typeof raw==='object'?raw:{};
   const out:AppMachineSettings={
     schemaVersion:1,endpointPolicy:'loopback-only',
-    ffmpeg:{path:asNonEmptyString(source.ffmpeg?.path,defaults.ffmpeg.path),ffprobePath:asNonEmptyString(source.ffmpeg?.ffprobePath,defaults.ffmpeg.ffprobePath),preferredH264Encoder:source.ffmpeg?.preferredH264Encoder==='libx264'?'libx264':'h264_nvenc'},
-    wangp:{executionMode:source.wangp?.executionMode==='docker'?'docker':'native',rootPath:asString(source.wangp?.rootPath,defaults.wangp.rootPath),pythonPath:asNonEmptyString(source.wangp?.pythonPath,defaults.wangp.pythonPath),entrypoint:sanitizeLeaf(source.wangp?.entrypoint,defaults.wangp.entrypoint),profile:[1,2,3,4,5].includes(Number(source.wangp?.profile))?Number(source.wangp.profile) as 1|2|3|4|5:defaults.wangp.profile,attention:['auto','sdpa','flash','sage','sage2'].includes(source.wangp?.attention)?source.wangp.attention:defaults.wangp.attention,dryRunBeforeRender:source.wangp?.dryRunBeforeRender!==false,docker:{command:asNonEmptyString(source.wangp?.docker?.command,defaults.wangp.docker.command),image:asString(source.wangp?.docker?.image,''),projectMount:sanitizeContainerPath(source.wangp?.docker?.projectMount,defaults.wangp.docker.projectMount),wangpMount:sanitizeContainerPath(source.wangp?.docker?.wangpMount,defaults.wangp.docker.wangpMount)}},
+    ffmpeg:{path:preferBootstrapPath(source.ffmpeg?.path,defaults.ffmpeg.path,'ffmpeg'),ffprobePath:preferBootstrapPath(source.ffmpeg?.ffprobePath,defaults.ffmpeg.ffprobePath,'ffprobe'),preferredH264Encoder:source.ffmpeg?.preferredH264Encoder==='libx264'?'libx264':'h264_nvenc'},
+    wangp:{executionMode:source.wangp?.executionMode==='docker'?'docker':'native',rootPath:asNonEmptyString(source.wangp?.rootPath,defaults.wangp.rootPath),pythonPath:preferBootstrapPath(source.wangp?.pythonPath,defaults.wangp.pythonPath,'python'),entrypoint:sanitizeLeaf(source.wangp?.entrypoint,defaults.wangp.entrypoint),profile:[1,2,3,4,5].includes(Number(source.wangp?.profile))?Number(source.wangp.profile) as 1|2|3|4|5:defaults.wangp.profile,attention:['auto','sdpa','flash','sage','sage2'].includes(source.wangp?.attention)?source.wangp.attention:defaults.wangp.attention,dryRunBeforeRender:source.wangp?.dryRunBeforeRender!==false,docker:{command:asNonEmptyString(source.wangp?.docker?.command,defaults.wangp.docker.command),image:asString(source.wangp?.docker?.image,''),projectMount:sanitizeContainerPath(source.wangp?.docker?.projectMount,defaults.wangp.docker.projectMount),wangpMount:sanitizeContainerPath(source.wangp?.docker?.wangpMount,defaults.wangp.docker.wangpMount)}},
     comfy:{url:asNonEmptyString(source.comfy?.url,defaults.comfy.url),inputDir:asString(source.comfy?.inputDir,defaults.comfy.inputDir),dedicatedInstance:source.comfy?.dedicatedInstance!==false},
     director:{baseUrl:asNonEmptyString(source.director?.baseUrl,defaults.director.baseUrl),model:asString(source.director?.model,defaults.director.model),temperature:clampNumber(source.director?.temperature,0,2,defaults.director.temperature)},
     diagnostics:{persistVerboseLogs:Boolean(source.diagnostics?.persistVerboseLogs)}
   };
   assertLocalUrl(out.comfy.url,true);assertLocalUrl(out.director.baseUrl,true);return out;
+}
+function preferBootstrapPath(value:unknown,bootstrap:string,generic:string):string{
+  const current=typeof value==='string'?value.trim():'';
+  const concreteBootstrap=bootstrap.trim()&&bootstrap.trim().toLowerCase()!==generic.toLowerCase();
+  if(concreteBootstrap&&(!current||current.toLowerCase()===generic.toLowerCase()))return bootstrap.trim();
+  return current||bootstrap;
 }
 function asString(value:unknown,fallback:string):string{return typeof value==='string'?value:fallback;}
 function asNonEmptyString(value:unknown,fallback:string):string{return typeof value==='string'&&value.trim()?value.trim():fallback;}
