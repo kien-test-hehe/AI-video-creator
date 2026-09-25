@@ -263,9 +263,10 @@ describe('binding-aware continuity reference planning',()=>{
   it('maps fallback images to only the generic slots actually exposed',()=>{const profile={id:'p',runtime:'comfyui' as const,purpose:'video' as const,name:'p',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'x',workflowFormat:'api' as const,enabled:true,bindings:[{key:'referenceImage1' as const,selector:{nodeId:'1'},input:'image'},{key:'referenceImage3' as const,selector:{nodeId:'3'},input:'image'}]};const plan=planShotReferences(baseShot,profile);expect(plan.genericBindingKeys).toEqual(['referenceImage1','referenceImage3']);expect(plan.genericIds).toHaveLength(2);expect(plan.unservedIds.length).toBeGreaterThan(0);});
 });
 describe('Comfy runtime fingerprint inputs',()=>{
-  it('changes when the available node-class catalog changes but not when object key order changes',()=>{
-    expect(comfyNodeCatalogFingerprint({B:{},A:{}})).toBe(comfyNodeCatalogFingerprint({A:{},B:{}}));
+  it('changes when node classes or node schemas change but not when object key order changes',()=>{
+    expect(comfyNodeCatalogFingerprint({B:{input:{required:{x:['INT']}}},A:{}})).toBe(comfyNodeCatalogFingerprint({A:{},B:{input:{required:{x:['INT']}}}}));
     expect(comfyNodeCatalogFingerprint({A:{},B:{}})).not.toBe(comfyNodeCatalogFingerprint({A:{},C:{}}));
+    expect(comfyNodeCatalogFingerprint({A:{input:{required:{x:['INT']}}}})).not.toBe(comfyNodeCatalogFingerprint({A:{input:{required:{x:['FLOAT']}}}}));
   });
 });
 describe('Comfy queue identity',()=>{
