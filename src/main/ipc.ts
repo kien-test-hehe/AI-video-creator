@@ -24,10 +24,20 @@ import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/
 
 type Handler = (...args: any[]) => any;
 
+let activeExportAbortController:AbortController|null=null;
+let activeKeyframeAbortController:AbortController|null=null;
+let activeExportPromise:Promise<unknown>|null=null;
+let activeKeyframePromise:Promise<unknown>|null=null;
+
+export async function shutdownForegroundOperations():Promise<void>{
+  activeExportAbortController?.abort();
+  activeKeyframeAbortController?.abort();
+  const pending=[activeExportPromise,activeKeyframePromise].filter((value):value is Promise<unknown>=>Boolean(value));
+  if(pending.length)await Promise.allSettled(pending);
+}
+
 export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
-  let exportAbortController: AbortController | null = null;
   let keyframeBusy = false;
-  let keyframeAbortController:AbortController|null=null;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
       assertTrustedIpcSender(event,trustedRendererUrl);
@@ -35,7 +45,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     });
   };
 
-  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||exportAbortController)throw new Error('Finish or cancel active renders, keyframe generation, or timeline export before switching projects.');};
+  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||activeExportAbortController)throw new Error('Finish or cancel active renders, keyframe generation, or timeline export before switching projects.');};
   const assertGpuGenerationAvailable=()=>{if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
 
   handle(IPC.projectCreate, async (name?: string) => {
@@ -148,23 +158,25 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     return reviewShotWithLocalDirector(project,shot,settings.get());
   });
   handle(IPC.keyframeGenerate,async(request:KeyframeRequest)=>{
-    assertGpuGenerationAvailable();keyframeBusy=true;keyframeAbortController=new AbortController();
-    try{return await generateKeyframe(projects,settings.get(),request,keyframeAbortController.signal);}
-    finally{keyframeBusy=false;keyframeAbortController=null;}
+    assertGpuGenerationAvailable();keyframeBusy=true;activeKeyframeAbortController=new AbortController();
+    const task=generateKeyframe(projects,settings.get(),request,activeKeyframeAbortController.signal);activeKeyframePromise=task;
+    try{return await task;}
+    finally{keyframeBusy=false;activeKeyframeAbortController=null;activeKeyframePromise=null;}
   });
   handle(IPC.keyframeCancel,async()=>{
-    if(!keyframeBusy||!keyframeAbortController)return false;
-    keyframeAbortController.abort();
+    if(!keyframeBusy||!activeKeyframeAbortController)return false;
+    activeKeyframeAbortController.abort();
     return true;
   });
   handle(IPC.timelineExport,async()=>{
-    if(exportAbortController)throw new Error('A timeline export is already running.');
+    if(activeExportAbortController)throw new Error('A timeline export is already running.');
     if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before exporting the timeline.');
-    exportAbortController=new AbortController();
-    try{return{outputPath:await exportTimeline(requireProject(projects),settings.get(),exportAbortController.signal)};}
-    finally{exportAbortController=null;}
+    activeExportAbortController=new AbortController();
+    const task=exportTimeline(requireProject(projects),settings.get(),activeExportAbortController.signal);activeExportPromise=task;
+    try{return{outputPath:await task};}
+    finally{activeExportAbortController=null;activeExportPromise=null;}
   });
-  handle(IPC.timelineCancelExport,async()=>{exportAbortController?.abort();});
+  handle(IPC.timelineCancelExport,async()=>{activeExportAbortController?.abort();});
   handle(IPC.capcutPrepareHandoff,async()=>prepareCapCutHandoff(requireProject(projects)));
 
   queue.on('snapshot',snapshot=>{for(const window of BrowserWindow.getAllWindows())if(!window.isDestroyed())window.webContents.send(IPC.queueEvent,snapshot);});
