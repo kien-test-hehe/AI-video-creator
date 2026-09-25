@@ -15,12 +15,14 @@ export async function planSceneWithLocalDirector(project:FilmProject,scene:Scene
   if(!res.ok)throw new Error(`Local Director HTTP ${res.status}: ${(await res.text()).slice(0,1000)}`);
   const payload=await res.json() as ChatResponse;const content=payload.choices?.[0]?.message?.content;if(!content)throw new Error('Local Director returned no message content.');
   const parsed=parseJsonObject(content);if(!Array.isArray(parsed.shots))throw new Error('Local Director JSON is missing shots[].');
-  const validAssetIds=new Set(relevantAssets.map(a=>a.id));const validModels=new Set(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack']);
+  const idsFor=(...kinds:string[])=>new Set(relevantAssets.filter(asset=>kinds.includes(asset.kind)).map(asset=>asset.id));
+  const characterIds=idsFor('character'),locationIds=idsFor('location'),referenceIds=idsFor('reference'),propIds=idsFor('prop','wardrobe');
+  const validModels=new Set(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack']);
   return parsed.shots.slice(0,12).map((s:any,i:number)=>{
-    const chars=Array.isArray(s.characterAssetIds)?s.characterAssetIds.map(String).filter((id:string)=>validAssetIds.has(id)).slice(0,4):[];
-    const refs=Array.isArray(s.referenceAssetIds)?s.referenceAssetIds.map(String).filter((id:string)=>validAssetIds.has(id)).slice(0,4):[];
-    const props=Array.isArray(s.propAssetIds)?s.propAssetIds.map(String).filter((id:string)=>validAssetIds.has(id)).slice(0,2):[];
-    const location=typeof s.locationAssetId==='string'&&validAssetIds.has(s.locationAssetId)?s.locationAssetId:undefined;
+    const chars=Array.isArray(s.characterAssetIds)?s.characterAssetIds.map(String).filter((id:string)=>characterIds.has(id)).slice(0,4):[];
+    const refs=Array.isArray(s.referenceAssetIds)?s.referenceAssetIds.map(String).filter((id:string)=>referenceIds.has(id)).slice(0,4):[];
+    const props=Array.isArray(s.propAssetIds)?s.propAssetIds.map(String).filter((id:string)=>propIds.has(id)).slice(0,2):[];
+    const location=typeof s.locationAssetId==='string'&&locationIds.has(s.locationAssetId)?s.locationAssetId:undefined;
     return{title:String(s.title||`Shot ${scene.index}.${i+1}`),prompt:String(s.prompt||scene.body),camera:String(s.camera||''),action:String(s.action||''),dialogue:String(s.dialogue||''),continuityNotes:String(s.continuityNotes||''),quality:['preview','balanced','hero'].includes(s.quality)?s.quality:'balanced',preferredModel:validModels.has(s.preferredModel)?s.preferredModel:undefined,characterAssetIds:chars,locationAssetId:location,referenceAssetIds:refs,propAssetIds:props} as DirectorShotDraft;
   });
 }
