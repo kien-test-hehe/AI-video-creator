@@ -84,12 +84,14 @@ export class ProjectService {
   async saveFromRenderer(project: FilmProject): Promise<FilmProject> {
     return this.runExclusive(async () => {
       if (!this.current) throw new Error('No project is open.');
-      const incoming = loadPortableProject(project, this.current.rootPath).project;
+      const candidate=structuredClone(project);
+      const proposedShotIds=new Set(Array.isArray(candidate.shots)?candidate.shots.map(shot=>shot?.id).filter((id):id is string=>typeof id==='string'):[]);
+      candidate.renderJobs=this.current.renderJobs.filter(job=>proposedShotIds.has(job.shotId));
+      candidate.renderOutputs=this.current.renderOutputs.filter(output=>proposedShotIds.has(output.shotId));
+      const incoming = loadPortableProject(candidate, this.current.rootPath).project;
       if (incoming.id !== this.current.id) throw new Error('Renderer project does not match the open main-process project.');
       incoming.rootPath = this.current.rootPath;
       incoming.createdAt = this.current.createdAt;
-      incoming.renderJobs = structuredClone(this.current.renderJobs);
-      incoming.renderOutputs = structuredClone(this.current.renderOutputs);
 
       const editedAssets = new Map(incoming.assets.map(asset => [asset.id, asset]));
       incoming.assets = this.current.assets.map(original => {
