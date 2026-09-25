@@ -5,7 +5,7 @@ import type { AppMachineSettings, Shot, TechnicalQcResult } from '../../shared/t
 const execFileAsync=promisify(execFile);
 
 export async function technicalQcVideo(machine:AppMachineSettings,path:string,shot?:Shot):Promise<TechnicalQcResult>{
-  const issues:string[]=[];
+  const issues:string[]=[],warnings:string[]=[];
   const probe=await probeMedia(machine.ffmpeg.ffprobePath,path);
   if(!probe.video)issues.push('No video stream found.');
   const duration=probe.durationSec;
@@ -20,16 +20,16 @@ export async function technicalQcVideo(machine:AppMachineSettings,path:string,sh
   }
   try{
     const visual=await detectVisualProblems(machine.ffmpeg.path,path);
-    if(visual.black)issues.push('Black segment ≥0.5s detected.');
-    if(visual.freeze)issues.push('Frozen segment ≥2s detected.');
+    if(visual.black)warnings.push('Black segment ≥0.5s detected; verify that the blackout/fade is intentional.');
+    if(visual.freeze)warnings.push('Frozen segment ≥2s detected; verify that the held frame is intentional.');
   }catch(error){issues.push(`Visual QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
   let audioPeakDb:number|undefined;
   if(probe.hasAudio){
     try{audioPeakDb=await detectPeak(machine.ffmpeg.path,path);}
     catch(error){issues.push(`Audio QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
   }
-  if(audioPeakDb!=null&&audioPeakDb>-0.1)issues.push(`Audio peak is ${audioPeakDb.toFixed(1)} dB; clipping risk.`);
-  return{checkedAt:new Date().toISOString(),passed:issues.length===0,durationSec:duration,width:probe.video?.width,height:probe.video?.height,fps:probe.video?.fps,hasAudio:probe.hasAudio,audioPeakDb,issues};
+  if(audioPeakDb!=null&&audioPeakDb>-0.1)warnings.push(`Audio peak is ${audioPeakDb.toFixed(1)} dB; clipping risk.`);
+  return{checkedAt:new Date().toISOString(),passed:issues.length===0,warnings,durationSec:duration,width:probe.video?.width,height:probe.video?.height,fps:probe.video?.fps,hasAudio:probe.hasAudio,audioPeakDb,issues};
 }
 
 async function probeMedia(ffprobe:string,path:string):Promise<{durationSec?:number;video?:{width:number;height:number;fps:number};hasAudio:boolean}>{
