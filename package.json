@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:smoke": "tsx scripts/core-smoke.ts",
+    "test:smoke": "tsx scripts/core-smoke.mts",
     "lint": "eslint .",
     "workflows:fetch": "node scripts/fetch-reference-workflows.mjs",
     "pack": "npm run build && electron-builder --dir",
