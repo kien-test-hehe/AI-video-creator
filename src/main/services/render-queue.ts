@@ -26,6 +26,7 @@ import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
 import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
 import { selectRecoveryJob } from '../../shared/recovery-policy';
+import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -375,6 +376,7 @@ export class RenderQueueService extends EventEmitter {
         if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
       }
     }finally{
+      const project=this.projects.getCurrent();if(project)await rm(join(project.rootPath,'cache','workflow-inputs',jobId),{recursive:true,force:true}).catch(()=>undefined);
       this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
     }
   }
@@ -469,10 +471,11 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async runWanGp(project:FilmProject,job:RenderJob):Promise<void>{
-    const machine=this.settings.get(),shot=job.spec!.shot,profile=job.spec!.workflowProfile;
+    const machine=this.settings.get(),shot=job.spec!.shot,profile=job.spec!.workflowProfile,workflowSnapshotRoot=join(project.rootPath,'cache','workflow-inputs',job.id);
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing WanGP · ${profile.name}`},true,true);
     const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,profile,values);await this.stageWanGpInputs(project,job,values);
-    let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
+    const snapshotProfile=await stageWorkflowProfileSnapshot(project.rootPath,profile,job.spec!.workflowSha256,workflowSnapshotRoot);
+    let compiled=await compileWanGpProfile(snapshotProfile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     await this.verifyImmutableSpec(this.requireProject(),job);
     const cacheDir=join(project.rootPath,'cache','wangp'),outputDir=join(project.rootPath,'renders',shot.id,job.id);
     await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(outputDir,{recursive:true})]);
@@ -528,7 +531,8 @@ export class RenderQueueService extends EventEmitter {
     if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await this.stageComfyAsset(project,job,shot.audioAssetId,client,'file');
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
 
-    const prompt=await compileProfile(profile,values);await this.verifyImmutableSpec(this.requireProject(),job);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
+    const snapshotProfile=await stageWorkflowProfileSnapshot(project.rootPath,profile,job.spec!.workflowSha256,join(project.rootPath,'cache','workflow-inputs',job.id));
+    const prompt=await compileProfile(snapshotProfile,values);await this.verifyImmutableSpec(this.requireProject(),job);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
     await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to ComfyUI',comfyPromptId:queued.prompt_id,lastHeartbeatAt:new Date().toISOString()},true,true);
     if(this.cancelled.has(job.id)){
       try{await this.confirmComfyCancellation(job.id,client,queued.prompt_id);}
