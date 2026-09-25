@@ -132,7 +132,7 @@ export class ProjectService {
         project.assets.push({
           id, kind,
           name: original.slice(0, Math.max(1, original.length - extname(original).length)),
-          sourcePath, projectPath: relativePath, tags: [], notes: '', createdAt: new Date().toISOString()
+          sourcePath: original, projectPath: relativePath, tags: [], notes: '', createdAt: new Date().toISOString()
         });
       }
     });
