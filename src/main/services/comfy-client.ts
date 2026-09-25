@@ -115,8 +115,12 @@ export class ComfyClient {
     const state=promptQueueState(before,promptId);
     if(state==='pending')await this.deleteQueued(promptId);
     else if(state==='running')await this.interrupt(promptId);
-    else if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} already finished.`);
-    else throw new Error(`ComfyUI prompt ${promptId} is no longer present in queue or history.`);
+    else{
+      const history=await this.history(promptId);
+      if(historyWasInterrupted(history))return;
+      if(history)throw new Error(`ComfyUI prompt ${promptId} already finished.`);
+      throw new Error(`ComfyUI prompt ${promptId} is no longer present in queue or history.`);
+    }
 
     const deadline=Date.now()+5000;
     while(Date.now()<deadline){
