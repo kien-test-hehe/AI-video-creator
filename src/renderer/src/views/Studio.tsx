@@ -256,7 +256,7 @@ export function Studio(){
               <svg className="studio-edges" width={graph.width} height={graph.height} aria-hidden="true">
                 {graph.edges.map(edge=><GraphEdge key={edge.id} edge={edge} nodes={nodeMap} active={activeNodeIds.has(edge.source)||activeNodeIds.has(edge.target)}/>)}
               </svg>
-              {nodes.map(node=><GraphNode key={node.id} node={node} project={project} selected={node.shotId===selectedShot?.id} active={activeNodeIds.has(node.id)} locked={locked} onPointerDown={beginNodeDrag} onPointerMove={moveNode} onPointerUp={endNodeDrag} onSelectShot={selectShot} onOpen={setView} onDropToShot={dropOnShot} onStartWorkflowDrag={startWorkflowDrag}/>)}
+              {nodes.map(node=><GraphNode key={node.id} node={node} project={project} selected={node.id===focusedNode?.id} active={activeNodeIds.has(node.id)} locked={locked} onPointerDown={beginNodeDrag} onPointerMove={moveNode} onPointerUp={endNodeDrag} onActivate={target=>{setFocusedNodeId(target.id);if(target.shotId)selectShot(target.shotId);}} onOpen={setView} onDropToShot={dropOnShot} onStartWorkflowDrag={startWorkflowDrag}/>)}
             </div>
           </div>
           <MiniMap nodes={nodes} width={graph.width} height={graph.height} view={viewRect} onNavigate={(x,y)=>{const el=viewportRef.current;if(el)el.scrollTo({left:Math.max(0,(x-viewRect.width/2)*zoom),top:Math.max(0,(y-viewRect.height/2)*zoom),behavior:'smooth'});}}/>
@@ -356,7 +356,8 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
   const mutate=(fn:(shot:Shot)=>void)=>updateProject(next=>{const target=next.shots.find(item=>item.id===shot.id);if(target)fn(target);});
   const matching=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&profile.workflowPath);
   const route=resolveWorkflow(project.settings.workflowProfiles,shot);
-  const imageProfiles=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='image'&&profile.workflowPath);
+  const routeReady=route?.validation?.structuralStatus==='valid';
+  const imageProfiles=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='image'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   const activeKeyframeProfileId=imageProfiles.some(profile=>profile.id===keyframeProfileId)?keyframeProfileId:(imageProfiles[0]?.id||'');
   const takes=[...project.renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
   const changeModel=(model:ModelFamily)=>mutate(target=>{const defaults=MODEL_DEFAULTS[model];target.generation={...target.generation,...defaults,modelFamily:model,seed:target.generation.seed,negativePrompt:target.generation.negativePrompt,quality:target.generation.quality,workflowProfileId:undefined};});
@@ -390,7 +391,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
     <label>Visual prompt<textarea className="studio-prompt" value={shot.prompt} onChange={event=>mutate(target=>target.prompt=event.target.value)}/></label>
     <div className="form-grid two-col"><label>Camera<input value={shot.camera} onChange={event=>mutate(target=>target.camera=event.target.value)}/></label><label>Quality<select value={shot.generation.quality} onChange={event=>mutate(target=>target.generation.quality=event.target.value as QualityIntent)}>{QUALITIES.map(item=><option key={item}>{item}</option>)}</select></label></div>
     <div className="form-grid two-col"><label>Model<select value={shot.generation.modelFamily} onChange={event=>changeModel(event.target.value as ModelFamily)}>{MODELS.map(item=><option key={item}>{item}</option>)}</select></label><label>Mode<select value={shot.generation.mode} onChange={event=>mutate(target=>{target.generation.mode=event.target.value as GenerationMode;target.generation.workflowProfileId=undefined;})}>{MODES.map(item=><option key={item}>{item}</option>)}</select></label></div>
-    <label>Workflow<select value={shot.generation.workflowProfileId||''} onChange={event=>mutate(target=>target.generation.workflowProfileId=event.target.value||undefined)}><option value="">Auto matching route</option>{matching.map(profile=><option key={profile.id} value={profile.id}>{profile.name} · {profile.validation?.structuralStatus||'unvalidated'}</option>)}</select></label>
+    <label>Workflow<select value={shot.generation.workflowProfileId||''} onChange={event=>mutate(target=>target.generation.workflowProfileId=event.target.value||undefined)}><option value="">Auto matching route</option>{matching.map(profile=><option key={profile.id} value={profile.id} disabled={profile.validation?.structuralStatus!=='valid'}>{profile.name} · {profile.validation?.structuralStatus||'unvalidated'}</option>)}</select></label>
     <div className="studio-inline-numbers"><NumberField label="W" value={shot.generation.width} set={value=>mutate(target=>target.generation.width=value)}/><NumberField label="H" value={shot.generation.height} set={value=>mutate(target=>target.generation.height=value)}/><NumberField label="Frames" value={shot.generation.frames} set={value=>mutate(target=>target.generation.frames=value)}/><NumberField label="FPS" value={shot.generation.fps} set={value=>mutate(target=>target.generation.fps=value)}/></div>
     <div className="studio-inline-numbers three"><NumberField label="Steps" value={shot.generation.steps||0} set={value=>mutate(target=>target.generation.steps=value)}/><NumberField label="CFG" value={shot.generation.cfg||0} step={.1} set={value=>mutate(target=>target.generation.cfg=value)}/><NumberField label="Seed" value={shot.generation.seed} set={value=>mutate(target=>target.generation.seed=Math.max(0,Math.floor(value)))}/></div>
     <label>Negative prompt<textarea className="short" value={shot.generation.negativePrompt} onChange={event=>mutate(target=>target.generation.negativePrompt=event.target.value)}/></label>
@@ -407,7 +408,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
     <label>Action<textarea className="short" value={shot.action} onChange={event=>mutate(target=>target.action=event.target.value)}/></label>
     <label>Dialogue / sound<textarea className="short" value={shot.dialogue} onChange={event=>mutate(target=>target.dialogue=event.target.value)}/></label>
     <label>Continuity notes<textarea className="short" value={shot.continuityNotes} onChange={event=>mutate(target=>target.continuityNotes=event.target.value)}/></label>
-    <button className="primary studio-render-button" onClick={queueSelected}>Queue render</button>
+    <button className="primary studio-render-button" title={!routeReady?'Validate/select a production-ready route first.':undefined} disabled={!routeReady} onClick={queueSelected}>Queue render</button>
   </div>;
 }
 
