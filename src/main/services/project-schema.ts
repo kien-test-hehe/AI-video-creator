@@ -171,7 +171,7 @@ function sanitizeAsset(value: unknown): Asset {
     id: safeId(source.id),
     kind: source.kind,
     name: str(source.name, 'Asset', 1000),
-    sourcePath: str(source.sourcePath, '', 4096),
+    sourcePath: sourceLabel(source.sourcePath),
     projectPath: path,
     mimeType: str(source.mimeType, '', 512) || undefined,
     tags: array(source.tags).map(v=>str(v,'',256)).filter(Boolean).slice(0,128),
@@ -312,4 +312,9 @@ function clampInt(value: unknown,min:number,max:number,fallback:number):number{c
 function clampNumber(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;}
 function iso(value: unknown, fallback: string): string { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : fallback; }
 function maybeIso(value: unknown): string | undefined { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined; }
+function sourceLabel(value:unknown):string{
+  if(typeof value!=='string')return'';
+  const parts=value.replace(/\\/g,'/').split('/').filter(Boolean);
+  return (parts.at(-1)||'').slice(0,2048);
+}
 function sha(value: unknown): string | undefined { return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined; }
