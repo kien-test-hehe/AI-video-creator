@@ -10,11 +10,12 @@ const PAGE_SIZE=60;
 export function Assets(){
   const{project,setProject,updateProject,setError,setNotice}=useAppStore();
   const[kind,setKind]=useState<AssetKind>('reference'),[filter,setFilter]=useState<AssetKind|'all'>('all'),[query,setQuery]=useState(''),[page,setPage]=useState(0);
-  if(!project)return <Page title="Assets"><Empty>Open a project first.</Empty></Page>;
-  const matching=useMemo(()=>project.assets.filter(asset=>{
+  const assets=project?.assets??[];
+  const matching=useMemo(()=>assets.filter(asset=>{
     if(filter!=='all'&&asset.kind!==filter)return false;
     const q=query.trim().toLowerCase();return!q||asset.name.toLowerCase().includes(q)||asset.tags.some(tag=>tag.toLowerCase().includes(q))||asset.notes.toLowerCase().includes(q);
-  }),[filter,project.assets,query]);
+  }),[assets,filter,query]);
+  if(!project)return <Page title="Assets"><Empty>Open a project first.</Empty></Page>;
   const pages=Math.max(1,Math.ceil(matching.length/PAGE_SIZE)),safePage=Math.min(page,pages-1),visible=matching.slice(safePage*PAGE_SIZE,(safePage+1)*PAGE_SIZE);
   const add=async()=>{try{await useAppStore.getState().persist();const next=await window.cineforge.asset.import(kind);if(next)setProject(next);}catch(e){setError(e instanceof Error?e.message:String(e));}};
   const drag=(event:DragEvent,assetId:string)=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-asset',assetId);};
