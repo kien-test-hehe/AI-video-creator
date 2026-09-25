@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type {
@@ -510,7 +510,7 @@ export class RenderQueueService extends EventEmitter {
     const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable at ${machine.comfy.url}: ${ping.error||'unknown error'}`);
     const values=this.baseValues(job);await this.updateJob(job.id,{status:'uploading',progress:.1,message:'Staging continuity references'},true,true);
     const stagedImages=new Map<string,string>(),keys=new Set(profile.bindings.map(binding=>binding.key)),plan=planShotReferences(shot,profile);
-    const stageImage=async(id:string)=>{const cached=stagedImages.get(id);if(cached)return cached;const staged=await this.stageComfyAsset(project,id,client,'image');stagedImages.set(id,staged);return staged;};
+    const stageImage=async(id:string)=>{const cached=stagedImages.get(id);if(cached)return cached;const staged=await this.stageComfyAsset(project,job,id,client,'image');stagedImages.set(id,staged);return staged;};
     if(shot.startFrameAssetId&&keys.has('startImage'))values.startImage=await stageImage(shot.startFrameAssetId);
     if(shot.endFrameAssetId&&keys.has('endImage'))values.endImage=await stageImage(shot.endFrameAssetId);
     if(plan.locationId)values.locationImage=await stageImage(plan.locationId);
@@ -519,8 +519,8 @@ export class RenderQueueService extends EventEmitter {
     const genericPaths=await Promise.all(plan.genericIds.map(id=>stageImage(id)));
     if(plan.genericArray)values.referenceImages=genericPaths;
     else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
-    if(shot.referenceVideoAssetId&&keys.has('inputVideo'))values.inputVideo=await this.stageComfyAsset(project,shot.referenceVideoAssetId,client,'file');
-    if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
+    if(shot.referenceVideoAssetId&&keys.has('inputVideo'))values.inputVideo=await this.stageComfyAsset(project,job,shot.referenceVideoAssetId,client,'file');
+    if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await this.stageComfyAsset(project,job,shot.audioAssetId,client,'file');
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
 
     const prompt=await compileProfile(profile,values);await this.verifyImmutableSpec(this.requireProject(),job);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
@@ -574,14 +574,28 @@ export class RenderQueueService extends EventEmitter {
     this.emitSnapshot();
   }
 
-  private async stageComfyAsset(project:FilmProject,assetId:string,client:ComfyClient,kind:'image'|'file'):Promise<string>{
+  private async stageComfyAsset(project:FilmProject,job:RenderJob,assetId:string,client:ComfyClient,kind:'image'|'file'):Promise<string>{
     const asset=project.assets.find(a=>a.id===assetId);if(!asset)throw new Error(`Referenced asset not found: ${assetId}`);
+    const fingerprint=job.spec?.assetFingerprints.find(item=>item.assetId===assetId);
+    if(!fingerprint||fingerprint.projectPath!==asset.projectPath)throw new Error(`ComfyUI input is not covered by the queued immutable asset snapshot: ${asset.name}`);
     const absolute=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`),machine=this.settings.get();
+    const safeName=`${asset.id}-${basename(asset.projectPath).replace(/[^a-zA-Z0-9._-]+/g,'_')}`;
     if(machine.comfy.inputDir){
       const subfolder=join('cineforge',project.id),targetDir=join(machine.comfy.inputDir,subfolder);await mkdir(targetDir,{recursive:true});
-      const safeName=`${asset.id}-${basename(asset.projectPath).replace(/[^a-zA-Z0-9._-]+/g,'_')}`;await copyFile(absolute,join(targetDir,safeName));return`${subfolder.replace(/\\/g,'/')}/${safeName}`;
+      const target=await assertSafeWritePath(machine.comfy.inputDir,join(targetDir,safeName),'ComfyUI input staging');
+      await copyFile(absolute,target);
+      if(await sha256File(target)!==fingerprint.sha256){await rm(target,{force:true}).catch(()=>undefined);throw new Error(`Referenced asset changed while staging the immutable ComfyUI snapshot: ${asset.name}. Queue a new render.`);}
+      return`${subfolder.replace(/\\/g,'/')}/${safeName}`;
     }
-    if(kind==='image'){const uploaded=await client.uploadImage(absolute);return uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;}
+    if(kind==='image'){
+      const snapshotRoot=join(project.rootPath,'cache','comfy-inputs',job.id);await mkdir(snapshotRoot,{recursive:true});
+      const snapshot=await assertSafeWritePath(snapshotRoot,join(snapshotRoot,safeName),'ComfyUI immutable upload snapshot');
+      try{
+        await copyFile(absolute,snapshot);
+        if(await sha256File(snapshot)!==fingerprint.sha256)throw new Error(`Referenced asset changed while staging the immutable ComfyUI snapshot: ${asset.name}. Queue a new render.`);
+        const uploaded=await client.uploadImage(snapshot);return uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;
+      }finally{await rm(snapshot,{force:true}).catch(()=>undefined);}
+    }
     throw new Error('Audio/video input requires the local ComfyUI input directory in Machine Settings.');
   }
 
