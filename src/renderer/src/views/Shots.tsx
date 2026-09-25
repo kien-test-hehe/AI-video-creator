@@ -27,12 +27,13 @@ export function Shots(){
   const generateKeyframe=async(role:'start'|'end')=>{if(!selected||!activeKeyframeProfileId){setError('Import and enable an image workflow profile in Settings first.');return;}try{setKeyframeBusy(role);await useAppStore.getState().persist();const next=await window.cineforge.keyframe.generate({projectRoot:project.rootPath,shotId:selected.id,role,workflowProfileId:activeKeyframeProfileId});setProject(next);setNotice(`${role==='start'?'Start':'End'} keyframe generated and attached to ${selected.title}.`);}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setKeyframeBusy(null);}};
   const chainPreviousEnd=()=>{if(!selected||!previousShot?.endFrameAssetId){setError('The previous shot has no end keyframe to chain.');return;}mutate(s=>{s.startFrameAssetId=previousShot.endFrameAssetId;});setNotice(`Chained ${previousShot.title} end frame → ${selected.title} start frame.`);};
   const propagateEnd=()=>{if(!selected?.endFrameAssetId||!nextShot){setError(!nextShot?'There is no next shot.':'Generate or select an end keyframe first.');return;}updateProject(p=>{const next=p.shots.find(s=>s.id===nextShot.id);if(next)next.startFrameAssetId=selected.endFrameAssetId;});setNotice(`Chained ${selected.title} end frame → ${nextShot.title} start frame.`);};
-  const dropAsset=(event:DragEvent<HTMLElement>,slot:'character'|'location'|'prop'|'start'|'end'|'video'|'audio')=>{
+  const dropAsset=(event:DragEvent<HTMLElement>,slot:'character'|'location'|'reference'|'prop'|'start'|'end'|'video'|'audio')=>{
     event.preventDefault();if(!selected)return;
     const assetId=event.dataTransfer.getData('application/x-cineforge-asset');const asset=project.assets.find(a=>a.id===assetId);if(!asset)return;
     const allowed=slot==='character'?asset.kind==='character':
       slot==='location'?asset.kind==='location':
-      slot==='prop'?['prop','wardrobe','reference'].includes(asset.kind):
+      slot==='reference'?asset.kind==='reference':
+      slot==='prop'?['prop','wardrobe'].includes(asset.kind):
       slot==='start'?['image','reference','keyframe','character','location'].includes(asset.kind):
       slot==='end'?['image','reference','keyframe'].includes(asset.kind):
       slot==='video'?asset.kind==='video':asset.kind==='audio';
@@ -40,6 +41,7 @@ export function Shots(){
     mutate(s=>{
       if(slot==='character'){if(!s.characterAssetIds.includes(asset.id)&&s.characterAssetIds.length<4)s.characterAssetIds.push(asset.id);}
       else if(slot==='location')s.locationAssetId=asset.id;
+      else if(slot==='reference'){const refs=s.referenceAssetIds??(s.referenceAssetIds=[]);if(!refs.includes(asset.id)&&refs.length<4)refs.push(asset.id);}
       else if(slot==='prop'){if(!s.propAssetIds.includes(asset.id)&&s.propAssetIds.length<2)s.propAssetIds.push(asset.id);}
       else if(slot==='start')s.startFrameAssetId=asset.id;
       else if(slot==='end')s.endFrameAssetId=asset.id;
@@ -61,7 +63,8 @@ export function Shots(){
         <div className="drop-grid">
           <DropZone label="Characters · max 4" onDrop={e=>dropAsset(e,'character')}><MultiAssetSelect label="Characters" values={selected.characterAssetIds} assets={project.assets.filter(a=>a.kind==='character')} onChange={ids=>mutate(s=>s.characterAssetIds=ids)} max={4}/></DropZone>
           <DropZone label="Location" onDrop={e=>dropAsset(e,'location')}><AssetSelect label="Location" value={selected.locationAssetId} assets={project.assets.filter(a=>a.kind==='location')} onChange={v=>mutate(s=>s.locationAssetId=v||undefined)}/></DropZone>
-          <DropZone label="Props / wardrobe · max 2" onDrop={e=>dropAsset(e,'prop')}><MultiAssetSelect label="Props / wardrobe refs" values={selected.propAssetIds} assets={project.assets.filter(a=>['prop','wardrobe','reference'].includes(a.kind))} onChange={ids=>mutate(s=>s.propAssetIds=ids)} max={2}/></DropZone>
+          <DropZone label="Visual references · max 4" onDrop={e=>dropAsset(e,'reference')}><MultiAssetSelect label="Generic visual references" values={selected.referenceAssetIds??[]} assets={project.assets.filter(a=>a.kind==='reference')} onChange={ids=>mutate(s=>s.referenceAssetIds=ids)} max={4}/></DropZone>
+          <DropZone label="Props / wardrobe · max 2" onDrop={e=>dropAsset(e,'prop')}><MultiAssetSelect label="Props / wardrobe refs" values={selected.propAssetIds} assets={project.assets.filter(a=>['prop','wardrobe'].includes(a.kind))} onChange={ids=>mutate(s=>s.propAssetIds=ids)} max={2}/></DropZone>
         </div>
       </Card>
       <Card title="Generation" kicker="MODEL ROUTING"><div className="form-grid three-col"><label>Model<select value={selected.generation.modelFamily} onChange={e=>changeModel(e.target.value as ModelFamily)}>{MODELS.map(m=><option key={m}>{m}</option>)}</select></label><label>Mode<select value={selected.generation.mode} onChange={e=>mutate(s=>{s.generation.mode=e.target.value as GenerationMode;s.generation.workflowProfileId=undefined;})}>{MODES.map(m=><option key={m}>{m}</option>)}</select></label><label>Quality<select value={selected.generation.quality} onChange={e=>mutate(s=>s.generation.quality=e.target.value as QualityIntent)}>{QUALITIES.map(q=><option key={q}>{q}</option>)}</select></label></div><div className="form-grid two-col"><label>Workflow profile<select value={selected.generation.workflowProfileId||''} onChange={e=>mutate(s=>s.generation.workflowProfileId=e.target.value||undefined)}><option value="">Auto: first matching enabled profile</option>{matchingProfiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label className="check"><input type="checkbox" checked={selected.generation.includeAudio} onChange={e=>mutate(s=>s.generation.includeAudio=e.target.checked)}/>Generate / preserve audio where workflow supports it</label></div><div className="form-grid six-col"><Num label="Width" value={selected.generation.width} set={v=>mutate(s=>s.generation.width=v)}/><Num label="Height" value={selected.generation.height} set={v=>mutate(s=>s.generation.height=v)}/><Num label="Frames" value={selected.generation.frames} set={v=>mutate(s=>s.generation.frames=v)}/><Num label="FPS" value={selected.generation.fps} set={v=>mutate(s=>s.generation.fps=v)}/><Num label="Steps" value={selected.generation.steps||0} set={v=>mutate(s=>s.generation.steps=v)}/><Num label="CFG" value={selected.generation.cfg||0} step={0.1} set={v=>mutate(s=>s.generation.cfg=v)}/></div><label>Seed<input type="number" value={selected.generation.seed} onChange={e=>mutate(s=>s.generation.seed=Number(e.target.value))}/></label><label>Negative prompt<textarea className="short" value={selected.generation.negativePrompt} onChange={e=>mutate(s=>s.generation.negativePrompt=e.target.value)}/></label></Card>
