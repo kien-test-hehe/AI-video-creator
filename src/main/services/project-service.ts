@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { dialog } from 'electron';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
-import type { Asset, AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
+import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
 import { assertExistingPathInside, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject } from './project-schema';
 
