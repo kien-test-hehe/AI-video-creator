@@ -23,6 +23,7 @@ import { validateAndRecordProfile } from './services/profile-validation';
 type Handler = (...args: any[]) => any;
 
 export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService): void {
+  let exportAbortController: AbortController | null = null;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
       assertTrustedIpcSender(event);
@@ -125,7 +126,13 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     return reviewShotWithLocalDirector(project,shot,settings.get());
   });
   handle(IPC.keyframeGenerate,(request:KeyframeRequest)=>generateKeyframe(projects,settings.get(),request));
-  handle(IPC.timelineExport,async()=>({outputPath:await exportTimeline(requireProject(projects),settings.get())}));
+  handle(IPC.timelineExport,async()=>{
+    if(exportAbortController)throw new Error('A timeline export is already running.');
+    exportAbortController=new AbortController();
+    try{return{outputPath:await exportTimeline(requireProject(projects),settings.get(),exportAbortController.signal)};}
+    finally{exportAbortController=null;}
+  });
+  handle(IPC.timelineCancelExport,async()=>{exportAbortController?.abort();});
   handle(IPC.capcutPrepareHandoff,async()=>prepareCapCutHandoff(requireProject(projects)));
 
   queue.on('snapshot',snapshot=>{for(const window of BrowserWindow.getAllWindows())if(!window.isDestroyed())window.webContents.send(IPC.queueEvent,snapshot);});
