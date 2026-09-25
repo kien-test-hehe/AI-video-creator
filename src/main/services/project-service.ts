@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { dialog } from 'electron';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
@@ -53,7 +53,11 @@ export class ProjectService {
     const file = join(openedRoot, PROJECT_FILE);
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(file, 'utf8')); }
+    try {
+      const info=await stat(file);
+      if(info.size>50*1024*1024)throw new Error('Project file exceeds the 50 MB safety limit.');
+      raw = JSON.parse(await readFile(file, 'utf8'));
+    }
     catch (primaryError) {
       try {
         raw = JSON.parse(await readFile(backup, 'utf8'));
@@ -196,6 +200,13 @@ export class ProjectService {
       const lexical = assertPathInside(resolve(root,'renders'),output.path,`render output path for ${output.filename}`);
       try { await assertExistingPathInside(resolve(root,'renders'),lexical,`render output path for ${output.filename}`); }
       catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+    }
+    for (const job of project.renderJobs) {
+      const snapshotPath=job.spec?.workflowProfile.workflowPath;
+      if(!snapshotPath)continue;
+      const lexical=assertPathInside(resolve(root,'workflows'),snapshotPath,`job workflow path for ${job.id}`);
+      try{await assertExistingPathInside(resolve(root,'workflows'),lexical,`job workflow path for ${job.id}`);}
+      catch(error:any){if(error?.code!=='ENOENT')throw error;}
     }
   }
 
