@@ -153,8 +153,17 @@ export function Studio(){
     catch(error){setError(error instanceof Error?error.message:String(error));}
   };
   const startAssetDrag=(event:DragEvent<HTMLElement>,assetId:string)=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-asset',assetId);};
-  const dropAssetOnShot=(event:DragEvent<HTMLElement>,shotId:string)=>{
+  const startWorkflowDrag=(event:DragEvent<HTMLElement>,profileId:string)=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-workflow',profileId);};
+  const dropOnShot=(event:DragEvent<HTMLElement>,shotId:string)=>{
     event.preventDefault();if(!project)return;
+    const workflowId=event.dataTransfer.getData('application/x-cineforge-workflow');
+    if(workflowId){
+      const profile=project.settings.workflowProfiles.find(item=>item.id===workflowId),shot=project.shots.find(item=>item.id===shotId);
+      if(!profile||!shot)return;
+      if(!profile.enabled||!profile.workflowPath||(profile.purpose??'video')!=='video'){setError(`${profile.name} is not an enabled usable video workflow.`);return;}
+      updateProject(next=>{const target=next.shots.find(item=>item.id===shotId);if(!target)return;const defaults=MODEL_DEFAULTS[profile.modelFamily];target.generation={...target.generation,...defaults,modelFamily:profile.modelFamily,mode:profile.mode,workflowProfileId:profile.id,seed:target.generation.seed,negativePrompt:target.generation.negativePrompt,quality:target.generation.quality};if(target.status==='draft')target.status='ready';});
+      selectShot(shotId);setNotice(`Routed ${shot.title} → ${profile.name}.`);return;
+    }
     const assetId=event.dataTransfer.getData('application/x-cineforge-asset');if(!assetId)return;
     const asset=project.assets.find(item=>item.id===assetId),shot=project.shots.find(item=>item.id===shotId);if(!asset||!shot)return;
     let result:{ok:boolean;role:string;message:string}|undefined;
@@ -235,7 +244,7 @@ export function Studio(){
               <svg className="studio-edges" width={graph.width} height={graph.height} aria-hidden="true">
                 {graph.edges.map(edge=><GraphEdge key={edge.id} edge={edge} nodes={nodeMap} active={activeNodeIds.has(edge.source)||activeNodeIds.has(edge.target)}/>)}
               </svg>
-              {nodes.map(node=><GraphNode key={node.id} node={node} project={project} selected={node.shotId===selectedShot?.id} active={activeNodeIds.has(node.id)} locked={locked} onPointerDown={beginNodeDrag} onPointerMove={moveNode} onPointerUp={endNodeDrag} onSelectShot={selectShot} onOpen={setView} onDropAsset={dropAssetOnShot}/>)}
+              {nodes.map(node=><GraphNode key={node.id} node={node} project={project} selected={node.shotId===selectedShot?.id} active={activeNodeIds.has(node.id)} locked={locked} onPointerDown={beginNodeDrag} onPointerMove={moveNode} onPointerUp={endNodeDrag} onSelectShot={selectShot} onOpen={setView} onDropToShot={dropOnShot} onStartWorkflowDrag={startWorkflowDrag}/>)}
             </div>
           </div>
           <MiniMap nodes={nodes} width={graph.width} height={graph.height} view={viewRect} onNavigate={(x,y)=>{const el=viewportRef.current;if(el)el.scrollTo({left:Math.max(0,(x-viewRect.width/2)*zoom),top:Math.max(0,(y-viewRect.height/2)*zoom),behavior:'smooth'});}}/>
@@ -258,17 +267,17 @@ export function Studio(){
   </section>;
 }
 
-function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onSelectShot,onOpen,onDropAsset}:{node:StudioNode;project:FilmProject;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onSelectShot:(id?:string)=>void;onOpen:(view:ViewId)=>void;onDropAsset:(event:DragEvent<HTMLElement>,shotId:string)=>void}){
+function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onSelectShot,onOpen,onDropToShot,onStartWorkflowDrag}:{node:StudioNode;project:FilmProject;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onSelectShot:(id?:string)=>void;onOpen:(view:ViewId)=>void;onDropToShot:(event:DragEvent<HTMLElement>,shotId:string)=>void;onStartWorkflowDrag:(event:DragEvent<HTMLElement>,profileId:string)=>void}){
   const shot=node.shotId?project.shots.find(item=>item.id===node.shotId):undefined;
   const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
   const route=shot?resolveWorkflow(project.settings.workflowProfiles,shot):undefined;
   const className=['studio-node',`node-${node.kind}`,selected?'selected':'',active?'on-path':'',locked?'locked':''].filter(Boolean).join(' ');
   const openView:Partial<Record<StudioNodeKind,ViewId>>={story:'story',assets:'assets',scene:'storyboard',shot:'shots',workflow:'settings',queue:'queue',timeline:'timeline',capcut:'finishing'};
-  return <article className={className} style={{left:node.x,top:node.y,width:node.width,minHeight:node.height}} onDragOver={shot?event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';}:undefined} onDrop={shot?event=>onDropAsset(event,shot.id):undefined}>
+  return <article className={className} style={{left:node.x,top:node.y,width:node.width,minHeight:node.height}} onDragOver={shot?event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';}:undefined} onDrop={shot?event=>onDropToShot(event,shot.id):undefined}>
     <header className="studio-node-drag" onPointerDown={event=>onPointerDown(event,node)} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
       <span className="studio-node-kind">{node.kind}</span><span>{locked?'●':'⠿'}</span>
     </header>
-    <button className="studio-node-body" onClick={()=>{if(shot)onSelectShot(shot.id);else if(openView[node.kind])onOpen(openView[node.kind]!);}}>
+    <button className="studio-node-body" draggable={Boolean(profile)} title={profile?'Drag this workflow onto a shot to route it.':shot?'Drop assets or workflows here.':undefined} onDragStart={profile?event=>{event.stopPropagation();onStartWorkflowDrag(event,profile.id);}:undefined} onClick={()=>{if(shot)onSelectShot(shot.id);else if(openView[node.kind])onOpen(openView[node.kind]!);}}>
       <strong>{node.title}</strong><small>{node.subtitle}</small>
       {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{!route?<Pill>no route</Pill>:route.validation?.structuralStatus!=='valid'?<Pill>route {route.validation?.structuralStatus||'unvalidated'}</Pill>:null}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
       {shot&&<div className="studio-ref-meter"><span>C{shot.characterAssetIds.length}</span><span>{shot.locationAssetId?'LOC':'NO LOC'}</span><span>R{shot.propAssetIds.length}</span><span>{shot.startFrameAssetId?'START':'—'}</span><span>{shot.endFrameAssetId?'END':'—'}</span></div>}
