@@ -35,6 +35,7 @@ export interface CineforgeApi {
     retry(jobId: string): Promise<QueueSnapshot>;
     cancel(jobId: string): Promise<QueueSnapshot>;
     snapshot(): Promise<QueueSnapshot>;
+    deleteOutput(outputId:string):Promise<FilmProject>;
     onQueueEvent(handler: (snapshot: QueueSnapshot) => void): () => void;
   };
   timeline: { export(): Promise<{ outputPath: string } | null>; cancelExport(): Promise<void>; };
