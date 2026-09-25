@@ -141,6 +141,15 @@ describe('stale creative result guards',()=>{
     const revalidatedAgainstAnotherRuntime=structuredClone(profile);revalidatedAgainstAnotherRuntime.validation!.runtimeFingerprint='runtime-b';
     expect(canRefreshProfileValidationFromRender(revalidatedAgainstAnotherRuntime,spec)).toBe(false);
   });
+  it('changes project render signatures when profile validation changes the auto-selected route',()=>{
+    const base=shot();base.generation.workflowProfileId=undefined;
+    const first={id:'a',runtime:'wangp' as const,purpose:'video' as const,name:'A',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/a.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'unvalidated' as const}};
+    const second={id:'b',runtime:'wangp' as const,purpose:'video' as const,name:'B',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/b.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'valid' as const}};
+    const project={assets:[{id:'char',kind:'character',name:'Hero',sourcePath:'',projectPath:'assets/char.png',tags:[],notes:'',createdAt:'x'},{id:'loc',kind:'location',name:'Room',sourcePath:'',projectPath:'assets/loc.png',tags:[],notes:'',createdAt:'x'}],settings:{workflowProfiles:[first,second]}} as unknown as FilmProject;
+    const before=shotProjectRenderInputKey(project,base);
+    project.settings.workflowProfiles[0].validation!.structuralStatus='valid';
+    expect(shotProjectRenderInputKey(project,base)).not.toBe(before);
+  });
   it('changes keyframe project signatures when the workflow execution config changes',()=>{
     const base=shot();
     const profile={id:'img',runtime:'wangp' as const,purpose:'image' as const,name:'Image',modelFamily:'custom' as const,mode:'i2i' as const,workflowPath:'workflows/image.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'valid' as const}};
