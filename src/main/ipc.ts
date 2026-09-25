@@ -19,6 +19,7 @@ import { assertExistingPathInside, assertPathInside, assertSafeWritePath } from 
 import { prepareCapCutHandoff } from './services/capcut-handoff';
 import { assertTrustedIpcSender } from './services/ipc-security';
 import { validateAndRecordProfile } from './services/profile-validation';
+import { writeCodexMachineContext } from './services/machine-context';
 
 type Handler = (...args: any[]) => any;
 
@@ -95,7 +96,11 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
   handle(IPC.workflowValidate, (profileId:string) => validateAndRecordProfile(projects, settings.get(), profileId));
 
-  handle(IPC.systemProbe, async()=>probeSystem(requireProject(projects),settings.get()));
+  handle(IPC.systemProbe, async()=>{
+    const project=requireProject(projects),machine=settings.get(),probe=await probeSystem(project,machine);
+    probe.codexContextPath=await writeCodexMachineContext(project,machine,probe);
+    return probe;
+  });
   handle(IPC.comfyPing, async(url?:string)=>{
     const machine=settings.get();
     const target=url||machine.comfy.url;
