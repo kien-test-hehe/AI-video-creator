@@ -35,6 +35,7 @@ const api: CineforgeApi = {
     retry: jobId => ipcRenderer.invoke(IPC.renderRetry, jobId),
     cancel: jobId => ipcRenderer.invoke(IPC.renderCancel, jobId),
     snapshot: () => ipcRenderer.invoke(IPC.renderSnapshot),
+    deleteOutput: outputId => ipcRenderer.invoke(IPC.renderOutputDelete, outputId),
     onQueueEvent: handler => {
       const listener = (_event: unknown, snapshot: any) => handler(snapshot);
       ipcRenderer.on(IPC.queueEvent, listener);
