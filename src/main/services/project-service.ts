@@ -247,5 +247,7 @@ export class ProjectService {
       mkdir(join(rootPath,'cache'),{recursive:true}), mkdir(join(rootPath,'handoff','capcut'),{recursive:true}),
       mkdir(join(rootPath,'.cineforge','jobs'),{recursive:true}), mkdir(join(rootPath,'.cineforge','logs'),{recursive:true})
     ]);
+    try{await writeFile(join(rootPath,'.cineforge','.gitignore'),'*\n!.gitignore\n',{encoding:'utf8',flag:'wx'});}
+    catch(error:any){if(error?.code!=='EEXIST')throw error;}
   }
 }
