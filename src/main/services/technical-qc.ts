@@ -18,10 +18,16 @@ export async function technicalQcVideo(machine:AppMachineSettings,path:string,sh
     if(Math.abs(probe.video.fps-shot.generation.fps)>0.5)issues.push(`FPS is ${probe.video.fps.toFixed(2)}; expected ${shot.generation.fps}.`);
     if(shot.generation.includeAudio&&!probe.hasAudio)issues.push('Shot requested audio but output has no audio stream.');
   }
-  const visual=await detectVisualProblems(machine.ffmpeg.path,path).catch(()=>({black:false,freeze:false}));
-  if(visual.black)issues.push('Black segment ≥0.5s detected.');
-  if(visual.freeze)issues.push('Frozen segment ≥2s detected.');
-  const audioPeakDb=probe.hasAudio?await detectPeak(machine.ffmpeg.path,path).catch(()=>undefined):undefined;
+  try{
+    const visual=await detectVisualProblems(machine.ffmpeg.path,path);
+    if(visual.black)issues.push('Black segment ≥0.5s detected.');
+    if(visual.freeze)issues.push('Frozen segment ≥2s detected.');
+  }catch(error){issues.push(`Visual QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
+  let audioPeakDb:number|undefined;
+  if(probe.hasAudio){
+    try{audioPeakDb=await detectPeak(machine.ffmpeg.path,path);}
+    catch(error){issues.push(`Audio QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
+  }
   if(audioPeakDb!=null&&audioPeakDb>-0.1)issues.push(`Audio peak is ${audioPeakDb.toFixed(1)} dB; clipping risk.`);
   return{checkedAt:new Date().toISOString(),passed:issues.length===0,durationSec:duration,width:probe.video?.width,height:probe.video?.height,fps:probe.video?.fps,hasAudio:probe.hasAudio,audioPeakDb,issues};
 }
