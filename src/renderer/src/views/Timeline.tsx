@@ -65,8 +65,8 @@ export function Timeline(){
         {videoOutputs.length===0?<Empty>Render a shot to create takes.</Empty>:<div className="take-list">{videoOutputs.map(output=>{
           const shot=project.shots.find(item=>item.id===output.shotId),duration=output.technicalQc?.durationSec;
           return <div className="take-card" key={output.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-render-output',output.id);}}>
-            <video src={projectMediaUrl(projectRelativeOutput(project.rootPath,output.path))} muted preload="metadata"/>
-            <button onClick={()=>add(output.id)} title="Add this take to the end of the timeline"><span>{shot?.title||'Shot'}</span><small>{output.filename}{duration?` · ${duration.toFixed(2)}s`:''}</small><b>+</b></button>
+            <video src={projectMediaUrl(projectRelativeOutput(project.rootPath,output.path))} muted controls preload="none"/>
+            <button onClick={()=>add(output.id)} title={output.technicalQc&&!output.technicalQc.passed?'QC failed: review before using this take.':'Add this take to the end of the timeline'}><span>{shot?.title||'Shot'}</span><small>{output.filename}{duration?` · ${duration.toFixed(2)}s`:''}{output.technicalQc?(output.technicalQc.passed?(output.technicalQc.warnings?.length?` · QC pass/${output.technicalQc.warnings.length} warn`:' · QC pass'):' · QC FAIL'):' · QC unknown'}</small><b>+</b></button>
           </div>;
         })}</div>}
       </Card>
