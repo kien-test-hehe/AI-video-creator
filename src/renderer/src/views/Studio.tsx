@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
 import type { Asset, AssetKind, FilmProject, GenerationMode, ModelFamily, QualityIntent, Shot, WorkflowProfile } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
+import { autoAssignAssetToShot } from '../asset-assignment';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
 
@@ -141,8 +142,9 @@ export function Studio(){
     event.preventDefault();if(!project)return;
     const assetId=event.dataTransfer.getData('application/x-cineforge-asset');if(!assetId)return;
     const asset=project.assets.find(item=>item.id===assetId),shot=project.shots.find(item=>item.id===shotId);if(!asset||!shot)return;
-    updateProject(next=>{const target=next.shots.find(item=>item.id===shotId),candidate=next.assets.find(item=>item.id===assetId);if(target&&candidate)assignAsset(target,candidate);});
-    selectShot(shotId);setNotice(`Assigned ${asset.name} → ${shot.title}`);
+    let result:{ok:boolean;role:string;message:string}|undefined;
+    updateProject(next=>{const target=next.shots.find(item=>item.id===shotId),candidate=next.assets.find(item=>item.id===assetId);if(target&&candidate)result=autoAssignAssetToShot(target,candidate);});
+    selectShot(shotId);if(result?.ok)setNotice(`${asset.name} → ${shot.title}: ${result.message}`);else if(result)setError(result.message);
   };
 
   const queueSelected=async()=>{
@@ -319,15 +321,6 @@ function relativeOutput(root:string,path:string):string{const base=root.replace(
 function resolveWorkflow(profiles:WorkflowProfile[],shot:Shot):WorkflowProfile|undefined{
   const explicit=shot.generation.workflowProfileId?profiles.find(profile=>profile.id===shot.generation.workflowProfileId&&profile.enabled):undefined;
   return explicit||profiles.find(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&profile.workflowPath);
-}
-function assignAsset(shot:Shot,asset:Asset):void{
-  if(asset.kind==='character'){if(!shot.characterAssetIds.includes(asset.id)&&shot.characterAssetIds.length<4)shot.characterAssetIds.push(asset.id);}
-  else if(asset.kind==='location')shot.locationAssetId=asset.id;
-  else if(['prop','wardrobe','reference'].includes(asset.kind)){if(!shot.propAssetIds.includes(asset.id)&&shot.propAssetIds.length<2)shot.propAssetIds.push(asset.id);}
-  else if(['image','keyframe'].includes(asset.kind)){if(!shot.startFrameAssetId)shot.startFrameAssetId=asset.id;else shot.endFrameAssetId=asset.id;}
-  else if(asset.kind==='video')shot.referenceVideoAssetId=asset.id;
-  else if(asset.kind==='audio')shot.audioAssetId=asset.id;
-  if(shot.status==='draft')shot.status='ready';
 }
 function scrollToNode(id:string,nodes:Map<string,StudioNode>,viewport:HTMLDivElement|null,zoom:number):void{
   const node=nodes.get(id);if(!node||!viewport)return;
