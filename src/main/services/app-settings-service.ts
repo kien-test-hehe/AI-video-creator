@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings } from '../../shared/types';
 import { DEFAULT_APP_MACHINE_SETTINGS } from './machine-defaults';
 import { assertLocalUrl } from './local-url';
 
-const SETTINGS_FILE='machine-settings.v1.json',JOURNAL_KEY_FILE='journal-hmac.key';
+const SETTINGS_FILE='machine-settings.v1.json',SETTINGS_BACKUP_FILE='machine-settings.v1.backup.json',JOURNAL_KEY_FILE='journal-hmac.key';
 
 export class AppSettingsService {
   private current:AppMachineSettings=structuredClone(DEFAULT_APP_MACHINE_SETTINGS);
@@ -17,8 +17,17 @@ export class AppSettingsService {
   async load():Promise<AppMachineSettings>{
     await mkdir(this.userDataDir,{recursive:true});
     this.journalKey=await this.loadOrCreateJournalKey();
-    try{const raw=JSON.parse(await readFile(join(this.userDataDir,SETTINGS_FILE),'utf8'));this.current=sanitizeMachineSettings(raw);}
-    catch{this.current=structuredClone(DEFAULT_APP_MACHINE_SETTINGS);await this.persistUnlocked(this.current);}
+    const file=join(this.userDataDir,SETTINGS_FILE),backup=join(this.userDataDir,SETTINGS_BACKUP_FILE);
+    try{const raw=JSON.parse(await readFile(file,'utf8'));this.current=sanitizeMachineSettings(raw);}
+    catch(primaryError:any){
+      try{
+        const raw=JSON.parse(await readFile(backup,'utf8'));this.current=sanitizeMachineSettings(raw);await copyFile(backup,file);
+      }catch{
+        this.current=structuredClone(DEFAULT_APP_MACHINE_SETTINGS);
+        if(primaryError?.code!=='ENOENT')console.warn('Machine settings could not be loaded; defaults were restored because no valid backup was available.',primaryError);
+        await this.persistUnlocked(this.current);
+      }
+    }
     return this.get();
   }
 
@@ -34,9 +43,15 @@ export class AppSettingsService {
   }
 
   private async persistUnlocked(value:AppMachineSettings):Promise<void>{
-    const file=join(this.userDataDir,SETTINGS_FILE),temp=join(this.userDataDir,`.${SETTINGS_FILE}.${process.pid}.tmp`);
-    await writeFile(temp,JSON.stringify(value,null,2),'utf8');
-    try{await rename(temp,file);}catch(error:any){if(!['EEXIST','EPERM','EACCES'].includes(error?.code))throw error;await writeFile(file,JSON.stringify(value,null,2),'utf8');await rm(temp,{force:true}).catch(()=>undefined);}
+    const file=join(this.userDataDir,SETTINGS_FILE),backup=join(this.userDataDir,SETTINGS_BACKUP_FILE),temp=join(this.userDataDir,`.${SETTINGS_FILE}.${process.pid}.tmp`);
+    const payload=JSON.stringify(value,null,2);
+    try{await copyFile(file,backup);}catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create machine-settings backup before saving: ${error instanceof Error?error.message:String(error)}`);}
+    await writeFile(temp,payload,'utf8');
+    try{await rename(temp,file);}
+    catch(error:any){
+      if(!['EEXIST','EPERM','EACCES'].includes(error?.code)){await rm(temp,{force:true}).catch(()=>undefined);throw error;}
+      try{await writeFile(file,payload,'utf8');}finally{await rm(temp,{force:true}).catch(()=>undefined);}
+    }
     this.current=structuredClone(value);
   }
 
