@@ -11,7 +11,13 @@ export function Timeline(){
   if(!project)return <Page title="Timeline"><Empty>Open a project first.</Empty></Page>;
 
   const videoOutputs=project.renderOutputs.filter(output=>output.mediaType==='video');
-  const add=(outputId:string)=>updateProject(next=>{insertTimelineOutput(next,outputId);});
+  const confirmTake=(outputId:string):boolean=>{
+    const output=project.renderOutputs.find(item=>item.id===outputId);if(!output)return false;
+    if(output.technicalQc?.passed===false)return window.confirm(`This take failed technical QC:\n\n${output.technicalQc.issues.join('\n')||'Unknown QC failure'}\n\nUse it in the canonical timeline anyway?`);
+    if(!output.technicalQc)return window.confirm('This take has no technical QC record. Use it in the canonical timeline anyway?');
+    return true;
+  };
+  const add=(outputId:string)=>{if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});};
   const remove=(id:string)=>updateProject(next=>{next.timeline=next.timeline.filter(clip=>clip.id!==id).map((clip,index)=>({...clip,order:index}));});
   const move=(id:string,delta:number)=>updateProject(next=>{
     const ordered=[...next.timeline].sort((a,b)=>a.order-b.order),index=ordered.findIndex(clip=>clip.id===id),target=index+delta;
@@ -22,13 +28,13 @@ export function Timeline(){
   const dropClip=(event:DragEvent<HTMLElement>,targetId:string)=>{
     event.preventDefault();event.stopPropagation();
     const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');
-    if(outputId){updateProject(next=>{insertTimelineOutput(next,outputId,targetId);});setNotice('Inserted rendered take into the timeline.');return;}
+    if(outputId){if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId,targetId);});setNotice('Inserted rendered take into the timeline.');return;}
     const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');
     if(sourceId)updateProject(next=>{reorderTimeline(next,sourceId,targetId);});
   };
   const dropTrack=(event:DragEvent<HTMLElement>)=>{
     const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');if(!outputId)return;
-    event.preventDefault();updateProject(next=>{insertTimelineOutput(next,outputId);});setNotice('Added rendered take to the end of the timeline.');
+    event.preventDefault();if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});setNotice('Added rendered take to the end of the timeline.');
   };
 
   const buildLatestCut=()=>{
@@ -37,12 +43,16 @@ export function Timeline(){
       const sb=project.scenes.find(scene=>scene.id===b.sceneId)?.index??0;
       return sa-sb||a.index-b.index;
     });
+    const skipped:string[]=[];
     const selected=ordered.map(shot=>{
-      const preferred=shot.latestRenderId?project.renderOutputs.find(output=>output.id===shot.latestRenderId&&output.mediaType==='video'):undefined;
-      const fallback=[...project.renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
-      return{shot,output:preferred||fallback};
+      const candidates=[...project.renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+      const preferred=shot.latestRenderId?candidates.find(output=>output.id===shot.latestRenderId&&output.technicalQc?.passed===true):undefined;
+      const passing=preferred||candidates.find(output=>output.technicalQc?.passed===true);
+      if(!passing&&candidates.length)skipped.push(shot.title);
+      return{shot,output:passing};
     }).filter((item):item is {shot:(typeof project.shots)[number];output:(typeof project.renderOutputs)[number]}=>Boolean(item.output));
-    if(!selected.length){setError('No rendered video takes are available yet.');return;}
+    if(!selected.length){setError('No QC-passing rendered video takes are available yet. Review failed/unknown takes manually if you intend to use them.');return;}
+    if(skipped.length&&!window.confirm(`Build the cut without ${skipped.length} shot(s) that have no QC-passing take?\n\n${skipped.slice(0,12).join('\n')}${skipped.length>12?'\n…':''}`))return;
     if(project.timeline.length&&!window.confirm('Replace the current timeline with the preferred/latest take for each rendered shot?'))return;
     updateProject(next=>{next.timeline=selected.map((item,order)=>({id:crypto.randomUUID(),shotId:item.shot.id,renderOutputId:item.output.id,track:0,order,trimInSec:0,volume:1}));});
     setNotice(`Built a ${selected.length}-shot master cut from preferred/latest takes.`);
