@@ -285,7 +285,8 @@ export class RenderQueueService extends EventEmitter {
         const message=error instanceof Error?error.message:String(error);
         await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed',error:message},true,true);
         const current=this.projects.getCurrent(),job=current?.renderJobs.find(j=>j.id===jobId);
-        if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
+        const externalSpecCurrent=job&&current?await this.immutableFilesStillCurrent(current,job):false;
+        if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
       }
     }finally{
       this.wanGpProcesses.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
