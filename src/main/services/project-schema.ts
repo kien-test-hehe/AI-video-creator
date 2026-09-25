@@ -53,13 +53,13 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const now = new Date().toISOString();
   const id = safeId(source.id);
   const settings = sanitizeProjectSettings(source.settings);
-  const scenes = array(source.scenes).map(sanitizeScene);
+  const scenes = array(source.scenes).slice(0,10_000).map(sanitizeScene);
   const sceneIds = new Set(scenes.map(s=>s.id));
-  const assets = array(source.assets).map(sanitizeAsset);
+  const assets = array(source.assets).slice(0,100_000).map(sanitizeAsset);
   const assetIds = new Set(assets.map(a=>a.id));
-  const shots = array(source.shots).map(value => sanitizeShot(value, sceneIds, assetIds));
+  const shots = array(source.shots).slice(0,100_000).map(value => sanitizeShot(value, sceneIds, assetIds));
   const shotIds = new Set(shots.map(s=>s.id));
-  const renderOutputs = array(source.renderOutputs).map(value => sanitizeRenderOutput(value, shotIds));
+  const renderOutputs = array(source.renderOutputs).slice(0,100_000).map(value => sanitizeRenderOutput(value, shotIds));
   const outputIds = new Set(renderOutputs.map(o=>o.id));
   const renderJobs = array(source.renderJobs).slice(0,100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds));
   const jobIds=new Set(renderJobs.map(job=>job.id));
@@ -90,7 +90,7 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
 
 function sanitizeProjectSettings(value: unknown): ProjectSettings {
   const source = asObject(value ?? {}, 'settings');
-  const profiles = array(source.workflowProfiles).map(sanitizeWorkflowProfile);
+  const profiles = array(source.workflowProfiles).slice(0,512).map(sanitizeWorkflowProfile);
   for (const builtin of BUILTIN_WORKFLOW_PROFILES) if (!profiles.some(p=>p.id===builtin.id)) profiles.push(structuredClone(builtin));
   return {
     costPolicy: {
@@ -164,7 +164,7 @@ function sanitizeScene(value: unknown): Scene {
     body: str(source.body, '', 500_000),
     location: str(source.location, '', 2000) || undefined,
     timeOfDay: str(source.timeOfDay, '', 500) || undefined,
-    shotIds: array(source.shotIds).map(safeId)
+    shotIds: array(source.shotIds).slice(0,100_000).map(safeId)
   };
 }
 
