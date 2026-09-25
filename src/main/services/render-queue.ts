@@ -285,7 +285,9 @@ export class RenderQueueService extends EventEmitter {
     if(shot.locationAssetId)values.locationImage=await path(shot.locationAssetId);
     for(const[i,id]of shot.characterAssetIds.slice(0,4).entries())Object.assign(values,{[`characterImage${i+1}`]:await path(id)});
     for(const[i,id]of shot.propAssetIds.slice(0,2).entries())Object.assign(values,{[`propImage${i+1}`]:await path(id)});
-    for(const[i,asset]of collectReferenceAssets(project,shot).slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:await path(asset.id)});
+    const continuityRefs=collectContinuityReferenceAssets(project,shot);
+    values.referenceImages=await Promise.all(continuityRefs.slice(0,4).map(asset=>path(asset.id)));
+    for(const[i,asset]of continuityRefs.slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:await path(asset.id)});
     if(shot.referenceVideoAssetId)values.inputVideo=await path(shot.referenceVideoAssetId);
     if(shot.audioAssetId)values.inputAudio=await path(shot.audioAssetId);
   }
@@ -408,5 +410,5 @@ export class RenderQueueService extends EventEmitter {
 function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
 function assetLine(asset:Asset|undefined,label:string):string{if(!asset)return'';return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}`;}
 function buildPrompt(project:FilmProject,shot:Shot):string{const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;return[shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',...characters.map(a=>assetLine(a,'Character continuity')),...props.map(a=>assetLine(a,'Prop continuity')),shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''].filter(Boolean).join('\n');}
-function collectReferenceAssets(project:FilmProject,shot:Shot):Asset[]{const ids=new Set<string>([...shot.characterAssetIds,...shot.propAssetIds]);if(shot.locationAssetId)ids.add(shot.locationAssetId);if(shot.startFrameAssetId)ids.add(shot.startFrameAssetId);if(shot.endFrameAssetId)ids.add(shot.endFrameAssetId);return[...ids].map(id=>project.assets.find(a=>a.id===id)).filter((a):a is Asset=>Boolean(a));}
+function collectContinuityReferenceAssets(project:FilmProject,shot:Shot):Asset[]{const ids=[...shot.characterAssetIds,...shot.propAssetIds];return[...new Set(ids)].map(id=>project.assets.find(a=>a.id===id)).filter((a):a is Asset=>Boolean(a));}
 function sleep(ms:number):Promise<void>{return new Promise(resolve=>setTimeout(resolve,ms));}
