@@ -6,7 +6,7 @@ import { Card,Empty,Page,Pill } from '../components/Ui';
 const FAMILIES:ModelFamily[]=['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom'];
 const MODES:GenerationMode[]=['t2v','i2v','flf2v','ia2v','v2v','t2i','i2i'];
 const PURPOSES:WorkflowPurpose[]=['video','image','audio','utility'];
-const BINDING_KEYS:WorkflowBindingKey[]=['prompt','negativePrompt','width','height','frames','fps','steps','cfg','seed','startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo','filenamePrefix'];
+const BINDING_KEYS:WorkflowBindingKey[]=['prompt','negativePrompt','width','height','resolution','frames','fps','steps','cfg','seed','startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo','filenamePrefix'];
 
 export function Settings(){
   const{project,machine,updateProject,updateMachine,setProject,setError,setNotice}=useAppStore();
