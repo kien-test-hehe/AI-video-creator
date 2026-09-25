@@ -14,6 +14,7 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { killProcessTree } from './process-utils';
 import { planShotReferences } from './reference-plan';
+import { shotKeyframeInputKey } from '../../shared/shot-signature';
 
 function keyframePrompt(shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
@@ -30,7 +31,7 @@ function chooseProfile(project:FilmProject,id:string):WorkflowProfile{
 
 export async function generateKeyframe(projects:ProjectService,machine:AppMachineSettings,request:KeyframeRequest,signal?:AbortSignal):Promise<FilmProject>{
   throwIfAborted(signal);const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');if(project.rootPath!==request.projectRoot)throw new Error('Keyframe request does not match the open project.');
-  const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');const profile=chooseProfile(project,request.workflowProfileId);
+  const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');const inputSignature=shotKeyframeInputKey(shot,request.role),profile=chooseProfile(project,request.workflowProfileId);
   const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
   if(!profile.validation?.sourceSha256)throw new Error('Keyframe profile has no validated source fingerprint. Revalidate it first.');
   if(await sha256File(workflowPath)!==profile.validation.sourceSha256)throw new Error('Keyframe profile changed after validation. Revalidate it first.');
@@ -65,10 +66,10 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   else generatedPath=await generateWithComfy(project,machine,profile,values,shot,request.role,signal);
   throwIfAborted(signal);
 
-  const current=projects.getCurrent();
-  if(!current||current.id!==project.id||current.rootPath!==project.rootPath||!current.shots.some(item=>item.id===shot.id)){
+  const current=projects.getCurrent(),currentShot=current?.shots.find(item=>item.id===shot.id);
+  if(!current||current.id!==project.id||current.rootPath!==project.rootPath||!currentShot||shotKeyframeInputKey(currentShot,request.role)!==inputSignature){
     await rm(generatedPath,{force:true}).catch(()=>undefined);
-    throw new Error('The project or target shot changed while the keyframe was generating. The generated staging file was discarded safely.');
+    throw new Error('The project or keyframe-relevant shot inputs changed while generation was running. The generated staging file was discarded safely.');
   }
   const assetId=randomUUID(),extension=extname(generatedPath)||'.png',relativePath=join('assets','keyframe',`${shot.id}-${request.role}-${assetId}${extension}`);
   const target=await assertSafeWritePath(join(project.rootPath,'assets'),join(project.rootPath,relativePath),'generated keyframe');
