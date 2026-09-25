@@ -185,7 +185,8 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const sceneId = safeId(source.sceneId);
   if (!sceneIds.has(sceneId)) throw new Error(`Shot references unknown scene: ${sceneId}`);
   const generationSource = asObject(source.generation ?? {}, 'shot generation');
-  const modelFamily = MODEL_FAMILIES.has(generationSource.modelFamily) ? generationSource.modelFamily : PRIMARY_VIDEO_MODEL;
+  const rawModelFamily=typeof generationSource.modelFamily==='string'?generationSource.modelFamily:'';
+  const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
   const defaults = MODEL_DEFAULTS[modelFamily];
   const filterIds = (value: unknown, max:number) => array(value).map(safeId).filter(id=>assetIds.has(id)).slice(0,max);
   const optionalAsset = (value: unknown) => {
