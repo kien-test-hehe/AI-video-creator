@@ -50,7 +50,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Package Linux directory
-        run: npx electron-builder --dir --linux x64
+        run: npx electron-builder --dir --linux --x64
 
   package-windows:
     name: Package Windows
