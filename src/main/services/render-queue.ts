@@ -341,7 +341,7 @@ export class RenderQueueService extends EventEmitter {
     if(shot.locationAssetId)values.locationImage=await this.stageComfyAsset(project,shot.locationAssetId,client,'image');
     for(const[i,id]of shot.characterAssetIds.slice(0,4).entries())Object.assign(values,{[`characterImage${i+1}`]:await this.stageComfyAsset(project,id,client,'image')});
     for(const[i,id]of shot.propAssetIds.slice(0,2).entries())Object.assign(values,{[`propImage${i+1}`]:await this.stageComfyAsset(project,id,client,'image')});
-    for(const[i,a]of collectReferenceAssets(project,shot).slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:await this.stageComfyAsset(project,a.id,client,'image')});
+    for(const[i,a]of collectContinuityReferenceAssets(project,shot).slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:await this.stageComfyAsset(project,a.id,client,'image')});
     if(shot.referenceVideoAssetId)values.inputVideo=await this.stageComfyAsset(project,shot.referenceVideoAssetId,client,'file');
     if(shot.audioAssetId)values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
