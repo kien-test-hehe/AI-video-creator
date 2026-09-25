@@ -78,8 +78,8 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   };
   const plan=planShotReferences(shot,profile);
   if(plan.locationId)values.locationImage=await assetPath(plan.locationId);
-  for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{`characterImage${index+1}`:await assetPath(id)});
-  for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{`propImage${index+1}`:await assetPath(id)});
+  for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{[`characterImage${index+1}`]:await assetPath(id)});
+  for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{[`propImage${index+1}`]:await assetPath(id)});
   const genericPaths=await Promise.all(plan.genericIds.map(id=>assetPath(id)));
   if(plan.genericArray)values.referenceImages=genericPaths;
   else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
