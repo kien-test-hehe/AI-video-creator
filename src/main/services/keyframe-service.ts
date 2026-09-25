@@ -8,7 +8,7 @@ import { compileProfile, type WorkflowValues } from './workflow-engine';
 import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
-import { collectComfyFileRefs, inferMediaType, uniqueComfyFileRefs } from './comfy-output';
+import { collectComfyHistoryOutputRefs, inferMediaType } from './comfy-output';
 import { waitForComfyCompletion, waitForComfyPromptRelease } from './comfy-runner';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
@@ -213,7 +213,7 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
       throw error;
     }
     finally{signal?.removeEventListener('abort',onAbort);}
-    const refs=uniqueComfyFileRefs(collectComfyFileRefs(history?.outputs||history));const imageRef=refs.find(r=>inferMediaType(r.filename)==='image');if(!imageRef)throw new Error('Image workflow completed but returned no image output.');
+    const refs=collectComfyHistoryOutputRefs(history);const imageRef=refs.find(r=>inferMediaType(r.filename)==='image');if(!imageRef)throw new Error('Image workflow completed but returned no image output in history.outputs.');
     const bytes=await client.download(imageRef),durable=join(project.rootPath,'cache','keyframe-stage',`${randomUUID()}${extname(imageRef.filename)||'.png'}`);await mkdir(join(project.rootPath,'cache','keyframe-stage'),{recursive:true});await writeFile(durable,bytes);return durable;
   }finally{await rm(snapshotRoot,{recursive:true,force:true}).catch(()=>undefined);}
 }
