@@ -113,24 +113,28 @@ function Ensure-WanGP([string]$BootstrapPython) {
     if ($LASTEXITCODE -ne 0) { throw 'Failed to clone WanGP.' }
   } else {
     $origin = (& $git -C $WanRoot remote get-url origin).Trim()
-    if ($origin -notmatch '^(https://github\.com/|git@github\.com:)deepbeepmeep/Wan2GP(?:\.git)?
+    if ($origin -notmatch '^(https://github\.com/|git@github\.com:)deepbeepmeep/Wan2GP(?:\.git)?$') { throw "Refusing to update unexpected WanGP remote: $origin" }
+  }
+  Push-Location $WanRoot
   try {
     & $git fetch --all --tags --prune
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the pinned WanGP repository.' }
     & $git checkout --detach $WanPin
     if ($LASTEXITCODE -ne 0) { throw "Failed to checkout pinned WanGP commit $WanPin" }
+    $actualPin = (& $git rev-parse HEAD).Trim()
+    if ($actualPin -ne $WanPin) { throw "WanGP checkout mismatch: expected $WanPin, got $actualPin" }
     & $BootstrapPython setup.py install --env venv --auto
     if ($LASTEXITCODE -ne 0) { throw 'WanGP automatic installer failed.' }
     $infoMatch = (& $BootstrapPython setup.py get_env_info 2>&1 | Select-String 'ENV_INFO\|' | Select-Object -Last 1)
     if (-not $infoMatch) { throw 'WanGP installed but its active environment path could not be discovered.' }
     $info = $infoMatch.ToString()
-    if ($info -notmatch 'ENV_INFO\|[^|]+\|(.+)
+    if ($info -notmatch 'ENV_INFO\|[^|]+\|(.+)$') { throw 'WanGP installed but its active environment path could not be parsed.' }
     $envPath = $Matches[1].Trim()
     $envPython = Join-Path $envPath 'Scripts\python.exe'
     if (-not (Test-Path $envPython)) { throw "WanGP environment Python not found: $envPython" }
     return $envPython
   } finally { Pop-Location }
 }
-
 Step 'Creating CineForge machine runtime'
 New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
 Ensure-Node
