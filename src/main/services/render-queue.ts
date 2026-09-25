@@ -212,6 +212,14 @@ export class RenderQueueService extends EventEmitter {
 
   private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile,machine:AppMachineSettings):Promise<RenderJob>{
     if(profile.validation?.structuralStatus!=='valid')throw new Error(`Profile “${profile.name}” must be validated in Settings before rendering.`);
+    const bindingKeys=new Set(profile.bindings.map(binding=>binding.key));
+    const requiredInputs:Array<[boolean,string,string]>=[
+      [Boolean(shot.startFrameAssetId),'startImage','start frame'],
+      [Boolean(shot.endFrameAssetId),'endImage','end frame'],
+      [Boolean(shot.referenceVideoAssetId),'inputVideo','motion/reference video'],
+      [Boolean(shot.audioAssetId),'inputAudio','input audio']
+    ];
+    for(const[present,key,label]of requiredInputs)if(present&&!bindingKeys.has(key as any))throw new Error(`Shot “${shot.title}” has a ${label}, but profile “${profile.name}” has no ${key} binding. Remove that input or use a compatible workflow so it is not silently ignored.`);
     const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
     const workflowSha256=await sha256File(workflowPath);
     if(profile.validation.sourceSha256!==workflowSha256)throw new Error(`Profile “${profile.name}” changed after validation. Revalidate it before rendering.`);
