@@ -1,7 +1,7 @@
 import { app, BrowserWindow, net, protocol, session } from 'electron';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { registerIpc } from './ipc';
+import { registerIpc, shutdownForegroundOperations } from './ipc';
 import { AppSettingsService } from './services/app-settings-service';
 import { assertExistingPathInside } from './services/path-safety';
 import { ProjectService } from './services/project-service';
@@ -18,6 +18,7 @@ let machineSettings: AppSettingsService;
 let mainWindow: BrowserWindow | null = null;
 let ipcRegistered = false;
 let trustedRendererUrl = '';
+let shutdownInProgress=false;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -78,4 +79,9 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
+app.on('before-quit',event=>{
+  if(shutdownInProgress)return;
+  shutdownInProgress=true;event.preventDefault();
+  void shutdownForegroundOperations().finally(()=>app.quit());
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
