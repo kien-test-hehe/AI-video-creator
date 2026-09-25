@@ -466,7 +466,12 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async commitOutputs(job:RenderJob,outputs:RenderOutput[]):Promise<void>{
-    const externalSpecCurrent=await this.immutableFilesStillCurrent(this.requireProject(),job);
+    const currentProject=this.requireProject();
+    if(!currentProject.shots.some(shot=>shot.id===job.shotId)){
+      const detached={...structuredClone(job),status:'orphaned' as const,progress:1,message:'Render completed after its shot was removed; media files were left on disk but were not attached to the project.',error:'The target shot no longer exists in the current project.',outputs:[],updatedAt:new Date().toISOString()};
+      this.liveJobs.set(job.id,detached);await this.journal.write(currentProject.rootPath,detached);this.emitSnapshot();return;
+    }
+    const externalSpecCurrent=await this.immutableFilesStillCurrent(currentProject,job);
     const videos=outputs.filter(o=>o.mediaType==='video'),passing=videos.find(o=>o.technicalQc?.passed);
     const expectsVideo=(job.spec?.workflowProfile.purpose??'video')==='video';
     const qcFailed=expectsVideo&&(!videos.length||!passing);const now=new Date().toISOString();
