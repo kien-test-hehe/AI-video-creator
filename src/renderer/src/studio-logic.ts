@@ -1,6 +1,13 @@
 import { MODEL_DEFAULTS } from '../../shared/defaults';
-import type { FilmProject, Shot, WorkflowProfile } from '../../shared/types';
+import type { FilmProject, PreflightReport, Shot, WorkflowProfile } from '../../shared/types';
 
+
+export type StudioPreflightState='unchecked'|'stale'|'ready'|'blocked';
+export function studioPreflightState(report:PreflightReport|undefined,reportRevision:string|undefined,projectUpdatedAt:string|undefined):StudioPreflightState{
+  if(!report)return'unchecked';
+  if(!reportRevision||!projectUpdatedAt||reportRevision!==projectUpdatedAt)return'stale';
+  return report.ready?'ready':'blocked';
+}
 export interface WorkflowRouteResult { ok:boolean;message:string; }
 
 export function routeShotToWorkflow(shot:Shot,profile:WorkflowProfile):WorkflowRouteResult{
