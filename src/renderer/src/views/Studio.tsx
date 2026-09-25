@@ -33,6 +33,7 @@ export function Studio(){
   const[showInspector,setShowInspector]=useState(true);
   const[showDock,setShowDock]=useState(true);
   const[preflightSummary,setPreflightSummary]=useState('unchecked');
+  const[focusedNodeId,setFocusedNodeId]=useState<string>();
   const[positions,setPositions]=useState<Record<string,Point>>(()=>loadStudioLayout(projectId));
   const[viewRect,setViewRect]=useState<ViewRect>({left:0,top:0,width:1000,height:700});
   const viewportRef=useRef<HTMLDivElement>(null);
@@ -80,7 +81,7 @@ export function Studio(){
       nodes.push({id,kind:'shot',x:670,y,width:280,height:142,title:shot.title,subtitle:compact(shot.prompt||shot.action||'No visual prompt yet.',88),shotId:shot.id});
       edges.push({id:`scene-${shot.id}`,source:`scene:${shot.sceneId}`,target:id,kind:'primary'});
       const route=resolveWorkflow(project.settings.workflowProfiles,shot);
-      if(route)edges.push({id:`route-${shot.id}`,source:id,target:`workflow:${route.id}`,kind:'primary'});
+      if(route)edges.push({id:`route-${shot.id}`,source:id,target:`workflow:${route.id}`,kind:route.validation?.structuralStatus==='valid'?'primary':'warning'});
     });
 
     const profiles=project.settings.workflowProfiles;
@@ -99,7 +100,7 @@ export function Studio(){
     nodes.push({id:'timeline',kind:'timeline',x:1490,y:queueY+230,width:250,height:132,title:'Timeline',subtitle:`${project.timeline.length} clips in canonical cut`});
     nodes.push({id:'capcut',kind:'capcut',x:1810,y:queueY+230,width:220,height:132,title:'CapCut Finish',subtitle:project.settings.capcut.pro?'Project policy: Pro':'Project policy: Free / No Pro'});
 
-    profiles.filter(profile=>profile.enabled).forEach(profile=>edges.push({id:`profile-queue-${profile.id}`,source:`workflow:${profile.id}`,target:'queue',kind:'primary'}));
+    profiles.filter(profile=>profile.enabled&&Boolean(profile.workflowPath)).forEach(profile=>edges.push({id:`profile-queue-${profile.id}`,source:`workflow:${profile.id}`,target:'queue',kind:profile.validation?.structuralStatus==='valid'?'primary':'warning'}));
     edges.push({id:'queue-timeline',source:'queue',target:'timeline',kind:'primary'});
     edges.push({id:'timeline-capcut',source:'timeline',target:'capcut',kind:'primary'});
     if(selectedShot)edges.push({id:'assets-selected',source:'assets',target:`shot:${selectedShot.id}`,kind:'asset'});
@@ -111,6 +112,10 @@ export function Studio(){
 
   const nodes=useMemo(()=>graph.nodes.map(node=>{const saved=positions[node.id],x=saved?.x??node.x,y=saved?.y??node.y;return{...node,x:Math.min(Math.max(0,graph.width-node.width),Math.max(0,x)),y:Math.min(Math.max(0,graph.height-node.height),Math.max(0,y))};}),[graph.height,graph.nodes,graph.width,positions]);
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
+  const fallbackFocusId=selectedShot?`shot:${selectedShot.id}`:(nodes[0]?.id||'story');
+  const focusedNode=nodeMap.get(focusedNodeId||fallbackFocusId)||nodeMap.get(fallbackFocusId);
+  const selectedRoute=selectedShot&&project?resolveWorkflow(project.settings.workflowProfiles,selectedShot):undefined;
+  const selectedRouteReady=selectedRoute?.validation?.structuralStatus==='valid';
   const activeNodeIds=useMemo(()=>{
     const ids=new Set<string>();if(selectedShot){ids.add(`shot:${selectedShot.id}`);ids.add(`scene:${selectedShot.sceneId}`);const route=project?resolveWorkflow(project.settings.workflowProfiles,selectedShot):undefined;if(route)ids.add(`workflow:${route.id}`);}return ids;
   },[project,selectedShot]);
@@ -223,7 +228,7 @@ export function Studio(){
         <button className={showDock?'ghost active-toggle':'ghost'} onClick={()=>setShowDock(value=>!value)}>Dock</button>
         <button className="ghost" disabled={preflightBusy||sortedShots.length===0} onClick={runPreflight}>{preflightBusy?'Checking…':`Preflight · ${preflightSummary}`}</button>
         <button className="ghost" disabled={sortedShots.length===0||preflightBusy} onClick={renderAll}>Render all</button>
-        <button className="primary" disabled={!selectedShot} onClick={queueSelected}>Render selected</button>
+        <button className="primary" title={!selectedRouteReady?'Select or validate a usable video workflow before rendering.':undefined} disabled={!selectedShot||!selectedRouteReady} onClick={queueSelected}>Render selected</button>
       </div>
     </header>
 
@@ -232,13 +237,13 @@ export function Studio(){
         <div className="studio-panel-head"><div><span className="eyebrow">LIBRARY</span><strong>Assets</strong></div><span>{project.assets.length}</span></div>
         <div className="studio-import-row"><select value={importKind} onChange={event=>setImportKind(event.target.value as AssetKind)}>{ASSET_KINDS.map(kind=><option key={kind}>{kind}</option>)}</select><button className="primary" onClick={importAsset}>Import</button></div>
         <input className="studio-search" value={assetSearch} onChange={event=>setAssetSearch(event.target.value)} placeholder="Search assets / tags…"/>
-        <div className="studio-filter-row"><button className={assetKind==='all'?'selected':''} onClick={()=>setAssetKind('all')}>All</button>{(['character','location','prop','keyframe','video','audio'] as const).map(kind=><button className={assetKind===kind?'selected':''} key={kind} onClick={()=>setAssetKind(kind)}>{kind}</button>)}</div>
+        <div className="studio-filter-row"><button className={assetKind==='all'?'selected':''} onClick={()=>setAssetKind('all')}>All</button>{ASSET_KINDS.map(kind=><button className={assetKind===kind?'selected':''} key={kind} onClick={()=>setAssetKind(kind)}>{kind}</button>)}</div>
         <div className="studio-asset-list">{filteredAssets.length===0?<div className="studio-mini-empty">No matching assets.</div>:filteredAssets.map(asset=><article key={asset.id} className="studio-asset" draggable onDragStart={event=>startAssetDrag(event,asset.id)} title="Drag onto a shot node or inspector slot">
           {isVisual(asset)?<img src={projectMediaUrl(asset.projectPath)} alt=""/>:<div className="studio-asset-glyph">{asset.kind==='audio'?'♪':'▶'}</div>}
           <div><strong>{asset.name}</strong><span>{asset.kind}</span><small>{asset.tags.slice(0,2).join(' · ')||'drag to assign'}</small></div><b>⋮⋮</b>
         </article>)}</div>
         <div className="studio-panel-section"><div className="studio-panel-head compact"><div><span className="eyebrow">STRUCTURE</span><strong>Scenes</strong></div><span>{project.scenes.length}</span></div>
-          <div className="studio-scene-list">{project.scenes.map(scene=>{const shots=sortedShots.filter(shot=>shot.sceneId===scene.id);return <button key={scene.id} onClick={()=>{const first=shots[0];if(first)selectShot(first.id);scrollToNode(`scene:${scene.id}`,nodeMap,viewportRef.current,zoom);}}><span>{scene.index}</span><div><strong>{scene.heading}</strong><small>{shots.length} shots</small></div></button>;})}</div>
+          <div className="studio-scene-list">{project.scenes.map(scene=>{const shots=sortedShots.filter(shot=>shot.sceneId===scene.id);return <button key={scene.id} onClick={()=>{setFocusedNodeId(`scene:${scene.id}`);const first=shots[0];if(first)selectShot(first.id);scrollToNode(`scene:${scene.id}`,nodeMap,viewportRef.current,zoom);}}><span>{scene.index}</span><div><strong>{scene.heading}</strong><small>{shots.length} shots</small></div></button>;})}</div>
         </div>
         <div className="studio-section-links"><QuickLink label="Story" view="story" setView={setView}/><QuickLink label="Assets" view="assets" setView={setView}/><QuickLink label="Storyboard" view="storyboard" setView={setView}/><QuickLink label="Settings" view="settings" setView={setView}/></div>
       </aside>}
@@ -259,7 +264,7 @@ export function Studio(){
       </main>
 
       {showInspector&&<aside className="studio-inspector">
-        {!selectedShot?<div className="studio-mini-empty">Select a shot node to inspect it.</div>:<ShotInspector project={project} shot={selectedShot} latestPath={latest?.path} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>}
+        <StudioInspector node={focusedNode} project={project} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
       </aside>}
     </div>
 
