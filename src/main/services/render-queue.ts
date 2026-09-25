@@ -208,7 +208,7 @@ export class RenderQueueService extends EventEmitter {
     const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(runtime==='wangp'){
       if(!probe.wangp.available)throw new Error(`WanGP is unavailable: ${probe.wangp.error||'not configured'}`);
-      if(machine.wangp.executionMode==='docker'&&!probe.docker?.available)throw new Error(`Docker is unavailable for the selected WanGP runtime: ${probe.docker?.error||'not running'}`);
+      if(machine.wangp.executionMode==='docker'){if(!probe.docker?.available)throw new Error(`Docker is unavailable for the selected WanGP runtime: ${probe.docker?.error||'not running'}`);if(probe.docker.gpuAccessible===false)throw new Error('Docker is running but no NVIDIA GPU runtime is available to WanGP.');}
     }else{
       if(!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance.');
       if(!probe.comfy.reachable)throw new Error(`ComfyUI is unavailable: ${probe.comfy.error||machine.comfy.url}`);
