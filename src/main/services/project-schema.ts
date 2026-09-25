@@ -332,7 +332,8 @@ function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
     fps:finiteOptional(source.fps,0,1000),
     hasAudio:typeof source.hasAudio==='boolean'?source.hasAudio:undefined,
     audioPeakDb:finiteOptional(source.audioPeakDb,-300,100),
-    issues:array(source.issues).slice(0,128).map(item=>str(item,'',4096)).filter(Boolean)
+    issues:array(source.issues).slice(0,128).map(item=>str(item,'',4096)).filter(Boolean),
+    warnings:array(source.warnings).slice(0,128).map(item=>str(item,'',4096)).filter(Boolean)
   };
 }
 function finiteOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):undefined;}
