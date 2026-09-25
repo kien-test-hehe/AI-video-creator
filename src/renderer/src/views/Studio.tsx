@@ -55,7 +55,8 @@ export function Studio(){
   },[project]);
 
   const selectedShot=project?(project.shots.find(shot=>shot.id===selectedShotId)||sortedShots[0]):undefined;
-  useEffect(()=>{if(!selectedShotId&&sortedShots[0])selectShot(sortedShots[0].id);},[selectShot,selectedShotId,sortedShots]);
+  const selectedShotIsValid=Boolean(selectedShotId&&sortedShots.some(shot=>shot.id===selectedShotId));
+  useEffect(()=>{if((!selectedShotId||!selectedShotIsValid)&&sortedShots[0])selectShot(sortedShots[0].id);},[selectShot,selectedShotId,selectedShotIsValid,sortedShots]);
 
   const graph=useMemo(()=>{
     if(!project)return{nodes:[] as StudioNode[],edges:[] as StudioEdge[],width:2050,height:900};
@@ -99,7 +100,8 @@ export function Studio(){
     edges.push({id:'timeline-capcut',source:'timeline',target:'capcut',kind:'primary'});
     if(selectedShot)edges.push({id:'assets-selected',source:'assets',target:`shot:${selectedShot.id}`,kind:'asset'});
 
-    const height=Math.max(900,140+Math.max(project.scenes.length*155,sortedShots.length*158,profiles.length*142));
+    const workflowRows=profiles.length+(unbound.length?1:0);
+    const height=Math.max(900,180+Math.max(project.scenes.length*155,sortedShots.length*158,workflowRows*142));
     return{nodes,edges,width:2070,height};
   },[project,queue.jobs,selectedShot,sortedShots]);
 
@@ -302,14 +304,17 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
     event.preventDefault();const assetId=event.dataTransfer.getData('application/x-cineforge-asset'),asset=project.assets.find(item=>item.id===assetId);if(!asset)return;
     const allowed=role==='character'?asset.kind==='character':role==='location'?asset.kind==='location':role==='prop'?['prop','wardrobe','reference'].includes(asset.kind):role==='start'?['image','reference','keyframe','character','location'].includes(asset.kind):role==='end'?['image','reference','keyframe'].includes(asset.kind):role==='video'?asset.kind==='video':asset.kind==='audio';
     if(!allowed){setError(`${asset.name} (${asset.kind}) cannot be assigned to ${role}.`);return;}
+    if(role==='character'&&!shot.characterAssetIds.includes(asset.id)&&shot.characterAssetIds.length>=4){setError('This shot already has the maximum of 4 character references.');return;}
+    if(role==='prop'&&!shot.propAssetIds.includes(asset.id)&&shot.propAssetIds.length>=2){setError('This shot already has the maximum of 2 prop / wardrobe references.');return;}
     mutate(target=>{
-      if(role==='character'&&!target.characterAssetIds.includes(asset.id)&&target.characterAssetIds.length<4)target.characterAssetIds.push(asset.id);
+      if(role==='character'&&!target.characterAssetIds.includes(asset.id))target.characterAssetIds.push(asset.id);
       else if(role==='location')target.locationAssetId=asset.id;
-      else if(role==='prop'&&!target.propAssetIds.includes(asset.id)&&target.propAssetIds.length<2)target.propAssetIds.push(asset.id);
+      else if(role==='prop'&&!target.propAssetIds.includes(asset.id))target.propAssetIds.push(asset.id);
       else if(role==='start')target.startFrameAssetId=asset.id;
       else if(role==='end')target.endFrameAssetId=asset.id;
       else if(role==='video')target.referenceVideoAssetId=asset.id;
       else if(role==='audio')target.audioAssetId=asset.id;
+      if(target.status==='draft')target.status='ready';
     });
   };
   return <div className="studio-inspector-scroll">
@@ -378,5 +383,15 @@ function reorderTimeline(project:FilmProject,sourceId:string,targetId:string,upd
 
 function loadStudioLayout(projectId?:string):Record<string,Point>{
   if(!projectId)return{};
-  try{const raw=localStorage.getItem(`cineforge:studio-layout:${projectId}`);return raw?JSON.parse(raw):{};}catch{return{};}
+  try{
+    const raw=localStorage.getItem(`cineforge:studio-layout:${projectId}`);if(!raw)return{};
+    const parsed=JSON.parse(raw);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return{};
+    const clean:Record<string,Point>={};
+    for(const[id,value]of Object.entries(parsed as Record<string,unknown>)){
+      if(!value||typeof value!=='object'||Array.isArray(value)||id.length>200)continue;
+      const point=value as Record<string,unknown>,x=Number(point.x),y=Number(point.y);
+      if(Number.isFinite(x)&&Number.isFinite(y)&&x>=0&&y>=0&&x<=20_000&&y<=20_000)clean[id]={x,y};
+    }
+    return clean;
+  }catch{return{};}
 }
