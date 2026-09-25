@@ -11,6 +11,7 @@ import { latestPassingVideoTake } from '../../shared/take-policy';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
+const ACTIVE_RENDER_STATUSES=new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 
 export class ProjectService {
   private current: FilmProject | null = null;
@@ -96,6 +97,8 @@ export class ProjectService {
       if (!this.current) throw new Error('No project is open.');
       const candidate=structuredClone(project);
       const proposedShotIds=new Set(Array.isArray(candidate.shots)?candidate.shots.map(shot=>shot?.id).filter((id):id is string=>typeof id==='string'):[]);
+      const activeRemoved=this.current.renderJobs.find(job=>ACTIVE_RENDER_STATUSES.has(job.status)&&!proposedShotIds.has(job.shotId));
+      if(activeRemoved)throw new Error(`Cannot remove shot ${activeRemoved.shotId} while render job ${activeRemoved.id.slice(0,8)} is active. Finish or cancel the render first.`);
       candidate.renderJobs=this.current.renderJobs.filter(job=>proposedShotIds.has(job.shotId));
       candidate.renderOutputs=this.current.renderOutputs.filter(output=>proposedShotIds.has(output.shotId));
       const incoming = loadPortableProject(candidate, this.current.rootPath).project;
