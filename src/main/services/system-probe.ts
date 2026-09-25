@@ -54,7 +54,7 @@ async function probeDocker(machine:AppMachineSettings):Promise<SystemProbe['dock
   }catch(error){return{available:false,error:error instanceof Error?error.message:String(error)};}
 }
 
-async function nativePythonInfo(pythonPath:string):Promise<{pythonVersion?:string;torchVersion?:string;torchCudaVersion?:string;cudaAvailable?:boolean}>{
+async function nativePythonInfo(pythonPath:string):Promise<{pythonVersion?:string;torchVersion?:string;torchCudaVersion?:string;cudaAvailable?:boolean;torchError?:string}>{
   const code="import json,sys; d={'pythonVersion':sys.version.split()[0]};\ntry:\n import torch; d.update(torchVersion=torch.__version__,torchCudaVersion=torch.version.cuda,cudaAvailable=torch.cuda.is_available())\nexcept Exception as e: d.update(torchError=str(e))\nprint(json.dumps(d))";
   try{const{stdout}=await execFileAsync(pythonPath,['-c',code],{timeout:20_000,maxBuffer:2*1024*1024});return JSON.parse(stdout.trim().split(/\r?\n/).at(-1)||'{}');}
   catch{
@@ -79,6 +79,8 @@ async function probeWanGp(machine:AppMachineSettings):Promise<SystemProbe['wangp
     const fakeProfile={runtime:'wangp',workflowFormat:'wangp-settings'} as any;
     const[fp,py]=await Promise.all([fingerprintRuntime(machine,fakeProfile),nativePythonInfo(cfg.pythonPath)]);
     if(!fp.runtimeSha256)return{configured:true,available:false,executionMode:'native',rootPath:cfg.rootPath,error:'WanGP entrypoint is missing or unreadable.',...py};
+    if(!py.torchVersion)return{configured:true,available:false,executionMode:'native',rootPath:cfg.rootPath,entrypoint:cfg.entrypoint,pythonPath:cfg.pythonPath,runtimeVersion:fp.runtimeVersion,error:`WanGP Python cannot import PyTorch: ${py.torchError||'unknown error'}`,...py};
+    if(py.cudaAvailable!==true)return{configured:true,available:false,executionMode:'native',rootPath:cfg.rootPath,entrypoint:cfg.entrypoint,pythonPath:cfg.pythonPath,runtimeVersion:fp.runtimeVersion,error:'PyTorch is installed but CUDA is not available in the WanGP environment.',...py};
     return{configured:true,available:true,executionMode:'native',rootPath:cfg.rootPath,entrypoint:cfg.entrypoint,pythonPath:cfg.pythonPath,runtimeVersion:fp.runtimeVersion,...py};
   }catch(error){return{configured:true,available:false,executionMode:'native',rootPath:cfg.rootPath,error:error instanceof Error?error.message:String(error)};}
 }
