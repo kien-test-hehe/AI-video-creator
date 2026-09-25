@@ -78,5 +78,7 @@ export async function isWanGpDockerRunning(machine:AppMachineSettings,runId:stri
 
 export async function stopWanGpDocker(machine:AppMachineSettings,runId:string):Promise<void>{
   const name=wanGpContainerName(runId);
-  await execFileAsync(machine.wangp.docker.command,['rm','-f',name],{timeout:15_000}).catch(()=>undefined);
+  try{await execFileAsync(machine.wangp.docker.command,['rm','-f',name],{timeout:15_000});}
+  catch(error){if(await isWanGpDockerRunning(machine,runId))throw error;}
+  if(await isWanGpDockerRunning(machine,runId))throw new Error(`WanGP Docker container is still running after stop request: ${name}`);
 }
