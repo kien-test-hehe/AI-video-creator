@@ -9,7 +9,7 @@ interface AppState{
   setView(view:ViewId):void;selectShot(id?:string):void;setQueue(queue:QueueSnapshot):void;setProbe(probe?:SystemProbe):void;setBusy(busy:boolean):void;setError(error?:string):void;setNotice(notice?:string):void;
 }
 let projectTimer:ReturnType<typeof setTimeout>|undefined,machineTimer:ReturnType<typeof setTimeout>|undefined;
-let projectEditRevision=0;
+let projectEditRevision=0,busyCount=0;
 
 export const useAppStore=create<AppState>((set,get)=>({
   project:null,machine:null,activeView:'studio',queue:{jobs:[]},busy:false,projectDirty:false,machineDirty:false,
@@ -51,7 +51,7 @@ export const useAppStore=create<AppState>((set,get)=>({
       set(state=>state.machine===machine?{machine:saved,machineDirty:false,error:undefined}:{error:undefined});
     }catch(error){set({error:error instanceof Error?error.message:String(error)});}
   },
-  setView:activeView=>set({activeView}),selectShot:selectedShotId=>set({selectedShotId}),setQueue:queue=>set({queue}),setProbe:probe=>set({probe}),setBusy:busy=>set({busy}),setError:error=>set({error}),setNotice:notice=>set({notice})
+  setView:activeView=>set({activeView}),selectShot:selectedShotId=>set({selectedShotId}),setQueue:queue=>set({queue}),setProbe:probe=>set({probe}),setBusy:busy=>{busyCount=Math.max(0,busyCount+(busy?1:-1));set({busy:busyCount>0});},setError:error=>set({error}),setNotice:notice=>set({notice})
 }));
 
 function profileConfigKey(profile:FilmProject['settings']['workflowProfiles'][number]):string{
