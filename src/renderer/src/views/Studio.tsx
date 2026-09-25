@@ -4,6 +4,7 @@ import { chooseModelForShot } from '../../../shared/routing';
 import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, Shot, WorkflowProfile } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
+import { reorderTimeline, routeShotToWorkflow } from '../studio-logic';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
 
@@ -160,9 +161,9 @@ export function Studio(){
     if(workflowId){
       const profile=project.settings.workflowProfiles.find(item=>item.id===workflowId),shot=project.shots.find(item=>item.id===shotId);
       if(!profile||!shot)return;
-      if(!profile.enabled||!profile.workflowPath||(profile.purpose??'video')!=='video'){setError(`${profile.name} is not an enabled usable video workflow.`);return;}
-      updateProject(next=>{const target=next.shots.find(item=>item.id===shotId);if(!target)return;const defaults=MODEL_DEFAULTS[profile.modelFamily];target.generation={...target.generation,...defaults,modelFamily:profile.modelFamily,mode:profile.mode,workflowProfileId:profile.id,seed:target.generation.seed,negativePrompt:target.generation.negativePrompt,quality:target.generation.quality};if(target.status==='draft')target.status='ready';});
-      selectShot(shotId);setNotice(`Routed ${shot.title} → ${profile.name}.`);return;
+      let result:{ok:boolean;message:string}|undefined;
+      updateProject(next=>{const target=next.shots.find(item=>item.id===shotId);if(target)result=routeShotToWorkflow(target,profile);});
+      selectShot(shotId);if(result?.ok)setNotice(`${shot.title}: ${result.message}`);else if(result)setError(result.message);return;
     }
     const assetId=event.dataTransfer.getData('application/x-cineforge-asset');if(!assetId)return;
     const asset=project.assets.find(item=>item.id===assetId),shot=project.shots.find(item=>item.id===shotId);if(!asset||!shot)return;
@@ -261,7 +262,7 @@ export function Studio(){
         <div className="studio-job-strip">{queue.jobs.length===0?<span className="muted">Nothing queued.</span>:queue.jobs.map(job=>{const shot=project.shots.find(item=>item.id===job.shotId),active=ACTIVE_JOB_STATUSES.has(job.status),retryable=['failed','cancelled','orphaned'].includes(job.status);return <div className="studio-job" key={job.id}><span className={`job-dot ${job.status}`}/><div><strong>{shot?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}%</small></div><div className="studio-job-progress"><i style={{width:`${Math.round(job.progress*100)}%`}}/></div>{active?<button className="studio-job-action" title="Cancel job" onClick={()=>cancelJob(job.id)}>×</button>:retryable?<button className="studio-job-action" title="Retry exact job" onClick={()=>retryJob(job.id)}>↻</button>:null}</div>;})}</div>
       </section>
       <section className="studio-dock-block timeline-dock"><div className="studio-dock-head"><div><span className="eyebrow">TIMELINE</span><strong>{project.timeline.length} clips</strong></div><button className="ghost" onClick={()=>setView('timeline')}>Open timeline ↗</button></div>
-        <div className="studio-timeline-strip">{project.timeline.length===0?<span className="muted">Build a cut from rendered takes.</span>:[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>{event.preventDefault();const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(sourceId)reorderTimeline(project,sourceId,clip.id,updateProject);}} onClick={()=>{if(shot){selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
+        <div className="studio-timeline-strip">{project.timeline.length===0?<span className="muted">Build a cut from rendered takes.</span>:[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>{event.preventDefault();const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(sourceId)updateProject(next=>{reorderTimeline(next,sourceId,clip.id);});}} onClick={()=>{if(shot){selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
       </section>
     </footer>
   </section>;
@@ -383,11 +384,6 @@ function resolveWorkflow(profiles:WorkflowProfile[],shot:Shot):WorkflowProfile|u
 function scrollToNode(id:string,nodes:Map<string,StudioNode>,viewport:HTMLDivElement|null,zoom:number):void{
   const node=nodes.get(id);if(!node||!viewport)return;
   viewport.scrollTo({left:Math.max(0,(node.x-node.width)*zoom),top:Math.max(0,(node.y-120)*zoom),behavior:'smooth'});
-}
-
-function reorderTimeline(project:FilmProject,sourceId:string,targetId:string,updateProject:(mutator:(project:FilmProject)=>void)=>void):void{
-  if(sourceId===targetId||!project.timeline.some(clip=>clip.id===sourceId)||!project.timeline.some(clip=>clip.id===targetId))return;
-  updateProject(next=>{const ordered=[...next.timeline].sort((a,b)=>a.order-b.order);const from=ordered.findIndex(clip=>clip.id===sourceId),to=ordered.findIndex(clip=>clip.id===targetId);if(from<0||to<0)return;const[moved]=ordered.splice(from,1);ordered.splice(to,0,moved);ordered.forEach((clip,index)=>clip.order=index);next.timeline=ordered;});
 }
 
 function loadStudioLayout(projectId?:string):Record<string,Point>{
