@@ -138,14 +138,37 @@ export interface RenderRequest { projectRoot:string;shotId:UUID;forceWorkflowPro
 export interface RenderBatchRequest { projectRoot:string;shotIds:UUID[];skipIfRendered?:boolean; }
 export interface QueueSnapshot { runningJobId?:UUID;jobs:RenderJob[]; }
 
+export interface HardwarePlan {
+  tier:'rtx50-16gb'|'nvidia-16gb-plus'|'nvidia-12gb-plus'|'nvidia-low-vram'|'unknown';
+  recommendedWanGpProfile:1|2|3|4|5;
+  recommendedAttention:'auto'|'sdpa'|'flash'|'sage'|'sage2';
+  defaultVideoModel:ModelFamily;
+  defaultStillStrategy:string;
+  notes:string[];
+}
 export interface SystemProbe {
-  gpu?:{name:string;totalVramMb?:number;freeVramMb?:number;driver?:string;};
+  platform:{platform:string;release:string;arch:string;hostname:string;};
+  cpu:{model:string;logicalCores:number;physicalCores?:number;};
+  gpu?:{name:string;totalVramMb?:number;freeVramMb?:number;driver?:string;computeCapability?:string;cudaVersion?:string;};
   memory?:{totalMb:number;freeMb:number;};
   disk?:{path:string;freeBytes:number;totalBytes:number;};
   ffmpeg:{available:boolean;version?:string;ffprobeAvailable:boolean;encoderAvailable?:boolean;};
+  capcut:{installed:boolean;path?:string;configuredTier:'free'|'pro';};
   comfy:{reachable:boolean;url:string;systemStats?:unknown;error?:string;};
-  wangp:{configured:boolean;available:boolean;executionMode:WanGpExecutionMode;rootPath:string;entrypoint?:string;pythonPath?:string;runtimeVersion?:string;error?:string;};
+  wangp:{configured:boolean;available:boolean;executionMode:WanGpExecutionMode;rootPath:string;entrypoint?:string;pythonPath?:string;runtimeVersion?:string;pythonVersion?:string;torchVersion?:string;torchCudaVersion?:string;cudaAvailable?:boolean;error?:string;};
   docker?:{available:boolean;version?:string;gpuAccessible?:boolean;error?:string;};
+  hardwarePlan:HardwarePlan;
+  codexContextPath?:string;
+}
+export interface WanGpCatalogEntry {
+  modelType:string;
+  name:string;
+  family?:string;
+  familyLabel?:string;
+  mainOutput:string[];
+  outputs:string[];
+  inputs:string[];
+  description?:string;
 }
 export type ValidationLevel='error'|'warning'|'info';
 export interface ValidationIssue { level:ValidationLevel;code:string;message:string;shotId?:UUID;profileId?:UUID;assetId?:UUID; }
