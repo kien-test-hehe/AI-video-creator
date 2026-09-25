@@ -482,7 +482,7 @@ function isVisual(asset:Asset):boolean{return['image','reference','keyframe','ch
 function compact(value:string,max:number):string{const clean=value.replace(/\s+/g,' ').trim();return clean.length>max?`${clean.slice(0,max-1)}…`:clean;}
 function relativeOutput(root:string,path:string):string{const base=root.replace(/\\/g,'/').replace(/\/$/,'');const value=path.replace(/\\/g,'/');return value.startsWith(`${base}/`)?value.slice(base.length+1):value;}
 function shotPreviewAsset(project:FilmProject,shot:Shot):Asset|undefined{
-  const ids=[shot.startFrameAssetId,shot.endFrameAssetId,shot.characterAssetIds[0],shot.locationAssetId,shot.propAssetIds[0]].filter((id):id is string=>Boolean(id));
+  const ids=[shot.startFrameAssetId,shot.endFrameAssetId,shot.characterAssetIds[0],shot.locationAssetId,shot.referenceAssetIds?.[0],shot.propAssetIds[0]].filter((id):id is string=>Boolean(id));
   return ids.map(id=>project.assets.find(asset=>asset.id===id)).find((asset):asset is Asset=>Boolean(asset&&isVisual(asset)));
 }
 function scrollToNode(id:string,nodes:Map<string,StudioNode>,viewport:HTMLDivElement|null,zoom:number):void{
