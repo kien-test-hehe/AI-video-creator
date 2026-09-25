@@ -8,7 +8,7 @@ export interface WorkflowValues {
   negativePrompt: string;
   width: number;
   height: number;
-  resolution: string;
+  resolution?: string;
   frames: number;
   fps: number;
   steps?: number;
