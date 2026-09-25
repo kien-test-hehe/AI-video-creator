@@ -39,16 +39,21 @@ export function Shots(){
       slot==='end'?['image','reference','keyframe'].includes(asset.kind):
       slot==='video'?asset.kind==='video':asset.kind==='audio';
     if(!allowed){setError(`${asset.name} (${asset.kind}) cannot be dropped into ${slot}.`);return;}
+    if(slot==='character'&&!selected.characterAssetIds.includes(asset.id)&&selected.characterAssetIds.length>=4){setError('This shot already has the maximum of 4 character references.');return;}
+    if(slot==='reference'&&!(selected.referenceAssetIds??[]).includes(asset.id)&&(selected.referenceAssetIds?.length??0)>=4){setError('This shot already has the maximum of 4 generic visual references.');return;}
+    if(slot==='prop'&&!selected.propAssetIds.includes(asset.id)&&selected.propAssetIds.length>=2){setError('This shot already has the maximum of 2 prop / wardrobe references.');return;}
     mutate(s=>{
-      if(slot==='character'){if(!s.characterAssetIds.includes(asset.id)&&s.characterAssetIds.length<4)s.characterAssetIds.push(asset.id);}
+      if(slot==='character'&&!s.characterAssetIds.includes(asset.id))s.characterAssetIds.push(asset.id);
       else if(slot==='location')s.locationAssetId=asset.id;
-      else if(slot==='reference'){const refs=s.referenceAssetIds??(s.referenceAssetIds=[]);if(!refs.includes(asset.id)&&refs.length<4)refs.push(asset.id);}
-      else if(slot==='prop'){if(!s.propAssetIds.includes(asset.id)&&s.propAssetIds.length<2)s.propAssetIds.push(asset.id);}
+      else if(slot==='reference'){const refs=s.referenceAssetIds??(s.referenceAssetIds=[]);if(!refs.includes(asset.id))refs.push(asset.id);}
+      else if(slot==='prop'&&!s.propAssetIds.includes(asset.id))s.propAssetIds.push(asset.id);
       else if(slot==='start')s.startFrameAssetId=asset.id;
       else if(slot==='end')s.endFrameAssetId=asset.id;
       else if(slot==='video')s.referenceVideoAssetId=asset.id;
       else if(slot==='audio')s.audioAssetId=asset.id;
+      if(s.status==='draft')s.status='ready';
     });
+    setNotice(`${asset.name} assigned to ${slot}.`);
   };
   const route=selected?resolveStudioWorkflow(project.settings.workflowProfiles,selected):undefined;const routeReady=Boolean(selected&&isStudioWorkflowReady(route,selected));const routeIssue=selected?studioWorkflowIssue(route,selected):undefined;
   const startAsset=selected?.startFrameAssetId?project.assets.find(a=>a.id===selected.startFrameAssetId):undefined;const endAsset=selected?.endFrameAssetId?project.assets.find(a=>a.id===selected.endFrameAssetId):undefined;const latest=selected?.latestRenderId?project.renderOutputs.find(o=>o.id===selected.latestRenderId):undefined;const takes=selected?[...project.renderOutputs].filter(o=>o.shotId===selected.id&&o.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt)):[];const matchingProfiles=selected?project.settings.workflowProfiles.filter(p=>p.enabled&&(p.purpose??'video')==='video'&&p.modelFamily===selected.generation.modelFamily&&p.mode===selected.generation.mode&&p.workflowPath):[];
