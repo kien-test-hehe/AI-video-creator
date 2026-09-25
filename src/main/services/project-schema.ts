@@ -61,10 +61,16 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const shotIds = new Set(shots.map(s=>s.id));
   const renderOutputs = array(source.renderOutputs).map(value => sanitizeRenderOutput(value, shotIds));
   const outputIds = new Set(renderOutputs.map(o=>o.id));
-  const renderJobs = array(source.renderJobs).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds));
-  const timeline = array(source.timeline).map(value => sanitizeTimelineClip(value, shotIds, outputIds));
+  const renderJobs = array(source.renderJobs).slice(0,100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds));
+  const jobIds=new Set(renderJobs.map(job=>job.id));
+  const timeline = array(source.timeline).slice(0,100_000).map(value => sanitizeTimelineClip(value, shotIds, outputIds));
 
   for (const scene of scenes) scene.shotIds = scene.shotIds.filter(shotId => shotIds.has(shotId));
+  for(const shot of shots){
+    if(shot.latestRenderId&&!renderOutputs.some(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video'))shot.latestRenderId=undefined;
+  }
+  for(const job of renderJobs)job.outputs=renderOutputs.filter(output=>output.jobId===job.id&&output.shotId===job.shotId);
+  for(const output of renderOutputs)if(!jobIds.has(output.jobId))output.jobId='orphaned';
   return {
     schemaVersion: 2,
     id,
@@ -239,8 +245,8 @@ function sanitizeRenderOutput(value: unknown, shotIds: Set<string>): RenderOutpu
     path:str(source.path,'',4096), filename:str(source.filename,'output',2048),
     mediaType:['video','image','audio'].includes(source.mediaType) ? source.mediaType : 'unknown',
     createdAt:iso(source.createdAt,new Date().toISOString()),
-    comfyMeta: source.comfyMeta && typeof source.comfyMeta === 'object' ? structuredClone(source.comfyMeta) : undefined,
-    technicalQc: source.technicalQc && typeof source.technicalQc === 'object' ? structuredClone(source.technicalQc) : undefined
+    comfyMeta:sanitizeComfyMeta(source.comfyMeta),
+    technicalQc:sanitizeTechnicalQc(source.technicalQc)
   };
 }
 
@@ -277,7 +283,7 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
     id:safeId(source.id), shotId, createdAt:iso(source.createdAt,new Date().toISOString()), updatedAt:iso(source.updatedAt,new Date().toISOString()),
     status:JOB_STATUSES.has(source.status) ? source.status : 'failed', progress:clampNumber(source.progress,0,1,0),
     message:str(source.message,'',10_000), modelFamily:MODEL_FAMILIES.has(source.modelFamily)?source.modelFamily:'custom',
-    workflowProfileId: profileId && profiles.some(p=>p.id===profileId) ? profileId : profileId,
+    workflowProfileId: profileId && profiles.some(p=>p.id===profileId) ? profileId : undefined,
     comfyPromptId:str(source.comfyPromptId,'',512)||undefined,
     backendPid:Number.isInteger(source.backendPid)&&source.backendPid>0?source.backendPid:undefined,
     lastHeartbeatAt:maybeIso(source.lastHeartbeatAt),
@@ -297,6 +303,32 @@ function sanitizeTimelineClip(value: unknown, shotIds: Set<string>, outputIds: S
   if(trimOut!=null&&trimOut<=trimIn)throw new Error('Timeline trimOutSec must be greater than trimInSec.');
   return { id:safeId(source.id),shotId,renderOutputId,track:clampInt(source.track,0,128,0),order:clampInt(source.order,0,1_000_000,0),trimInSec:trimIn,trimOutSec:trimOut,volume:clampNumber(source.volume,0,8,1) };
 }
+
+function sanitizeComfyMeta(value:unknown):Record<string,unknown>|undefined{
+  if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
+  const source=value as Record<string,unknown>,out:Record<string,unknown>={};
+  for(const key of ['filename','subfolder','type','runtime','profile']){
+    const v=source[key];if(typeof v==='string')out[key]=v.slice(0,4096);
+  }
+  return Object.keys(out).length?out:undefined;
+}
+function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
+  if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
+  const source=value as Record<string,unknown>;
+  return{
+    checkedAt:iso(source.checkedAt,new Date().toISOString()),
+    passed:Boolean(source.passed),
+    durationSec:finiteOptional(source.durationSec,0,1_000_000),
+    width:intOptional(source.width,1,16384),
+    height:intOptional(source.height,1,16384),
+    fps:finiteOptional(source.fps,0,1000),
+    hasAudio:typeof source.hasAudio==='boolean'?source.hasAudio:undefined,
+    audioPeakDb:finiteOptional(source.audioPeakDb,-300,100),
+    issues:array(source.issues).slice(0,128).map(item=>str(item,'',4096)).filter(Boolean)
+  };
+}
+function finiteOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):undefined;}
+function intOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isInteger(n)?Math.min(max,Math.max(min,n)):undefined;}
 
 function asObject(value: unknown, label: string): Record<string, any> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label}: expected an object.`);
