@@ -13,6 +13,7 @@ import { waitForComfyCompletion } from './comfy-runner';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { killProcessTree } from './process-utils';
+import { planShotReferences } from './reference-plan';
 
 function keyframePrompt(shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
@@ -38,24 +39,23 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   if(currentRuntime.environmentSha256!==profile.validation.runtimeFingerprint)throw new Error('Local AI runtime changed after keyframe profile validation. Revalidate it before generating keyframes.');
 
   const values:WorkflowValues={prompt:keyframePrompt(shot,request.role),negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:1,fps:1,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed+(request.role==='end'?1:0),filenamePrefix:`cineforge/keyframes/${shot.id}/${request.role}`};
-  const continuityIds=[...(shot.referenceAssetIds??[]),...shot.characterAssetIds,...(shot.locationAssetId?[shot.locationAssetId]:[]),...shot.propAssetIds];
-  const continuityPaths:string[]=[];
-  for(const id of [...new Set(continuityIds)].slice(0,10)){
-    const asset=project.assets.find(a=>a.id===id);if(asset)continuityPaths.push(await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`));
-  }
-  values.referenceImages=continuityPaths;
-  for(const[i,path]of continuityPaths.slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:path});
+  const assetPath=async(id:string)=>{const asset=project.assets.find(item=>item.id===id);if(!asset)throw new Error(`Referenced asset not found: ${id}`);return assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);};
+  const plan=planShotReferences(shot,profile);
+  if(plan.locationId)values.locationImage=await assetPath(plan.locationId);
+  for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{[`characterImage${index+1}`]:await assetPath(id)});
+  for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{[`propImage${index+1}`]:await assetPath(id)});
+  const genericPaths=await Promise.all(plan.genericIds.map(id=>assetPath(id)));
+  if(plan.genericArray)values.referenceImages=genericPaths;
+  else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
+
   if(request.role==='end'&&shot.startFrameAssetId){
-    const start=project.assets.find(a=>a.id===shot.startFrameAssetId);
-    if(start){
-      const startPath=await assertExistingRelativeProjectPath(project.rootPath,start.projectPath,'assets',`asset path for ${start.name}`),keys=new Set(profile.bindings.map(binding=>binding.key));
-      if(profile.mode==='i2i'&&keys.has('startImage'))values.startImage=startPath;
-      if(keys.has('referenceImages'))values.referenceImages=[startPath,...(values.referenceImages??[])].slice(0,10);
-      else{
-        const slots=['referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const,existing=(values.referenceImages??[]);
-        values.referenceImages=[startPath,...existing].slice(0,slots.filter(key=>keys.has(key)).length);
-        values.referenceImages.forEach((path,index)=>Object.assign(values,{[slots[index]]:path}));
-      }
+    const startPath=await assetPath(shot.startFrameAssetId),keys=new Set(profile.bindings.map(binding=>binding.key));
+    if(profile.mode==='i2i'&&keys.has('startImage'))values.startImage=startPath;
+    else if(plan.genericArray){
+      values.referenceImages=[startPath,...(values.referenceImages??[])].slice(0,plan.genericCapacity);
+    }else if(plan.genericBindingKeys.length){
+      const shifted=[startPath,...genericPaths].slice(0,plan.genericBindingKeys.length);
+      for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:shifted[index]});
     }
   }
 
