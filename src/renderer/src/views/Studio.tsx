@@ -31,10 +31,10 @@ export function Studio(){
   const[assetSearch,setAssetSearch]=useState('');
   const[preflightBusy,setPreflightBusy]=useState(false);
   const[preflightReport,setPreflightReport]=useState<PreflightReport>();
+  const[preflightRevision,setPreflightRevision]=useState<string>();
   const[showLibrary,setShowLibrary]=useState(true);
   const[showInspector,setShowInspector]=useState(true);
   const[showDock,setShowDock]=useState(true);
-  const[preflightSummary,setPreflightSummary]=useState('unchecked');
   const[focusedNodeId,setFocusedNodeId]=useState<string>();
   const[focusedAssetId,setFocusedAssetId]=useState<string>();
   const[positions,setPositions]=useState<Record<string,Point>>(()=>loadStudioLayout(projectId));
@@ -63,7 +63,11 @@ export function Studio(){
   },[project]);
 
   const selectedShot=project?(project.shots.find(shot=>shot.id===selectedShotId)||sortedShots[0]):undefined;
-  const hardwareTier=probe?.hardwarePlan.tier,wanGpAvailable=probe?.wangp.available,preflightReady=preflightReport?.ready;
+  const preflightFresh=Boolean(project&&preflightReport&&preflightRevision===project.updatedAt);
+  const preflightReady=preflightFresh?preflightReport?.ready:undefined;
+  const preflightBlockers=preflightFresh?preflightReport?.issues.filter(issue=>issue.level==='error').length??0:0;
+  const preflightSummary=!preflightReport?'unchecked':!preflightFresh?'stale':preflightReady?'ready':`${preflightBlockers} blocker${preflightBlockers===1?'':'s'}`;
+  const hardwareTier=probe?.hardwarePlan.tier,wanGpAvailable=probe?.wangp.available;
   const selectedShotIsValid=Boolean(selectedShotId&&sortedShots.some(shot=>shot.id===selectedShotId));
   useEffect(()=>{if((!selectedShotId||!selectedShotIsValid)&&sortedShots[0])selectShot(sortedShots[0].id);},[selectShot,selectedShotId,selectedShotIsValid,sortedShots]);
 
@@ -73,7 +77,7 @@ export function Studio(){
     const edges:StudioEdge[]=[];
     nodes.push({id:'story',kind:'story',x:40,y:70,width:230,height:132,title:project.story.title||project.name,subtitle:project.story.logline||'Script / story bible'});
     nodes.push({id:'assets',kind:'assets',x:40,y:280,width:230,height:132,title:'Asset Library',subtitle:`${project.assets.length} continuity / media assets`});
-    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${preflightReady===true?'ready':preflightReady===false?'blocked':'unchecked'} · ${hardwareTier||'hardware unknown'} · WanGP ${wanGpAvailable?'ready':'check'}`});
+    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${!preflightReport?'unchecked':!preflightFresh?'stale':preflightReady?'ready':'blocked'} · ${hardwareTier||'hardware unknown'} · WanGP ${wanGpAvailable?'ready':'check'}`});
 
     let sceneShotCursor=42;
     for(const scene of project.scenes){
@@ -121,7 +125,7 @@ export function Studio(){
     const workflowRows=profiles.length+(unbound.length?1:0);
     const height=Math.max(900,180+Math.max(sceneShotCursor,42+workflowRows*142));
     return{nodes,edges,width:2070,height};
-  },[hardwareTier,preflightReady,project,queue.jobs,selectedShot,sortedShots,wanGpAvailable]);
+  },[hardwareTier,preflightFresh,preflightReady,preflightReport,project,queue.jobs,selectedShot,sortedShots,wanGpAvailable]);
 
   const nodes=useMemo(()=>graph.nodes.map(node=>{const saved=positions[node.id],x=saved?.x??node.x,y=saved?.y??node.y;return{...node,x:Math.min(Math.max(0,graph.width-node.width),Math.max(0,x)),y:Math.min(Math.max(0,graph.height-node.height),Math.max(0,y))};}),[graph.height,graph.nodes,graph.width,positions]);
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
@@ -201,7 +205,7 @@ export function Studio(){
   };
 
   const runPreflight=async():Promise<PreflightReport|undefined>=>{
-    try{setPreflightBusy(true);await useAppStore.getState().persist();const report=await window.cineforge.project.preflight();setPreflightReport(report);setProbe(report.probe);const blockers=report.issues.filter(issue=>issue.level==='error').length;setPreflightSummary(report.ready?'ready':`${blockers} blocker${blockers===1?'':'s'}`);if(report.ready)setNotice('Preflight passed.');else setError(`Preflight found ${blockers} blocking issue${blockers===1?'':'s'}. Open System for the full report.`);return report;}
+    try{setPreflightBusy(true);await useAppStore.getState().persist();const report=await window.cineforge.project.preflight();setPreflightReport(report);setPreflightRevision(useAppStore.getState().project?.updatedAt);setProbe(report.probe);const blockers=report.issues.filter(issue=>issue.level==='error').length;if(report.ready)setNotice('Preflight passed.');else setError(`Preflight found ${blockers} blocking issue${blockers===1?'':'s'}. Open System for the full report.`);return report;}
     catch(error){setError(error instanceof Error?error.message:String(error));return undefined;}finally{setPreflightBusy(false);}
   };
   const renderAll=async()=>{
@@ -284,7 +288,7 @@ export function Studio(){
       </main>
 
       {showInspector&&<aside className="studio-inspector">
-        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} probe={probe} preflightReport={preflightReport} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
+        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} probe={probe} preflightReport={preflightReport} preflightFresh={preflightFresh} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
       </aside>}
     </div>
 
@@ -331,7 +335,7 @@ function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioN
   return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`}/>;
 }
 
-function StudioInspector({node,asset,project,probe,preflightReport,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;probe?:SystemProbe;preflightReport?:PreflightReport;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
+function StudioInspector({node,asset,project,probe,preflightReport,preflightFresh,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;probe?:SystemProbe;preflightReport?:PreflightReport;preflightFresh:boolean;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
   if(asset){
     const mutateAsset=(fn:(target:Asset)=>void)=>updateProject(next=>{const target=next.assets.find(item=>item.id===asset.id);if(target)fn(target);});
     return <InspectorFrame kicker="ASSET" title={asset.name} action={()=>setView('assets')} actionLabel="Open Assets ↗">
@@ -375,9 +379,9 @@ function StudioInspector({node,asset,project,probe,preflightReport,shot,latestPa
       ['FFmpeg',probe?.ffmpeg.available&&probe.ffmpeg.ffprobeAvailable?'ready':'check'],
       ['CapCut',probe?.capcut.installed?'installed':'not detected']
     ];
-    return <InspectorFrame kicker="SYSTEM / PREFLIGHT" title={preflightReport?(preflightReport.ready?'Ready to render':'Needs attention'):'Not checked'} action={()=>setView('dashboard')} actionLabel="Open System ↗">
+    return <InspectorFrame kicker="SYSTEM / PREFLIGHT" title={!preflightReport?'Not checked':!preflightFresh?'Stale — rerun preflight':preflightReport.ready?'Ready to render':'Needs attention'} action={()=>setView('dashboard')} actionLabel="Open System ↗">
       <InspectorRows rows={rows}/>
-      {preflightReport?<div className="studio-preflight-inline">{preflightReport.issues.length===0?<div className="preflight-ok">No preflight issues.</div>:preflightReport.issues.map((issue,index)=><div className={`studio-preflight-row ${issue.level}`} key={`${issue.code}-${index}`}><Pill>{issue.level}</Pill><div><strong>{issue.code}</strong><small>{issue.message}</small></div></div>)}</div>:<p className="muted">Run Preflight from the Studio command bar to populate detailed production checks here.</p>}
+      {!preflightReport?<p className="muted">Run Preflight from the Studio command bar to populate detailed production checks here.</p>:!preflightFresh?<div className="studio-preflight-stale"><strong>Project changed after this preflight.</strong><span>The previous report is intentionally hidden until checks are rerun.</span></div>:<div className="studio-preflight-inline">{preflightReport.issues.length===0?<div className="preflight-ok">No preflight issues.</div>:preflightReport.issues.map((issue,index)=><div className={`studio-preflight-row ${issue.level}`} key={`${issue.code}-${index}`}><Pill>{issue.level}</Pill><div><strong>{issue.code}</strong><small>{issue.message}</small></div></div>)}</div>}
     </InspectorFrame>;
   }
   if(node.kind==='queue'){
