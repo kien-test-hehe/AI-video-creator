@@ -24,12 +24,15 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
       if(shot.startFrameAssetId&&!keys.has('startImage'))issues.push({level:'error',code:'START_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a start frame is attached but “${profile.name}” has no startImage binding, so the frame would be ignored.`});
       if(shot.endFrameAssetId&&!keys.has('endImage'))issues.push({level:'warning',code:'END_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: an end frame is attached but “${profile.name}” has no endImage binding.`});
       const hasVisualRefs=Boolean(shot.characterAssetIds.length||shot.locationAssetId||shot.propAssetIds.length||(shot.referenceAssetIds?.length??0));
-      const genericCapacity=keys.has('referenceImages')?4:([1,2,3,4] as const).filter(index=>keys.has(`referenceImage${index}`)).length;
+      const genericKeys=['referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const;
+      const characterKeys=['characterImage1','characterImage2','characterImage3','characterImage4'] as const;
+      const propKeys=['propImage1','propImage2'] as const;
+      const genericCapacity=keys.has('referenceImages')?4:genericKeys.filter(key=>keys.has(key)).length;
       const genericDemand=(shot.referenceAssetIds?.length??0)
-        +shot.characterAssetIds.filter((_,index)=>!keys.has(`characterImage${index+1}`)).length
+        +shot.characterAssetIds.filter((_,index)=>!keys.has(characterKeys[index])).length
         +(shot.locationAssetId&&!keys.has('locationImage')?1:0)
-        +shot.propAssetIds.filter((_,index)=>!keys.has(`propImage${index+1}`)).length;
-      const hasAnyDedicated=keys.has('locationImage')||([1,2,3,4] as const).some(index=>keys.has(`characterImage${index}`))||([1,2] as const).some(index=>keys.has(`propImage${index}`));
+        +shot.propAssetIds.filter((_,index)=>!keys.has(propKeys[index])).length;
+      const hasAnyDedicated=keys.has('locationImage')||characterKeys.some(key=>keys.has(key))||propKeys.some(key=>keys.has(key));
       if(hasVisualRefs&&genericCapacity===0&&!hasAnyDedicated)issues.push({level:'warning',code:'CONTINUITY_REFS_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: visual continuity assets are attached but the selected workflow has no image-reference binding; only their text descriptions will influence generation.`});
       else if(genericDemand>genericCapacity)issues.push({level:'warning',code:'CONTINUITY_REF_CAPACITY',shotId:shot.id,profileId:profile.id,message:`${shot.title}: ${genericDemand} continuity image(s) require generic reference slots after dedicated bindings, but “${profile.name}” exposes capacity for ${genericCapacity}. ${genericDemand-genericCapacity} image(s) will only influence text conditioning.`});
       if(shot.audioAssetId&&!keys.has('inputAudio'))issues.push({level:'warning',code:'AUDIO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: input audio is attached but “${profile.name}” has no inputAudio binding.`});
