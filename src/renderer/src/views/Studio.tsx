@@ -360,6 +360,23 @@ function StudioInspector({node,asset,project,probe,preflightReport,shot,latestPa
     const rows=ASSET_KINDS.map(kind=>[kind,String(project.assets.filter(asset=>asset.kind===kind).length)] as [string,string]);
     return <InspectorFrame kicker="ASSET LIBRARY" title={`${project.assets.length} assets`} action={()=>setView('assets')} actionLabel="Open Assets ↗"><InspectorRows rows={rows}/><p className="muted">Drag assets from the left library onto shot nodes or precise continuity slots.</p></InspectorFrame>;
   }
+  if(node.kind==='system'){
+    const rows:Array<[string,string]>=[
+      ['CPU',probe?.cpu?`${probe.cpu.model} · ${probe.cpu.physicalCores??'?'}C/${probe.cpu.logicalCores}T`:'—'],
+      ['RAM',probe?.memory?`${(probe.memory.totalMb/1024).toFixed(1)} GB · ${(probe.memory.freeMb/1024).toFixed(1)} GB free`:'—'],
+      ['GPU',probe?.gpu?.name||'—'],
+      ['VRAM',probe?.gpu?.totalVramMb?`${(probe.gpu.totalVramMb/1024).toFixed(1)} GB · ${((probe.gpu.freeVramMb??0)/1024).toFixed(1)} GB free`:'—'],
+      ['Driver / CUDA',`${probe?.gpu?.driver||'—'} / ${probe?.gpu?.cudaVersion||'—'}`],
+      ['WanGP',probe?.wangp.available?'ready':(probe?.wangp.error||'not ready')],
+      ['ComfyUI',probe?.comfy.reachable?'online':'optional / offline'],
+      ['FFmpeg',probe?.ffmpeg.available&&probe.ffmpeg.ffprobeAvailable?'ready':'check'],
+      ['CapCut',probe?.capcut.installed?'installed':'not detected']
+    ];
+    return <InspectorFrame kicker="SYSTEM / PREFLIGHT" title={preflightReport?(preflightReport.ready?'Ready to render':'Needs attention'):'Not checked'} action={()=>setView('dashboard')} actionLabel="Open System ↗">
+      <InspectorRows rows={rows}/>
+      {preflightReport?<div className="studio-preflight-inline">{preflightReport.issues.length===0?<div className="preflight-ok">No preflight issues.</div>:preflightReport.issues.map((issue,index)=><div className={`studio-preflight-row ${issue.level}`} key={`${issue.code}-${index}`}><Pill>{issue.level}</Pill><div><strong>{issue.code}</strong><small>{issue.message}</small></div></div>)}</div>:<p className="muted">Run Preflight from the Studio command bar to populate detailed production checks here.</p>}
+    </InspectorFrame>;
+  }
   if(node.kind==='queue'){
     return <InspectorFrame kicker="RENDER QUEUE" title={`${queue.jobs.filter(job=>ACTIVE_JOB_STATUSES.has(job.status)).length} active · ${queue.jobs.length} total`} action={()=>setView('queue')} actionLabel="Open Queue ↗"><div className="studio-inspector-jobs">{queue.jobs.length===0?<p className="muted">No jobs yet.</p>:queue.jobs.map(job=>{const target=project.shots.find(item=>item.id===job.shotId);return <div key={job.id}><span className={`job-dot ${job.status}`}/><div><strong>{target?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}% · {job.message}</small></div></div>;})}</div></InspectorFrame>;
   }
