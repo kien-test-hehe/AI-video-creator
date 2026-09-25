@@ -3,6 +3,94 @@ import type { TimelineClip } from '../../../shared/types';
 import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
-export function Timeline(){const{project,updateProject,setError,setNotice}=useAppStore();const[exporting,setExporting]=useState(false);if(!project)return <Page title="Timeline"><Empty>Open a project first.</Empty></Page>;const videoOutputs=project.renderOutputs.filter(o=>o.mediaType==='video');const add=(outputId:string,shotId:string)=>updateProject(p=>p.timeline.push({id:crypto.randomUUID(),shotId,renderOutputId:outputId,track:0,order:p.timeline.length,trimInSec:0,volume:1}));const remove=(id:string)=>updateProject(p=>{p.timeline=p.timeline.filter(c=>c.id!==id).map((c,i)=>({...c,order:i}));});const move=(id:string,delta:number)=>updateProject(p=>{const sorted=[...p.timeline].sort((a,b)=>a.order-b.order);const idx=sorted.findIndex(c=>c.id===id);const target=idx+delta;if(idx<0||target<0||target>=sorted.length)return;[sorted[idx],sorted[target]]=[sorted[target],sorted[idx]];sorted.forEach((c,i)=>c.order=i);p.timeline=sorted;});const moveTo=(dragId:string,targetId:string)=>updateProject(p=>{const sorted=[...p.timeline].sort((a,b)=>a.order-b.order);const from=sorted.findIndex(c=>c.id===dragId),to=sorted.findIndex(c=>c.id===targetId);if(from<0||to<0||from===to)return;const[moved]=sorted.splice(from,1);sorted.splice(to,0,moved);sorted.forEach((clip,index)=>clip.order=index);p.timeline=sorted;});const onDropClip=(event:DragEvent<HTMLElement>,targetId:string)=>{event.preventDefault();const dragId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(dragId)moveTo(dragId,targetId);};const patch=(id:string,fn:(clip:TimelineClip)=>void)=>updateProject(p=>{const c=p.timeline.find(x=>x.id===id);if(c)fn(c);});const buildLatestCut=()=>{const ordered=[...project.shots].sort((a,b)=>{const sa=project.scenes.find(s=>s.id===a.sceneId)?.index??0;const sb=project.scenes.find(s=>s.id===b.sceneId)?.index??0;return sa-sb||a.index-b.index;});const selected=ordered.map(shot=>{const preferred=shot.latestRenderId?project.renderOutputs.find(o=>o.id===shot.latestRenderId&&o.mediaType==='video'):undefined;const fallback=[...project.renderOutputs].filter(o=>o.shotId===shot.id&&o.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];return{shot,output:preferred||fallback};}).filter((x):x is {shot:(typeof project.shots)[number];output:(typeof project.renderOutputs)[number]}=>Boolean(x.output));if(!selected.length){setError('No rendered video takes are available yet.');return;}if(project.timeline.length&&!window.confirm('Replace the current timeline with the preferred/latest take for each rendered shot?'))return;updateProject(p=>{p.timeline=selected.map((x,order)=>({id:crypto.randomUUID(),shotId:x.shot.id,renderOutputId:x.output.id,track:0,order,trimInSec:0,volume:1}));});setNotice(`Built a ${selected.length}-shot master cut from preferred/latest takes.`);};const exportFilm=async()=>{try{setExporting(true);await useAppStore.getState().persist();const result=await window.cineforge.timeline.export();if(result)setNotice(`Exported: ${result.outputPath}`);}catch(e){const message=e instanceof Error?e.message:String(e);if(!/cancelled/i.test(message))setError(message);else setNotice('Timeline export cancelled.');}finally{setExporting(false);}};const cancelExport=async()=>{try{await window.cineforge.timeline.cancelExport();}catch(e){setError(e instanceof Error?e.message:String(e));}};
-return <Page title="Timeline" subtitle="Select takes, trim cuts, balance clip audio and export a deterministic local master." actions={<div className="row"><button className="ghost" onClick={buildLatestCut} disabled={videoOutputs.length===0||exporting}>Build latest cut</button>{exporting?<button className="ghost danger" onClick={cancelExport}>Cancel export</button>:<button className="primary" onClick={exportFilm} disabled={project.timeline.length===0}>Export master</button>}</div>}><div className="grid timeline-grid"><Card title="Available takes" kicker="RENDERS">{videoOutputs.length===0?<Empty>Render a shot to create takes.</Empty>:<div className="take-list">{videoOutputs.map(o=>{const shot=project.shots.find(s=>s.id===o.shotId);return <div className="take-card" key={o.id}><video src={projectMediaUrl(projectRelativeOutput(project.rootPath,o.path))} muted preload="metadata"/><button onClick={()=>add(o.id,o.shotId)}><span>{shot?.title||'Shot'}</span><small>{o.filename}</small><b>+</b></button></div>;})}</div>}</Card><Card title="Main track" kicker="EDIT">{project.timeline.length===0?<Empty>Add takes from the left.</Empty>:<div className="timeline-track">{[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,i)=>{const shot=project.shots.find(s=>s.id===clip.shotId);return <div className="timeline-clip timeline-clip-edit" key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>onDropClip(event,clip.id)}><span className="drag-handle" title="Drag to reorder">⋮⋮</span><Pill>{i+1}</Pill><div className="clip-main"><strong>{shot?.title||'Shot'}</strong><small>{Math.round((shot?.generation.frames||0)/(shot?.generation.fps||24)*10)/10}s nominal</small><div className="clip-fields"><label>In<input type="number" min="0" step="0.1" value={clip.trimInSec} onChange={e=>patch(clip.id,c=>c.trimInSec=Math.max(0,Number(e.target.value)||0))}/></label><label>Out<input type="number" min="0" step="0.1" value={clip.trimOutSec??''} onChange={e=>patch(clip.id,c=>c.trimOutSec=e.target.value===''?undefined:Number(e.target.value))}/></label><label>Vol<input type="number" min="0" max="4" step="0.05" value={clip.volume} onChange={e=>patch(clip.id,c=>c.volume=Math.max(0,Number(e.target.value)||0))}/></label></div></div><div className="clip-actions"><button onClick={()=>move(clip.id,-1)}>←</button><button onClick={()=>move(clip.id,1)}>→</button><button onClick={()=>remove(clip.id)}>×</button></div></div>;})}</div>}</Card></div></Page>;}
+import { insertTimelineOutput, reorderTimeline } from '../studio-logic';
+
+export function Timeline(){
+  const{project,updateProject,setError,setNotice}=useAppStore();
+  const[exporting,setExporting]=useState(false);
+  if(!project)return <Page title="Timeline"><Empty>Open a project first.</Empty></Page>;
+
+  const videoOutputs=project.renderOutputs.filter(output=>output.mediaType==='video');
+  const add=(outputId:string)=>updateProject(next=>{insertTimelineOutput(next,outputId);});
+  const remove=(id:string)=>updateProject(next=>{next.timeline=next.timeline.filter(clip=>clip.id!==id).map((clip,index)=>({...clip,order:index}));});
+  const move=(id:string,delta:number)=>updateProject(next=>{
+    const ordered=[...next.timeline].sort((a,b)=>a.order-b.order),index=ordered.findIndex(clip=>clip.id===id),target=index+delta;
+    if(index<0||target<0||target>=ordered.length)return;
+    [ordered[index],ordered[target]]=[ordered[target],ordered[index]];ordered.forEach((clip,order)=>clip.order=order);next.timeline=ordered;
+  });
+  const patch=(id:string,fn:(clip:TimelineClip)=>void)=>updateProject(next=>{const clip=next.timeline.find(item=>item.id===id);if(clip)fn(clip);});
+  const dropClip=(event:DragEvent<HTMLElement>,targetId:string)=>{
+    event.preventDefault();event.stopPropagation();
+    const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');
+    if(outputId){updateProject(next=>{insertTimelineOutput(next,outputId,targetId);});setNotice('Inserted rendered take into the timeline.');return;}
+    const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');
+    if(sourceId)updateProject(next=>{reorderTimeline(next,sourceId,targetId);});
+  };
+  const dropTrack=(event:DragEvent<HTMLElement>)=>{
+    const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');if(!outputId)return;
+    event.preventDefault();updateProject(next=>{insertTimelineOutput(next,outputId);});setNotice('Added rendered take to the end of the timeline.');
+  };
+
+  const buildLatestCut=()=>{
+    const ordered=[...project.shots].sort((a,b)=>{
+      const sa=project.scenes.find(scene=>scene.id===a.sceneId)?.index??0;
+      const sb=project.scenes.find(scene=>scene.id===b.sceneId)?.index??0;
+      return sa-sb||a.index-b.index;
+    });
+    const selected=ordered.map(shot=>{
+      const preferred=shot.latestRenderId?project.renderOutputs.find(output=>output.id===shot.latestRenderId&&output.mediaType==='video'):undefined;
+      const fallback=[...project.renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+      return{shot,output:preferred||fallback};
+    }).filter((item):item is {shot:(typeof project.shots)[number];output:(typeof project.renderOutputs)[number]}=>Boolean(item.output));
+    if(!selected.length){setError('No rendered video takes are available yet.');return;}
+    if(project.timeline.length&&!window.confirm('Replace the current timeline with the preferred/latest take for each rendered shot?'))return;
+    updateProject(next=>{next.timeline=selected.map((item,order)=>({id:crypto.randomUUID(),shotId:item.shot.id,renderOutputId:item.output.id,track:0,order,trimInSec:0,volume:1}));});
+    setNotice(`Built a ${selected.length}-shot master cut from preferred/latest takes.`);
+  };
+
+  const exportFilm=async()=>{
+    try{
+      setExporting(true);await useAppStore.getState().persist();
+      const result=await window.cineforge.timeline.export();if(result)setNotice(`Exported: ${result.outputPath}`);
+    }catch(error){
+      const message=error instanceof Error?error.message:String(error);
+      if(!/cancelled/i.test(message))setError(message);else setNotice('Timeline export cancelled.');
+    }finally{setExporting(false);}
+  };
+  const cancelExport=async()=>{try{await window.cineforge.timeline.cancelExport();}catch(error){setError(error instanceof Error?error.message:String(error));}};
+
+  return <Page title="Timeline" subtitle="Drag rendered takes into the main track, reorder clips, trim against real media duration, balance audio and export a deterministic local master." actions={<div className="row"><button className="ghost" onClick={buildLatestCut} disabled={videoOutputs.length===0||exporting}>Build latest cut</button>{exporting?<button className="ghost danger" onClick={cancelExport}>Cancel export</button>:<button className="primary" onClick={exportFilm} disabled={project.timeline.length===0}>Export master</button>}</div>}>
+    <div className="grid timeline-grid">
+      <Card title="Available takes" kicker="RENDERS">
+        {videoOutputs.length===0?<Empty>Render a shot to create takes.</Empty>:<div className="take-list">{videoOutputs.map(output=>{
+          const shot=project.shots.find(item=>item.id===output.shotId),duration=output.technicalQc?.durationSec;
+          return <div className="take-card" key={output.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-render-output',output.id);}}>
+            <video src={projectMediaUrl(projectRelativeOutput(project.rootPath,output.path))} muted preload="metadata"/>
+            <button onClick={()=>add(output.id)} title="Add this take to the end of the timeline"><span>{shot?.title||'Shot'}</span><small>{output.filename}{duration?` · ${duration.toFixed(2)}s`:''}</small><b>+</b></button>
+          </div>;
+        })}</div>}
+      </Card>
+      <Card title="Main track" kicker="EDIT">
+        <div className="timeline-drop-surface" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-cineforge-render-output')){event.preventDefault();event.dataTransfer.dropEffect='copy';}}} onDrop={dropTrack}>
+          {project.timeline.length===0?<Empty>Drag a rendered take here or add one from the left.</Empty>:<div className="timeline-track">{[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{
+            const shot=project.shots.find(item=>item.id===clip.shotId),output=project.renderOutputs.find(item=>item.id===clip.renderOutputId);
+            const duration=output?.technicalQc?.durationSec??Math.max(.01,(shot?.generation.frames||1)/Math.max(1,shot?.generation.fps||24));
+            const maxIn=Math.max(0,duration-.01);
+            return <div className="timeline-clip timeline-clip-edit" key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect=event.dataTransfer.types.includes('application/x-cineforge-render-output')?'copy':'move';}} onDrop={event=>dropClip(event,clip.id)}>
+              <span className="drag-handle" title="Drag to reorder">⋮⋮</span><Pill>{index+1}</Pill>
+              <div className="clip-main"><strong>{shot?.title||'Shot'}</strong><small>{duration.toFixed(2)}s source{output?.technicalQc?' · measured':' · nominal'}</small>
+                <div className="clip-fields">
+                  <label>In<input type="number" min="0" max={maxIn} step="0.1" value={clip.trimInSec} onChange={event=>patch(clip.id,target=>{const value=Math.max(0,Math.min(maxIn,Number(event.target.value)||0));target.trimInSec=value;if(target.trimOutSec!=null&&target.trimOutSec<=value)target.trimOutSec=Math.min(duration,value+.1);})}/></label>
+                  <label>Out<input type="number" min={Math.min(duration,clip.trimInSec+.01)} max={duration} step="0.1" value={clip.trimOutSec??''} placeholder={duration.toFixed(2)} onChange={event=>patch(clip.id,target=>{if(event.target.value===''){target.trimOutSec=undefined;return;}const value=Number(event.target.value);target.trimOutSec=Math.min(duration,Math.max(target.trimInSec+.01,Number.isFinite(value)?value:duration));})}/></label>
+                  <label>Vol<input type="number" min="0" max="8" step="0.05" value={clip.volume} onChange={event=>patch(clip.id,target=>target.volume=Math.max(0,Math.min(8,Number(event.target.value)||0)))}/></label>
+                </div>
+              </div>
+              <div className="clip-actions"><button onClick={()=>move(clip.id,-1)} disabled={index===0}>←</button><button onClick={()=>move(clip.id,1)} disabled={index===project.timeline.length-1}>→</button><button onClick={()=>remove(clip.id)}>×</button></div>
+            </div>;
+          })}</div>}
+        </div>
+      </Card>
+    </div>
+  </Page>;
+}
 function projectRelativeOutput(root:string,absolute:string):string{const normalizedRoot=root.replace(/\\/g,'/').replace(/\/$/,'');const normalizedAbsolute=absolute.replace(/\\/g,'/');return normalizedAbsolute.startsWith(`${normalizedRoot}/`)?normalizedAbsolute.slice(normalizedRoot.length+1):normalizedAbsolute;}
