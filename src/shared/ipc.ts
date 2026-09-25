@@ -1,6 +1,6 @@
 export const IPC = {
   projectCreate: 'project:create', projectOpen: 'project:open', projectSave: 'project:save', projectGet: 'project:get',
-  projectParseScript: 'project:parse-script', projectPreflight: 'project:preflight', assetImport: 'asset:import',
+  projectParseScript: 'project:parse-script', projectPreflight: 'project:preflight', assetImport: 'asset:import', assetDelete: 'asset:delete',
   workflowImportComfy: 'workflow:import-comfy', workflowImportWanGp: 'workflow:import-wangp', workflowInspect: 'workflow:inspect', workflowValidate: 'workflow:validate', workflowWanGpCatalog: 'workflow:wangp-catalog', workflowProvisionWanGp: 'workflow:provision-wangp',
   settingsGet: 'settings:get', settingsSave: 'settings:save',
   systemProbe: 'system:probe', systemReveal: 'system:reveal', comfyPing: 'comfy:ping',
