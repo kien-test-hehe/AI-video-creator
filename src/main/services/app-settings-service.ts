@@ -5,7 +5,7 @@ import type { AppMachineSettings } from '../../shared/types';
 import { DEFAULT_APP_MACHINE_SETTINGS } from './machine-defaults';
 import { assertLocalUrl } from './local-url';
 
-const SETTINGS_FILE='machine-settings.v1.json',SETTINGS_BACKUP_FILE='machine-settings.v1.backup.json',JOURNAL_KEY_FILE='journal-hmac.key';
+const SETTINGS_FILE='machine-settings.v1.json',SETTINGS_BACKUP_FILE='machine-settings.v1.backup.json',JOURNAL_KEY_FILE='journal-hmac.key',BOOTSTRAP_SETTINGS_FILE='bootstrap-machine-settings.v1.json';
 
 export class AppSettingsService {
   private current:AppMachineSettings=structuredClone(DEFAULT_APP_MACHINE_SETTINGS);
@@ -23,8 +23,9 @@ export class AppSettingsService {
       try{
         const raw=JSON.parse(await readFile(backup,'utf8'));this.current=sanitizeMachineSettings(raw);await copyFile(backup,file);
       }catch{
-        this.current=structuredClone(DEFAULT_APP_MACHINE_SETTINGS);
-        if(primaryError?.code!=='ENOENT')console.warn('Machine settings could not be loaded; defaults were restored because no valid backup was available.',primaryError);
+        const bootstrapped=await this.loadBootstrapSettings();
+        this.current=bootstrapped??structuredClone(DEFAULT_APP_MACHINE_SETTINGS);
+        if(primaryError?.code!=='ENOENT')console.warn('Machine settings could not be loaded; recovered bootstrap/default settings because no valid backup was available.',primaryError);
         await this.persistUnlocked(this.current);
       }
     }
@@ -33,6 +34,18 @@ export class AppSettingsService {
 
   get():AppMachineSettings{return structuredClone(this.current);}
   getJournalKey():Buffer{return Buffer.from(this.journalKey);}
+
+  private async loadBootstrapSettings():Promise<AppMachineSettings|undefined>{
+    const candidates=[
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS,
+      process.platform==='win32'&&process.env.LOCALAPPDATA?join(process.env.LOCALAPPDATA,'CineForge',BOOTSTRAP_SETTINGS_FILE):undefined
+    ].filter((value):value is string=>Boolean(value));
+    for(const path of candidates){
+      try{return sanitizeMachineSettings(JSON.parse(await readFile(path,'utf8')));}
+      catch(error:any){if(error?.code!=='ENOENT')console.warn(`Ignoring invalid CineForge bootstrap settings: ${path}`,error);}
+    }
+    return undefined;
+  }
 
   async save(next:AppMachineSettings):Promise<AppMachineSettings>{return this.runExclusive(async()=>{const sanitized=sanitizeMachineSettings(next);await this.persistUnlocked(sanitized);return this.get();});}
 
