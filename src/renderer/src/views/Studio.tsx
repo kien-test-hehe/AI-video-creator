@@ -34,6 +34,7 @@ export function Studio(){
   const[showDock,setShowDock]=useState(true);
   const[preflightSummary,setPreflightSummary]=useState('unchecked');
   const[focusedNodeId,setFocusedNodeId]=useState<string>();
+  const[focusedAssetId,setFocusedAssetId]=useState<string>();
   const[positions,setPositions]=useState<Record<string,Point>>(()=>loadStudioLayout(projectId));
   const[viewRect,setViewRect]=useState<ViewRect>({left:0,top:0,width:1000,height:700});
   const viewportRef=useRef<HTMLDivElement>(null);
@@ -114,6 +115,7 @@ export function Studio(){
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
   const fallbackFocusId=selectedShot?`shot:${selectedShot.id}`:(nodes[0]?.id||'story');
   const focusedNode=nodeMap.get(focusedNodeId||fallbackFocusId)||nodeMap.get(fallbackFocusId);
+  const focusedAsset=project?.assets.find(asset=>asset.id===focusedAssetId);
   const selectedRoute=selectedShot&&project?resolveStudioWorkflow(project.settings.workflowProfiles,selectedShot):undefined;
   const selectedRouteReady=selectedRoute?.validation?.structuralStatus==='valid';
   const activeNodeIds=useMemo(()=>{
@@ -238,12 +240,12 @@ export function Studio(){
         <div className="studio-import-row"><select value={importKind} onChange={event=>setImportKind(event.target.value as AssetKind)}>{ASSET_KINDS.map(kind=><option key={kind}>{kind}</option>)}</select><button className="primary" onClick={importAsset}>Import</button></div>
         <input className="studio-search" value={assetSearch} onChange={event=>setAssetSearch(event.target.value)} placeholder="Search assets / tags…"/>
         <div className="studio-filter-row"><button className={assetKind==='all'?'selected':''} onClick={()=>setAssetKind('all')}>All</button>{ASSET_KINDS.map(kind=><button className={assetKind===kind?'selected':''} key={kind} onClick={()=>setAssetKind(kind)}>{kind}</button>)}</div>
-        <div className="studio-asset-list">{filteredAssets.length===0?<div className="studio-mini-empty">No matching assets.</div>:filteredAssets.map(asset=><article key={asset.id} className="studio-asset" draggable onDragStart={event=>startAssetDrag(event,asset.id)} title="Drag onto a shot node or inspector slot">
+        <div className="studio-asset-list">{filteredAssets.length===0?<div className="studio-mini-empty">No matching assets.</div>:filteredAssets.map(asset=><article key={asset.id} className={`studio-asset ${focusedAssetId===asset.id?'selected':''}`} draggable tabIndex={0} role="button" onClick={()=>{setFocusedAssetId(asset.id);setFocusedNodeId(undefined);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setFocusedAssetId(asset.id);setFocusedNodeId(undefined);}}} onDragStart={event=>startAssetDrag(event,asset.id)} title="Click to inspect · drag onto a shot node or inspector slot">
           {isVisual(asset)?<img src={projectMediaUrl(asset.projectPath)} alt=""/>:<div className="studio-asset-glyph">{asset.kind==='audio'?'♪':'▶'}</div>}
           <div><strong>{asset.name}</strong><span>{asset.kind}</span><small>{asset.tags.slice(0,2).join(' · ')||'drag to assign'}</small></div><b>⋮⋮</b>
         </article>)}</div>
         <div className="studio-panel-section"><div className="studio-panel-head compact"><div><span className="eyebrow">STRUCTURE</span><strong>Scenes</strong></div><span>{project.scenes.length}</span></div>
-          <div className="studio-scene-list">{project.scenes.map(scene=>{const shots=sortedShots.filter(shot=>shot.sceneId===scene.id);return <button key={scene.id} onClick={()=>{setFocusedNodeId(`scene:${scene.id}`);const first=shots[0];if(first)selectShot(first.id);scrollToNode(`scene:${scene.id}`,nodeMap,viewportRef.current,zoom);}}><span>{scene.index}</span><div><strong>{scene.heading}</strong><small>{shots.length} shots</small></div></button>;})}</div>
+          <div className="studio-scene-list">{project.scenes.map(scene=>{const shots=sortedShots.filter(shot=>shot.sceneId===scene.id);return <button key={scene.id} onClick={()=>{setFocusedAssetId(undefined);setFocusedNodeId(`scene:${scene.id}`);const first=shots[0];if(first)selectShot(first.id);scrollToNode(`scene:${scene.id}`,nodeMap,viewportRef.current,zoom);}}><span>{scene.index}</span><div><strong>{scene.heading}</strong><small>{shots.length} shots</small></div></button>;})}</div>
         </div>
         <div className="studio-section-links"><QuickLink label="Story" view="story" setView={setView}/><QuickLink label="Assets" view="assets" setView={setView}/><QuickLink label="Storyboard" view="storyboard" setView={setView}/><QuickLink label="Settings" view="settings" setView={setView}/></div>
       </aside>}
@@ -256,7 +258,7 @@ export function Studio(){
               <svg className="studio-edges" width={graph.width} height={graph.height} aria-hidden="true">
                 {graph.edges.map(edge=><GraphEdge key={edge.id} edge={edge} nodes={nodeMap} active={activeNodeIds.has(edge.source)||activeNodeIds.has(edge.target)}/>)}
               </svg>
-              {nodes.map(node=><GraphNode key={node.id} node={node} project={project} selected={node.id===focusedNode?.id} active={activeNodeIds.has(node.id)} locked={locked} onPointerDown={beginNodeDrag} onPointerMove={moveNode} onPointerUp={endNodeDrag} onActivate={target=>{setFocusedNodeId(target.id);if(target.shotId)selectShot(target.shotId);}} onOpen={setView} onDropToShot={dropOnShot} onStartWorkflowDrag={startWorkflowDrag}/>)}
+              {nodes.map(node=><GraphNode key={node.id} node={node} project={project} selected={node.id===focusedNode?.id} active={activeNodeIds.has(node.id)} locked={locked} onPointerDown={beginNodeDrag} onPointerMove={moveNode} onPointerUp={endNodeDrag} onActivate={target=>{setFocusedAssetId(undefined);setFocusedNodeId(target.id);if(target.shotId)selectShot(target.shotId);}} onOpen={setView} onDropToShot={dropOnShot} onStartWorkflowDrag={startWorkflowDrag}/>)}
             </div>
           </div>
           <MiniMap nodes={nodes} width={graph.width} height={graph.height} view={viewRect} onNavigate={(x,y)=>{const el=viewportRef.current;if(el)el.scrollTo({left:Math.max(0,(x-viewRect.width/2)*zoom),top:Math.max(0,(y-viewRect.height/2)*zoom),behavior:'smooth'});}}/>
@@ -264,16 +266,16 @@ export function Studio(){
       </main>
 
       {showInspector&&<aside className="studio-inspector">
-        <StudioInspector node={focusedNode} project={project} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
+        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
       </aside>}
     </div>
 
     {showDock&&<footer className="studio-bottom-dock">
       <section className="studio-dock-block queue-dock"><div className="studio-dock-head"><div><span className="eyebrow">QUEUE</span><strong>{queue.jobs.filter(job=>ACTIVE_JOB_STATUSES.has(job.status)).length} active / {queue.jobs.length} total</strong></div><button className="ghost" onClick={()=>setView('queue')}>Open queue ↗</button></div>
-        <div className="studio-job-strip">{queue.jobs.length===0?<span className="muted">Nothing queued.</span>:queue.jobs.map(job=>{const shot=project.shots.find(item=>item.id===job.shotId),active=ACTIVE_JOB_STATUSES.has(job.status),retryable=['failed','cancelled','orphaned'].includes(job.status);return <div className="studio-job" key={job.id}><span className={`job-dot ${job.status}`}/><div><strong>{shot?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}%</small></div><div className="studio-job-progress"><i style={{width:`${Math.round(job.progress*100)}%`}}/></div>{active?<button className="studio-job-action" title="Cancel job" onClick={()=>cancelJob(job.id)}>×</button>:retryable?<button className="studio-job-action" title="Retry exact job" onClick={()=>retryJob(job.id)}>↻</button>:null}</div>;})}</div>
+        <div className="studio-job-strip">{queue.jobs.length===0?<span className="muted">Nothing queued.</span>:queue.jobs.map(job=>{const shot=project.shots.find(item=>item.id===job.shotId),active=ACTIVE_JOB_STATUSES.has(job.status),retryable=['failed','cancelled','orphaned'].includes(job.status);return <div className="studio-job" key={job.id} tabIndex={shot?0:-1} role={shot?'button':undefined} onClick={()=>{if(shot){setFocusedAssetId(undefined);setFocusedNodeId(`shot:${shot.id}`);selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}} onKeyDown={event=>{if(shot&&(event.key==='Enter'||event.key===' ')){event.preventDefault();setFocusedAssetId(undefined);setFocusedNodeId(`shot:${shot.id}`);selectShot(shot.id);}}}><span className={`job-dot ${job.status}`}/><div><strong>{shot?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}%</small></div><div className="studio-job-progress"><i style={{width:`${Math.round(job.progress*100)}%`}}/></div>{active?<button className="studio-job-action" title="Cancel job" onClick={event=>{event.stopPropagation();void cancelJob(job.id);}}>×</button>:retryable?<button className="studio-job-action" title="Retry exact job" onClick={event=>{event.stopPropagation();void retryJob(job.id);}}>↻</button>:null}</div>;})}</div>
       </section>
       <section className="studio-dock-block timeline-dock"><div className="studio-dock-head"><div><span className="eyebrow">TIMELINE</span><strong>{project.timeline.length} clips</strong></div><button className="ghost" onClick={()=>setView('timeline')}>Open timeline ↗</button></div>
-        <div className="studio-timeline-strip">{project.timeline.length===0?<span className="muted">Build a cut from rendered takes.</span>:[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>{event.preventDefault();const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(sourceId)updateProject(next=>{reorderTimeline(next,sourceId,clip.id);});}} onClick={()=>{if(shot){selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
+        <div className="studio-timeline-strip">{project.timeline.length===0?<span className="muted">Build a cut from rendered takes.</span>:[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>{event.preventDefault();const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(sourceId)updateProject(next=>{reorderTimeline(next,sourceId,clip.id);});}} onClick={()=>{if(shot){setFocusedAssetId(undefined);setFocusedNodeId(`shot:${shot.id}`);selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
       </section>
     </footer>}
   </section>;
@@ -310,8 +312,14 @@ function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioN
   return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`}/>;
 }
 
-function StudioInspector({node,project,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;project:FilmProject;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
-  if(!node)return <div className="studio-mini-empty">Select any pipeline node to inspect it here.</div>;
+function StudioInspector({node,asset,project,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
+  if(asset)return <InspectorFrame kicker="ASSET" title={asset.name} action={()=>setView('assets')} actionLabel="Open Assets ↗">
+    {isVisual(asset)?<img className="studio-inspector-asset-preview" src={projectMediaUrl(asset.projectPath)} alt=""/>:<div className="studio-inspector-asset-glyph">{asset.kind==='audio'?'♪':'▶'}</div>}
+    <InspectorRows rows={[['Kind',asset.kind],['Project path',asset.projectPath],['Tags',asset.tags.join(', ')||'—'],['Created',new Date(asset.createdAt).toLocaleString()]]}/>
+    <div className="studio-inspector-section"><span className="eyebrow">CONTINUITY NOTES</span><p className="studio-inspector-copy">{asset.notes||'No continuity notes yet.'}</p></div>
+    <p className="muted">Drag this asset onto a shot node for automatic assignment, or onto a precise inspector slot to control its role.</p>
+  </InspectorFrame>;
+  if(!node)return <div className="studio-mini-empty">Select any pipeline node or asset to inspect it here.</div>;
   if(node.kind==='shot'&&shot)return <ShotInspector project={project} shot={shot} latestPath={latestPath} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>;
   if(node.kind==='workflow'){
     const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
