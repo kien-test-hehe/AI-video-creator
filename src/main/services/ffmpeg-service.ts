@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared/types';
 import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
+import { killProcessTree } from './process-utils';
 
 interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean}
 
-export async function exportTimeline(project:FilmProject,machine:AppMachineSettings):Promise<string>{
+export async function exportTimeline(project:FilmProject,machine:AppMachineSettings,signal?:AbortSignal):Promise<string>{
+  throwIfAborted(signal);
   const clips=[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order);
   if(clips.length===0)throw new Error('Timeline is empty. Add rendered shots first.');
   if(new Set(clips.map(c=>c.track)).size>1)throw new Error('Multi-track compositing is not enabled in the local master exporter. Use the CapCut handoff for multi-track finishing.');
@@ -20,7 +22,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
     sources.push({clip,path});
   }
 
-  const first=await probeVideo(machine.ffmpeg.ffprobePath,sources[0].path);
+  const first=await probeVideo(machine.ffmpeg.ffprobePath,sources[0].path,signal);
   const cacheDir=join(project.rootPath,'cache',`export-${randomUUID()}`);
   const exportDir=join(project.rootPath,'exports');
   await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(exportDir,{recursive:true})]);
@@ -28,8 +30,9 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
     const normalized:string[]=[];
     for(let i=0;i<sources.length;i++){
       const target=await assertSafeWritePath(cacheDir,join(cacheDir,`${String(i).padStart(4,'0')}.mp4`),'normalized export clip');
-      const info=await probeVideo(machine.ffmpeg.ffprobePath,sources[i].path);
-      await normalizeClip(machine,sources[i].path,target,sources[i].clip,info,first);
+      throwIfAborted(signal);
+      const info=await probeVideo(machine.ffmpeg.ffprobePath,sources[i].path,signal);
+      await normalizeClip(machine,sources[i].path,target,sources[i].clip,info,first,signal);
       normalized.push(target);
     }
     const listPath=join(cacheDir,'concat.txt');
@@ -38,9 +41,9 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
     const outputPath=await assertSafeWritePath(exportDir,join(exportDir,`${safeName}-${Date.now()}.${project.settings.outputContainer}`),'master export');
 
     if(project.settings.outputContainer==='webm'){
-      await run(machine.ffmpeg.path,['-y','-f','concat','-safe','0','-i',listPath,'-c:v','libvpx-vp9','-crf','18','-b:v','0','-c:a','libopus','-b:a','192k',outputPath]);
+      await run(machine.ffmpeg.path,['-y','-f','concat','-safe','0','-i',listPath,'-c:v','libvpx-vp9','-crf','18','-b:v','0','-c:a','libopus','-b:a','192k',outputPath],60*60_000,signal);
     }else{
-      await run(machine.ffmpeg.path,['-y','-f','concat','-safe','0','-i',listPath,'-c','copy','-movflags','+faststart',outputPath]);
+      await run(machine.ffmpeg.path,['-y','-f','concat','-safe','0','-i',listPath,'-c','copy','-movflags','+faststart',outputPath],60*60_000,signal);
     }
     return outputPath;
   }finally{
@@ -48,7 +51,8 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
   }
 }
 
-async function normalizeClip(machine:AppMachineSettings,input:string,output:string,clip:TimelineClip,info:ProbeInfo,master:ProbeInfo):Promise<void>{
+async function normalizeClip(machine:AppMachineSettings,input:string,output:string,clip:TimelineClip,info:ProbeInfo,master:ProbeInfo,signal?:AbortSignal):Promise<void>{
+  throwIfAborted(signal);
   if(clip.trimOutSec!=null&&clip.trimOutSec<=clip.trimInSec)throw new Error(`Invalid timeline trim: out (${clip.trimOutSec}s) must be greater than in (${clip.trimInSec}s).`);
   if(!Number.isFinite(clip.volume)||clip.volume<0)throw new Error(`Invalid timeline volume: ${clip.volume}`);
   const args:string[]=['-y'];
@@ -65,29 +69,38 @@ async function normalizeClip(machine:AppMachineSettings,input:string,output:stri
   if(info.hasAudio)args.push('-af',`volume=${Math.max(0,clip.volume)}`);
   else args.push('-shortest');
   args.push('-c:a','aac','-b:a','256k','-ar','48000','-ac','2',output);
-  await run(machine.ffmpeg.path,args);
+  await run(machine.ffmpeg.path,args,60*60_000,signal);
 }
 
-async function probeVideo(ffprobe:string,input:string):Promise<ProbeInfo>{
-  const stdout=await runCapture(ffprobe,['-v','error','-print_format','json','-show_streams',input],60_000);
+async function probeVideo(ffprobe:string,input:string,signal?:AbortSignal):Promise<ProbeInfo>{
+  const stdout=await runCapture(ffprobe,['-v','error','-print_format','json','-show_streams',input],60_000,signal);
   const parsed=JSON.parse(stdout) as{streams?:any[]};const video=parsed.streams?.find(s=>s.codec_type==='video');if(!video)throw new Error(`No video stream found: ${input}`);
   const rate=String(video.avg_frame_rate||video.r_frame_rate||'24/1').split('/').map(Number);const fps=rate[1]?rate[0]/rate[1]:rate[0]||24;
   return{width:Number(video.width)||1280,height:Number(video.height)||720,fps:Math.max(1,Math.round(fps*1000)/1000),hasAudio:Boolean(parsed.streams?.some(s=>s.codec_type==='audio'))};
 }
 
-function run(command:string,args:string[],timeoutMs=60*60_000):Promise<void>{
-  return new Promise((resolve,reject)=>withTimeout(spawn(command,args,{windowsHide:true,stdio:['ignore','ignore','pipe']}),timeoutMs,(child)=>{
-    let stderr='';child.stderr?.on('data',d=>stderr+=d.toString());
-    child.on('error',reject);child.on('close',code=>code===0?resolve():reject(new Error(`${command} exited ${code}: ${stderr.slice(-3000)}`)));
-  },reject));
+function run(command:string,args:string[],timeoutMs=60*60_000,signal?:AbortSignal):Promise<void>{
+  return new Promise((resolve,reject)=>{
+    const child=spawn(command,args,{windowsHide:true,stdio:['ignore','ignore','pipe'],detached:process.platform!=='win32'});
+    let stderr='',settled=false;
+    child.stderr?.on('data',d=>stderr+=d.toString());
+    const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',onAbort);error?reject(error):resolve();};
+    const onAbort=()=>{if(child.pid)void killProcessTree(child.pid);finish(new Error('Timeline export cancelled.'));};
+    const timer=setTimeout(()=>{if(child.pid)void killProcessTree(child.pid);finish(new Error('FFmpeg timed out.'));},timeoutMs);timer.unref();
+    signal?.addEventListener('abort',onAbort,{once:true});if(signal?.aborted)return onAbort();
+    child.on('error',error=>finish(error));child.on('close',code=>code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-3000)}`)));
+  });
 }
-function runCapture(command:string,args:string[],timeoutMs:number):Promise<string>{
-  return new Promise((resolve,reject)=>withTimeout(spawn(command,args,{windowsHide:true,stdio:['ignore','pipe','pipe']}),timeoutMs,(child)=>{
-    let stdout='',stderr='';child.stdout?.on('data',d=>stdout+=d.toString());child.stderr?.on('data',d=>stderr+=d.toString());
-    child.on('error',reject);child.on('close',code=>code===0?resolve(stdout):reject(new Error(`${command} exited ${code}: ${stderr.slice(-2000)}`)));
-  },reject));
+function runCapture(command:string,args:string[],timeoutMs:number,signal?:AbortSignal):Promise<string>{
+  return new Promise((resolve,reject)=>{
+    const child=spawn(command,args,{windowsHide:true,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
+    let stdout='',stderr='',settled=false;
+    child.stdout?.on('data',d=>stdout+=d.toString());child.stderr?.on('data',d=>stderr+=d.toString());
+    const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',onAbort);error?reject(error):resolve(stdout);};
+    const onAbort=()=>{if(child.pid)void killProcessTree(child.pid);finish(new Error('Timeline export cancelled.'));};
+    const timer=setTimeout(()=>{if(child.pid)void killProcessTree(child.pid);finish(new Error('FFprobe timed out.'));},timeoutMs);timer.unref();
+    signal?.addEventListener('abort',onAbort,{once:true});if(signal?.aborted)return onAbort();
+    child.on('error',error=>finish(error));child.on('close',code=>code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-2000)}`)));
+  });
 }
-function withTimeout(child:ChildProcess,timeoutMs:number,attach:(child:ChildProcess)=>void,reject:(error:Error)=>void):void{
-  const timer=setTimeout(()=>{child.kill('SIGTERM');setTimeout(()=>child.kill('SIGKILL'),3000).unref();reject(new Error('FFmpeg/FFprobe timed out.'));},timeoutMs);timer.unref();
-  child.once('close',()=>clearTimeout(timer));child.once('error',()=>clearTimeout(timer));attach(child);
-}
+function throwIfAborted(signal?:AbortSignal):void{if(signal?.aborted)throw new Error('Timeline export cancelled.');}
