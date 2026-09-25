@@ -122,8 +122,10 @@ export class ComfyClient {
     while(Date.now()<deadline){
       const now=queueState(await this.queue(),promptId);
       if(now==='absent'){
-        if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} reached history before cancellation was confirmed.`);
-        return;
+        const history=await this.history(promptId);
+        if(!history)return;
+        if(historyWasInterrupted(history))return;
+        throw new Error(`ComfyUI prompt ${promptId} reached terminal history before cancellation was confirmed.`);
       }
       await new Promise(resolve=>setTimeout(resolve,150));
     }
@@ -163,4 +165,9 @@ function queueState(queue:any,promptId:string):'running'|'pending'|'absent'{
   if(running.some((item:any)=>Array.isArray(item)&&item[1]===promptId))return'running';
   if(pending.some((item:any)=>Array.isArray(item)&&item[1]===promptId))return'pending';
   return'absent';
+}
+
+
+export function historyWasInterrupted(history:unknown):boolean{
+  try{return JSON.stringify(history).includes('"execution_interrupted"');}catch{return false;}
 }
