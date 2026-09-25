@@ -56,7 +56,7 @@ export function Dashboard(){
             <div><span>WanGP production</span><Pill>{probe?.wangp.available?'Ready':probe?.wangp.configured?'Error':'Not configured'}</Pill></div>
             <div><span>WanGP Python / Torch</span><strong>{probe?.wangp.pythonVersion||'—'} / {probe?.wangp.torchVersion||'—'}</strong></div>
             <div><span>FFmpeg / encoder</span><Pill>{probe?.ffmpeg.available&&probe.ffmpeg.encoderAvailable?'Ready':'Check'}</Pill></div>
-            <div><span>CapCut</span><Pill>{probe?.capcut.installed?(probe.capcut.configuredTier==='pro'?'Pro detected':'Free detected'):'Not detected'}</Pill></div>
+            <div><span>CapCut</span><Pill>{probe?.capcut.installed?(probe.capcut.configuredTier==='pro'?'Installed · project set to Pro':'Installed · project set to Free/No Pro'):'Not installed/detected'}</Pill></div>
             <div><span>CapCut AI credits</span><Pill>{project.settings.costPolicy.allowCapcutAiCredits?'Allowed':'Disabled'}</Pill></div>
           </div>
           {probe?.hardwarePlan.notes.length?<div className="rules">{probe.hardwarePlan.notes.map((note,i)=><p key={i}>{note}</p>)}</div>:null}
