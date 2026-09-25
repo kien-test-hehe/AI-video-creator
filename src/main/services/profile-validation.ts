@@ -7,6 +7,7 @@ import { validateComfyNodeAvailability, validateProfileBindings } from './workfl
 import { validateWanGpProfile } from './wangp-engine';
 import { probeSystem } from './system-probe';
 import { ComfyClient } from './comfy-client';
+import { workflowExecutionKey } from '../../shared/shot-signature';
 
 export async function validateAndRecordProfile(projects: ProjectService, machine: AppMachineSettings, profileId: string): Promise<FilmProject> {
   const project = projects.getCurrent();
@@ -14,10 +15,12 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
   const profile = project.settings.workflowProfiles.find(p=>p.id===profileId);
   if (!profile) throw new Error('Workflow profile not found.');
   if (!profile.workflowPath) throw new Error('Workflow profile has no imported workflow/settings file.');
+  const projectId=project.id,projectRoot=project.rootPath,profileInputKey=workflowExecutionKey(profile);
 
   const lexical = assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`);
   const safe = await assertExistingPathInside(join(project.rootPath,'workflows'),lexical,`workflow path for ${profile.name}`);
   const sourceSha256 = await sha256File(safe);
+  const fingerprintBefore=await fingerprintRuntime(machine,profile);
   const runtime = profile.runtime ?? (profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
   const modeErrors=profilePurposeModeErrors(profile);
   const runtimeErrors = runtime === 'wangp' ? await validateWanGpProfile(profile) : await validateProfileBindings(profile);
@@ -36,11 +39,15 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
   }
   const errors=[...modeErrors,...runtimeErrors,...runtimeNodeErrors,...environmentErrors];
   const fingerprint = await fingerprintRuntime(machine, profile);
+  if(fingerprint.environmentSha256!==fingerprintBefore.environmentSha256)throw new Error('Local AI runtime changed while profile validation was running. Validate again against the stable runtime.');
+  if(await sha256File(safe)!==sourceSha256)throw new Error('Workflow file changed while profile validation was running. Validate again.');
   const now = new Date().toISOString();
 
   return projects.mutate(p=>{
+    if(p.id!==projectId||p.rootPath!==projectRoot)throw new Error('Project changed while workflow validation was running. Validation result was discarded.');
     const target=p.settings.workflowProfiles.find(item=>item.id===profileId);
-    if(!target)return;
+    if(!target)throw new Error('Workflow profile was removed while validation was running. Validation result was discarded.');
+    if(workflowExecutionKey(target)!==profileInputKey)throw new Error('Workflow profile configuration changed while validation was running. Validation result was discarded; validate again.');
     target.validation = {
       ...(target.validation ?? { structuralStatus:'unvalidated' }),
       structuralStatus: errors.length ? 'invalid' : 'valid',
