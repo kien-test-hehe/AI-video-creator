@@ -111,9 +111,9 @@ describe('stale creative result guards',()=>{
     const base=shot();base.generation.workflowProfileId='wf';
     const profile={id:'wf',runtime:'wangp' as const,purpose:'video' as const,name:'Workflow',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,modelFingerprint:'model-a',validation:{structuralStatus:'valid' as const}};
     const project={assets:[{id:'char',kind:'character',name:'Hero',sourcePath:'',projectPath:'assets/char.png',tags:[],notes:'',createdAt:'x'},{id:'loc',kind:'location',name:'Room',sourcePath:'',projectPath:'assets/loc.png',tags:[],notes:'',createdAt:'x'}],settings:{workflowProfiles:[profile]}} as unknown as FilmProject;
-    const before=shotProjectRenderInputKey(project,base);project.settings.workflowProfiles[0].bindings=[{key:'prompt',jsonPath:'generation.prompt'}];
+    const beforeWorkflow=workflowExecutionKey(profile),before=shotProjectRenderInputKey(project,base);project.settings.workflowProfiles[0].bindings=[{key:'prompt',jsonPath:'generation.prompt'}];
     expect(shotProjectRenderInputKey(project,base)).not.toBe(before);
-    expect(workflowExecutionKey(project.settings.workflowProfiles[0])).not.toBe(workflowExecutionKey(profile));
+    expect(workflowExecutionKey(project.settings.workflowProfiles[0])).not.toBe(beforeWorkflow);
   });
   it('changes end-keyframe signatures when the chained start frame changes',()=>{
     const a=shot(),b=structuredClone(a);a.startFrameAssetId='kf-a';b.startFrameAssetId='kf-b';
