@@ -130,8 +130,8 @@ export function suggestBindings(workflow: ApiWorkflow): WorkflowBinding[] {
         const lower = input.toLowerCase();
         const titleLower = title.toLowerCase();
         if (!hints.some(h => lower === h || lower.includes(h))) continue;
-        if (key === 'prompt' && /negative/.test(titleLower)) continue;
-        if (key === 'negativePrompt' && !/negative/.test(titleLower) && lower === 'text') continue;
+        if (key === 'prompt' && (/negative/.test(titleLower) || /negative/.test(lower))) continue;
+        if (key === 'negativePrompt' && !/negative/.test(titleLower) && !/negative/.test(lower) && lower === 'text') continue;
         suggestions.push({
           key,
           selector: { nodeId: id, classType: node.class_type, ...(title ? { titleIncludes: title } : {}) },
