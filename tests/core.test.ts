@@ -12,7 +12,7 @@ import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { historyWasInterrupted, promptQueueState } from '../src/main/services/comfy-client';
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
-import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey } from '../src/shared/director-signature';
+import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob } from '../src/shared/recovery-policy';
@@ -286,6 +286,15 @@ describe('WanGP compile media modes',()=>{
      expect(compiled.image_prompt_type).toBe('SE');expect(compiled.video_prompt_type).toBe('I');expect(compiled.image_refs).toEqual(['char.png']);
    }finally{await rm(root,{recursive:true,force:true});}
  });
+});
+describe('AI Director validated route selection',()=>{
+  it('returns the actual validated workflow mode for a model family',()=>{
+    const project={settings:{workflowProfiles:[
+      {id:'wf',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'t2v',workflowPath:'/tmp/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid'}}
+    ]}} as unknown as FilmProject;
+    const route=validatedVideoRouteForModel(project,'ltx-2.5-fast');
+    expect(route?.id).toBe('wf');expect(route?.mode).toBe('t2v');
+  });
 });
 describe('binding-aware continuity reference planning',()=>{
   const baseShot:Shot={id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:['c1','c2'],locationAssetId:'loc',propAssetIds:['p1'],referenceAssetIds:['look'],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}};
