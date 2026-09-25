@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Shell } from './components/Shell';
 import { useAppStore } from './store';
+import { Studio } from './views/Studio';
 import { Dashboard } from './views/Dashboard';
 import { Story } from './views/Story';
 import { Assets } from './views/Assets';
@@ -19,6 +20,6 @@ export default function App(){
       .catch(e=>setError(e instanceof Error?e.message:String(e)));
     return window.cineforge.render.onQueueEvent(snapshot=>{setQueue(snapshot);void window.cineforge.project.get().then(project=>project&&syncRuntime(project));});
   },[setError,setMachine,setProject,setQueue,syncRuntime]);
-  const views={dashboard:<Dashboard/>,story:<Story/>,assets:<Assets/>,storyboard:<Storyboard/>,shots:<Shots/>,queue:<Queue/>,timeline:<Timeline/>,finishing:<Finishing/>,settings:<Settings/>};
+  const views={studio:<Studio/>,dashboard:<Dashboard/>,story:<Story/>,assets:<Assets/>,storyboard:<Storyboard/>,shots:<Shots/>,queue:<Queue/>,timeline:<Timeline/>,finishing:<Finishing/>,settings:<Settings/>};
   return <Shell>{views[activeView]}</Shell>;
 }
