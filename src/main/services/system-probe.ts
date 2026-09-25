@@ -43,7 +43,7 @@ async function probeWanGp(machine:AppMachineSettings):Promise<SystemProbe['wangp
   if(cfg.executionMode==='docker'){
     if(!cfg.docker.image.trim())return{configured:false,available:false,executionMode:'docker',rootPath:cfg.rootPath,error:'Docker image not configured.'};
     const docker=await probeDocker(machine);
-    if(!docker.available)return{configured:true,available:false,executionMode:'docker',rootPath:cfg.rootPath,error:docker.error||'Docker unavailable.'};
+    if(!docker?.available)return{configured:true,available:false,executionMode:'docker',rootPath:cfg.rootPath,error:docker?.error||'Docker unavailable.'};
     try{
       const fakeProfile={runtime:'wangp',workflowFormat:'wangp-settings'} as any;
       const fp=await fingerprintRuntime(machine,fakeProfile);
