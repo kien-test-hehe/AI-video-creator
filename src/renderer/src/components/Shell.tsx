@@ -2,9 +2,9 @@ import type { PropsWithChildren } from 'react';
 import { useAppStore, type ViewId } from '../store';
 
 const NAV: Array<[ViewId, string, string]> = [
-  ['dashboard', 'Overview', '◫'], ['story', 'Story', '¶'], ['assets', 'Assets', '◇'],
+  ['studio', 'Studio', '⌘'], ['story', 'Story', '¶'], ['assets', 'Assets', '◇'],
   ['storyboard', 'Storyboard', '▦'], ['shots', 'Shots', '◉'], ['queue', 'Render Queue', '↯'],
-  ['timeline', 'Timeline', '≋'], ['finishing', 'CapCut', '✦'], ['settings', 'Settings', '⚙']
+  ['timeline', 'Timeline', '≋'], ['finishing', 'CapCut', '✦'], ['dashboard', 'System', '◫'], ['settings', 'Settings', '⚙']
 ];
 
 export function Shell({ children }: PropsWithChildren) {
@@ -19,7 +19,7 @@ export function Shell({ children }: PropsWithChildren) {
       <nav>{NAV.map(([id, label, icon]) => <button key={id} className={activeView === id ? 'active' : ''} onClick={() => setView(id)}><span>{icon}</span>{label}</button>)}</nav>
       <div className="sidebar-foot"><span>Local AI · paid wall: Codex + CapCut</span><small>WanGP · ComfyUI Lab · FFmpeg</small></div>
     </aside>
-    <main className="workspace">
+    <main className={`workspace ${activeView==='studio'?'studio-mode':''}`}>
       <header className="topbar">
         <div><span className="eyebrow">PROJECT</span><strong>{project?.story.title || project?.name || 'CineForge Local'}</strong></div>
         <div className="top-actions">
