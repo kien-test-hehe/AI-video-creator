@@ -8,6 +8,9 @@ The render system now has a serialized single-GPU queue, active-shot duplicate p
 
 WanGP supports native and Docker execution with explicit host→container path mapping. The pinned native runtime can be bootstrapped from `setup.cmd`, its upstream model catalog drives managed profile provisioning, and binding inference is ambiguity-safe. Profiles require structural validation and are invalidated when the source hash changes. Forced profiles must match shot model/mode. Comfy production requires a dedicated instance. Keyframes can use WanGP or Comfy.
 
+
+The renderer now includes a unified Studio workspace with a searchable draggable asset library, a pan/zoom node-style production graph, workflow-route visibility, a complete shot inspector, minimap, hardware/runtime HUD, direct queue controls, and a draggable canonical timeline dock. Detailed task-specific views remain available rather than being replaced by the graph. Canvas node positions are presentation-only and are kept separate from screenplay/shot/timeline ordering.
+
 FFprobe/FFmpeg technical QC, NVENC/libx264 master normalization, cache cleanup, validated CapCut handoff, Electron packaging/fuses, and GitHub Actions CI are included.
 
 ## Validation policy
