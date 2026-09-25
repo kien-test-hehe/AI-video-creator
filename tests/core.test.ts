@@ -7,7 +7,7 @@ import { chooseModelForShot } from '../src/shared/routing';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import type { Asset, FilmProject, Shot } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
-import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioWorkflowIssue } from '../src/renderer/src/studio-logic';
+import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -38,6 +38,15 @@ describe('drag-drop asset assignment',()=>{
    expect(autoAssignAssetToShot(shot,asset('end','image')).role).toBe('end frame');
    expect(autoAssignAssetToShot(shot,asset('extra','image')).ok).toBe(false);
    expect(shot.status).toBe('ready');
+ });
+});
+describe('Studio preflight freshness',()=>{
+ it('marks a previously-ready report stale after the project changes',()=>{
+   const ready={createdAt:'2026-01-01T00:00:00.000Z',ready:true,issues:[],probe:{} as never};
+   expect(studioPreflightState(undefined,undefined,'rev-1')).toBe('unchecked');
+   expect(studioPreflightState(ready,'rev-1','rev-1')).toBe('ready');
+   expect(studioPreflightState(ready,'rev-1','rev-2')).toBe('stale');
+   expect(studioPreflightState({...ready,ready:false},'rev-2','rev-2')).toBe('blocked');
  });
 });
 describe('Studio workflow routing and timeline drag',()=>{
