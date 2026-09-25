@@ -23,6 +23,7 @@ import { JobJournal } from './job-journal';
 import { technicalQcVideo } from './technical-qc';
 import { isExpectedProcess, isProcessAlive, killProcessTree } from './process-utils';
 import { probeSystem } from './system-probe';
+import { planShotReferences } from './reference-plan';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -307,24 +308,26 @@ export class RenderQueueService extends EventEmitter {
     const shot=job.spec!.shot;return{prompt:job.spec!.effectivePrompt,negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:shot.generation.frames,fps:shot.generation.fps,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed,filenamePrefix:`cineforge/${shot.id}/${job.id}`};
   }
 
-  private async populateLocalReferencePaths(project:FilmProject,shot:Shot,values:WorkflowValues):Promise<void>{
+  private async populateLocalReferencePaths(project:FilmProject,shot:Shot,profile:WorkflowProfile,values:WorkflowValues):Promise<void>{
     const path=async(id:string)=>{const asset=project.assets.find(a=>a.id===id);if(!asset)throw new Error(`Referenced asset not found: ${id}`);return assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);};
-    if(shot.startFrameAssetId)values.startImage=await path(shot.startFrameAssetId);
-    if(shot.endFrameAssetId)values.endImage=await path(shot.endFrameAssetId);
-    if(shot.locationAssetId)values.locationImage=await path(shot.locationAssetId);
-    for(const[i,id]of shot.characterAssetIds.slice(0,4).entries())Object.assign(values,{[`characterImage${i+1}`]:await path(id)});
-    for(const[i,id]of shot.propAssetIds.slice(0,2).entries())Object.assign(values,{[`propImage${i+1}`]:await path(id)});
-    const continuityRefs=collectContinuityReferenceAssets(project,shot);
-    values.referenceImages=await Promise.all(continuityRefs.slice(0,4).map(asset=>path(asset.id)));
-    for(const[i,asset]of continuityRefs.slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:await path(asset.id)});
-    if(shot.referenceVideoAssetId)values.inputVideo=await path(shot.referenceVideoAssetId);
-    if(shot.audioAssetId)values.inputAudio=await path(shot.audioAssetId);
+    const keys=new Set(profile.bindings.map(binding=>binding.key));
+    if(shot.startFrameAssetId&&keys.has('startImage'))values.startImage=await path(shot.startFrameAssetId);
+    if(shot.endFrameAssetId&&keys.has('endImage'))values.endImage=await path(shot.endFrameAssetId);
+    const plan=planShotReferences(shot,profile);
+    if(plan.locationId)values.locationImage=await path(plan.locationId);
+    for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{[`characterImage${index+1}`]:await path(id)});
+    for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{[`propImage${index+1}`]:await path(id)});
+    const genericPaths=await Promise.all(plan.genericIds.map(id=>path(id)));
+    if(plan.genericArray)values.referenceImages=genericPaths;
+    else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
+    if(shot.referenceVideoAssetId&&keys.has('inputVideo'))values.inputVideo=await path(shot.referenceVideoAssetId);
+    if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await path(shot.audioAssetId);
   }
 
   private async runWanGp(project:FilmProject,job:RenderJob):Promise<void>{
     const machine=this.settings.get(),shot=job.spec!.shot,profile=job.spec!.workflowProfile;
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing WanGP · ${profile.name}`},true,true);
-    const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,values);
+    const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,profile,values);
     let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     const cacheDir=join(project.rootPath,'cache','wangp'),outputDir=join(project.rootPath,'renders',shot.id,job.id);
     await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(outputDir,{recursive:true})]);
@@ -365,18 +368,18 @@ export class RenderQueueService extends EventEmitter {
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing ComfyUI · ${profile.name}`},true,true);
     const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable at ${machine.comfy.url}: ${ping.error||'unknown error'}`);
     const values=this.baseValues(job);await this.updateJob(job.id,{status:'uploading',progress:.1,message:'Staging continuity references'},true,true);
-    const stagedImages=new Map<string,string>();
+    const stagedImages=new Map<string,string>(),keys=new Set(profile.bindings.map(binding=>binding.key)),plan=planShotReferences(shot,profile);
     const stageImage=async(id:string)=>{const cached=stagedImages.get(id);if(cached)return cached;const staged=await this.stageComfyAsset(project,id,client,'image');stagedImages.set(id,staged);return staged;};
-    if(shot.startFrameAssetId)values.startImage=await stageImage(shot.startFrameAssetId);
-    if(shot.endFrameAssetId)values.endImage=await stageImage(shot.endFrameAssetId);
-    if(shot.locationAssetId)values.locationImage=await stageImage(shot.locationAssetId);
-    for(const[i,id]of shot.characterAssetIds.slice(0,4).entries())Object.assign(values,{[`characterImage${i+1}`]:await stageImage(id)});
-    for(const[i,id]of shot.propAssetIds.slice(0,2).entries())Object.assign(values,{[`propImage${i+1}`]:await stageImage(id)});
-    const continuityRefs=collectContinuityReferenceAssets(project,shot).slice(0,4);
-    values.referenceImages=await Promise.all(continuityRefs.map(asset=>stageImage(asset.id)));
-    values.referenceImages.forEach((value,index)=>Object.assign(values,{[`referenceImage${index+1}`]:value}));
-    if(shot.referenceVideoAssetId)values.inputVideo=await this.stageComfyAsset(project,shot.referenceVideoAssetId,client,'file');
-    if(shot.audioAssetId)values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
+    if(shot.startFrameAssetId&&keys.has('startImage'))values.startImage=await stageImage(shot.startFrameAssetId);
+    if(shot.endFrameAssetId&&keys.has('endImage'))values.endImage=await stageImage(shot.endFrameAssetId);
+    if(plan.locationId)values.locationImage=await stageImage(plan.locationId);
+    for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{[`characterImage${index+1}`]:await stageImage(id)});
+    for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{[`propImage${index+1}`]:await stageImage(id)});
+    const genericPaths=await Promise.all(plan.genericIds.map(id=>stageImage(id)));
+    if(plan.genericArray)values.referenceImages=genericPaths;
+    else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
+    if(shot.referenceVideoAssetId&&keys.has('inputVideo'))values.inputVideo=await this.stageComfyAsset(project,shot.referenceVideoAssetId,client,'file');
+    if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
 
     const prompt=await compileProfile(profile,values);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
@@ -443,5 +446,4 @@ export class RenderQueueService extends EventEmitter {
 function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
 function assetLine(asset:Asset|undefined,label:string):string{if(!asset)return'';return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}`;}
 function buildPrompt(project:FilmProject,shot:Shot):string{const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],refs=(shot.referenceAssetIds??[]).map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;return[shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',...characters.map(a=>assetLine(a,'Character continuity')),...refs.map(a=>assetLine(a,'Visual reference')),...props.map(a=>assetLine(a,'Prop / wardrobe continuity')),shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''].filter(Boolean).join('\n');}
-function collectContinuityReferenceAssets(project:FilmProject,shot:Shot):Asset[]{const ids=[...(shot.referenceAssetIds??[]),...shot.characterAssetIds,...(shot.locationAssetId?[shot.locationAssetId]:[]),...shot.propAssetIds];return[...new Set(ids)].map(id=>project.assets.find(a=>a.id===id)).filter((a):a is Asset=>Boolean(a));}
 function sleep(ms:number):Promise<void>{return new Promise(resolve=>setTimeout(resolve,ms));}
