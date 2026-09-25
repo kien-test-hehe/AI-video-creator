@@ -18,7 +18,7 @@ const ASSET_KINDS:AssetKind[]=['character','location','prop','wardrobe','referen
 const ACTIVE_JOB_STATUSES=new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 
 export function Studio(){
-  const{project,machine,probe,queue,selectedShotId,selectShot,updateProject,setProject,setQueue,setView,setError,setNotice,setProbe}=useAppStore();
+  const{project,probe,queue,selectedShotId,selectShot,updateProject,setProject,setQueue,setView,setError,setNotice,setProbe}=useAppStore();
   const[zoom,setZoom]=useState(.78);
   const[locked,setLocked]=useState(false);
   const[assetKind,setAssetKind]=useState<AssetKind|'all'>('all');
@@ -204,7 +204,7 @@ export function Studio(){
               <svg className="studio-edges" width={graph.width} height={graph.height} aria-hidden="true">
                 {graph.edges.map(edge=><GraphEdge key={edge.id} edge={edge} nodes={nodeMap} active={activeNodeIds.has(edge.source)||activeNodeIds.has(edge.target)}/>)}
               </svg>
-              {nodes.map(node=><GraphNode key={node.id} node={node} project={project} queueCount={queue.jobs.length} selected={node.shotId===selectedShot?.id} active={activeNodeIds.has(node.id)} locked={locked} onPointerDown={beginNodeDrag} onPointerMove={moveNode} onPointerUp={endNodeDrag} onSelectShot={selectShot} onOpen={setView} onDropAsset={dropAssetOnShot}/>)}
+              {nodes.map(node=><GraphNode key={node.id} node={node} project={project} selected={node.shotId===selectedShot?.id} active={activeNodeIds.has(node.id)} locked={locked} onPointerDown={beginNodeDrag} onPointerMove={moveNode} onPointerUp={endNodeDrag} onSelectShot={selectShot} onOpen={setView} onDropAsset={dropAssetOnShot}/>)}
             </div>
           </div>
           <MiniMap nodes={nodes} width={graph.width} height={graph.height} view={viewRect} onNavigate={(x,y)=>{const el=viewportRef.current;if(el)el.scrollTo({left:Math.max(0,(x-viewRect.width/2)*zoom),top:Math.max(0,(y-viewRect.height/2)*zoom),behavior:'smooth'});}}/>
@@ -227,7 +227,7 @@ export function Studio(){
   </section>;
 }
 
-function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onSelectShot,onOpen,onDropAsset}:{node:StudioNode;project:NonNullable<ReturnType<typeof useAppStore.getState>['project']>;queueCount:number;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onSelectShot:(id?:string)=>void;onOpen:(view:ViewId)=>void;onDropAsset:(event:DragEvent<HTMLElement>,shotId:string)=>void}){
+function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onSelectShot,onOpen,onDropAsset}:{node:StudioNode;project:NonNullable<ReturnType<typeof useAppStore.getState>['project']>;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onSelectShot:(id?:string)=>void;onOpen:(view:ViewId)=>void;onDropAsset:(event:DragEvent<HTMLElement>,shotId:string)=>void}){
   const shot=node.shotId?project.shots.find(item=>item.id===node.shotId):undefined;
   const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
   const className=['studio-node',`node-${node.kind}`,selected?'selected':'',active?'on-path':'',locked?'locked':''].filter(Boolean).join(' ');
