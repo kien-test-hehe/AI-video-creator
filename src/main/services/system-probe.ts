@@ -12,9 +12,13 @@ const execFileAsync=promisify(execFile);
 
 async function probeGpu():Promise<SystemProbe['gpu']>{
   try{
-    const{stdout}=await execFileAsync('nvidia-smi',['--query-gpu=name,memory.total,memory.free,driver_version,compute_cap','--format=csv,noheader,nounits'],{timeout:5000});
-    const[name,total,free,driver,computeCapability]=stdout.trim().split(/\r?\n/)[0].split(',').map(v=>v.trim());
-    let cudaVersion:string|undefined;
+    const{stdout}=await execFileAsync('nvidia-smi',['--query-gpu=name,memory.total,memory.free,driver_version','--format=csv,noheader,nounits'],{timeout:5000});
+    const[name,total,free,driver]=stdout.trim().split(/\r?\n/)[0].split(',').map(v=>v.trim());
+    let computeCapability:string|undefined,cudaVersion:string|undefined;
+    try{
+      const{stdout:compute}=await execFileAsync('nvidia-smi',['--query-gpu=compute_cap','--format=csv,noheader,nounits'],{timeout:5000});
+      computeCapability=compute.trim().split(/\r?\n/)[0]||undefined;
+    }catch{}
     try{
       const full=(await execFileAsync('nvidia-smi',[],{timeout:5000})).stdout;
       cudaVersion=full.match(/CUDA Version:\s*([0-9.]+)/i)?.[1];
