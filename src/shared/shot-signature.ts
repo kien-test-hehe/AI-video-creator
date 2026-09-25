@@ -1,4 +1,4 @@
-import type { FilmProject, Shot, WorkflowProfile } from './types';
+import type { FilmProject, RenderJobSpec, Shot, WorkflowProfile } from './types';
 
 export function shotRenderInputKey(shot:Shot):string{
   return JSON.stringify({
@@ -65,6 +65,15 @@ export function workflowExecutionKey(profile:WorkflowProfile|undefined):string{
     enabled:profile.enabled,
     modelFingerprint:profile.modelFingerprint
   });
+}
+
+export function canRefreshProfileValidationFromRender(profile:WorkflowProfile|undefined,spec:RenderJobSpec|undefined):boolean{
+  if(!profile||!spec)return false;
+  return workflowExecutionKey(profile)===workflowExecutionKey(spec.workflowProfile)
+    &&profile.validation?.structuralStatus==='valid'
+    &&profile.validation.sourceSha256===spec.workflowSha256
+    &&profile.validation.runtimeFingerprint===spec.runtimeFingerprint.environmentSha256
+    &&(profile.modelFingerprint||undefined)===(spec.modelFingerprint||undefined);
 }
 
 function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile|undefined{
