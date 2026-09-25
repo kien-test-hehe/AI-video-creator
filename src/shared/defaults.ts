@@ -3,9 +3,9 @@ import type { ModelFamily,ShotGenerationSettings,WorkflowProfile } from './types
 export const PRIMARY_VIDEO_MODEL:ModelFamily='ltx-2.5-fast';
 
 export const MODEL_DEFAULTS:Record<ModelFamily,Partial<ShotGenerationSettings>>={
-  'ltx-2.5-fast':{mode:'i2v',quality:'balanced',width:768,height:432,frames:121,fps:24,steps:8,cfg:1,includeAudio:true},
+  'ltx-2.5-fast':{mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,includeAudio:true},
   'ltx-2.3':{mode:'flf2v',quality:'balanced',width:768,height:432,frames:121,fps:24,steps:8,cfg:1,includeAudio:true},
-  'hunyuan-video-1.5':{mode:'i2v',quality:'hero',width:832,height:480,frames:97,fps:24,steps:20,cfg:1,includeAudio:false},
+  'hunyuan-video-1.5':{mode:'i2v',quality:'hero',width:832,height:480,frames:97,fps:24,steps:30,cfg:6,includeAudio:false},
   'wan-2.2-5b':{mode:'i2v',quality:'balanced',width:832,height:480,frames:81,fps:24,steps:20,cfg:5,includeAudio:false},
   framepack:{mode:'i2v',quality:'balanced',width:640,height:384,frames:241,fps:24,steps:25,cfg:1,includeAudio:false},
   custom:{mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:20,cfg:1,includeAudio:false}
