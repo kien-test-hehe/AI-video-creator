@@ -1,8 +1,9 @@
-import { basename, join, resolve, sep } from 'node:path';
+import { basename, join } from 'node:path';
 import { copyFile, writeFile } from 'node:fs/promises';
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../shared/ipc';
-import type { AssetKind, FilmProject, KeyframeRequest, RenderBatchRequest, RenderRequest } from '../shared/types';
+import type { AppMachineSettings, AssetKind, FilmProject, KeyframeRequest, RenderBatchRequest, RenderRequest } from '../shared/types';
+import { AppSettingsService } from './services/app-settings-service';
 import { ProjectService } from './services/project-service';
 import { parseScreenplay } from './services/script-parser';
 import { detectWorkflowFormat, inspectWorkflow, readWorkflow, suggestBindings, uiWorkflowToApi } from './services/workflow-engine';
@@ -14,71 +15,124 @@ import { exportTimeline } from './services/ffmpeg-service';
 import { planSceneWithLocalDirector, reviewShotWithLocalDirector } from './services/director-service';
 import { generateKeyframe } from './services/keyframe-service';
 import { preflightProject } from './services/preflight-service';
-import { assertPathInside } from './services/path-safety';
+import { assertExistingPathInside, assertPathInside, assertSafeWritePath } from './services/path-safety';
 import { prepareCapCutHandoff } from './services/capcut-handoff';
+import { assertTrustedIpcSender } from './services/ipc-security';
+import { validateAndRecordProfile } from './services/profile-validation';
 
-export function registerIpc(projects: ProjectService, queue: RenderQueueService): void {
-  ipcMain.handle(IPC.projectCreate, (_event, name?: string) => {
+type Handler = (...args: any[]) => any;
+
+export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService): void {
+  const handle = (channel: string, handler: Handler) => {
+    ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
+      assertTrustedIpcSender(event);
+      return handler(...args);
+    });
+  };
+
+  handle(IPC.projectCreate, async (name?: string) => {
     if (queue.isBusy()) throw new Error('Finish or cancel the active render queue before switching projects.');
     return projects.createWithDialog(name);
   });
-  ipcMain.handle(IPC.projectOpen, () => {
+  handle(IPC.projectOpen, async () => {
     if (queue.isBusy()) throw new Error('Finish or cancel the active render queue before switching projects.');
-    return projects.openWithDialog();
+    const opened = await projects.openWithDialog();
+    if (opened) await queue.reconcileAfterProjectOpen();
+    return projects.getCurrent();
   });
-  ipcMain.handle(IPC.projectSave, (_event, project: FilmProject) => projects.saveFromRenderer(project));
-  ipcMain.handle(IPC.projectGet, () => projects.getCurrent());
-  ipcMain.handle(IPC.projectParseScript, (_event, script: string) => parseScreenplay(script));
-  ipcMain.handle(IPC.projectPreflight, async () => {
-    const project = projects.getCurrent(); if (!project) throw new Error('Open a project first.'); return preflightProject(project);
+  handle(IPC.projectSave, (project: FilmProject) => projects.saveFromRenderer(project));
+  handle(IPC.projectGet, () => projects.getCurrent());
+  handle(IPC.projectParseScript, (script: string) => parseScreenplay(script));
+  handle(IPC.projectPreflight, async () => {
+    const project = requireProject(projects);
+    return preflightProject(project, settings.get());
   });
-  ipcMain.handle(IPC.assetImport, (_event, kind: AssetKind) => projects.importAsset(kind));
+  handle(IPC.assetImport, (kind: AssetKind) => projects.importAsset(kind));
 
-  ipcMain.handle(IPC.workflowImportComfy, async () => {
-    const project = projects.getCurrent(); if (!project) throw new Error('Open a project first.');
+  handle(IPC.settingsGet, () => settings.get());
+  handle(IPC.settingsSave, async (next: AppMachineSettings) => {
+    if (queue.isBusy()) throw new Error('Machine runtime settings cannot change while render jobs are active.');
+    return settings.save(next);
+  });
+
+  handle(IPC.workflowImportComfy, async () => {
+    const project = requireProject(projects);
     const result = await dialog.showOpenDialog({ title: 'Import ComfyUI workflow JSON', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
     if (result.canceled || !result.filePaths[0]) return null;
-    const source=result.filePaths[0]; const target=join(project.rootPath,'workflows',`${Date.now()}-${basename(source)}`); await copyFile(source,target);
-    const rawWorkflow=await readWorkflow(target); const format=detectWorkflowFormat(rawWorkflow);
+    const source=result.filePaths[0];
+    const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-${basename(source)}`),'workflow import target');
+    await copyFile(source,target);
+    const rawWorkflow=await readWorkflow(target);
+    const format=detectWorkflowFormat(rawWorkflow);
     if(format==='api'){const inspected=await inspectWorkflow(target);return{path:target,...inspected,warnings:[]};}
-    const client=new ComfyClient(project.settings.comfyUrl,project.settings.localOnly); const ping=await client.ping();
+    const machine=settings.get();
+    const client=new ComfyClient(machine.comfy.url,true);
+    const ping=await client.ping();
     if(!ping.reachable)return{path:target,format:'ui' as const,suggestedBindings:[],warnings:[`ComfyUI is offline, so UI workflow conversion could not run: ${ping.error||'unknown error'}`]};
     const converted=uiWorkflowToApi(rawWorkflow,await client.objectInfo());
     if(converted.requiresApiExport)return{path:target,format:'ui' as const,suggestedBindings:[],warnings:[...converted.warnings,'CineForge refused to create a partial API graph. Load it in ComfyUI, Save (API Format), and import that JSON.']};
-    const apiPath=target.replace(/\.json$/i,'.api.json'); await writeFile(apiPath,JSON.stringify(converted.workflow,null,2),'utf8');
+    const apiPath=await assertSafeWritePath(join(project.rootPath,'workflows'),target.replace(/\.json$/i,'.api.json'),'converted workflow');
+    await writeFile(apiPath,JSON.stringify(converted.workflow,null,2),'utf8');
     return{path:apiPath,format:'api' as const,suggestedBindings:suggestBindings(converted.workflow),warnings:converted.warnings};
   });
 
-  ipcMain.handle(IPC.workflowImportWanGp, async () => {
-    const project=projects.getCurrent(); if(!project)throw new Error('Open a project first.');
+  handle(IPC.workflowImportWanGp, async () => {
+    const project=requireProject(projects);
     const result=await dialog.showOpenDialog({title:'Import WanGP exported settings JSON',properties:['openFile'],filters:[{name:'WanGP settings',extensions:['json']}]});
     if(result.canceled||!result.filePaths[0])return null;
-    const source=result.filePaths[0]; const target=join(project.rootPath,'workflows',`${Date.now()}-wangp-${basename(source)}`); await copyFile(source,target);
+    const source=result.filePaths[0];
+    const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-wangp-${basename(source)}`),'WanGP settings import');
+    await copyFile(source,target);
     const inspected=await inspectWanGpSettings(target);
-    return{path:target,...inspected,warnings:['WanGP settings are version/model specific. CineForge patches only the JSON paths shown in this profile and executes the file through WanGP headless mode.']};
+    return{path:target,...inspected,warnings:['WanGP settings are version/model specific. Review ambiguous bindings and validate the profile before production rendering.']};
   });
 
-  ipcMain.handle(IPC.workflowInspect, async (_event,path:string)=>{
-    const project=projects.getCurrent(); if(!project)throw new Error('Open a project first.');
-    const safe=assertPathInside(join(project.rootPath,'workflows'),path,'workflow path');
+  handle(IPC.workflowInspect, async (path:string)=>{
+    const project=requireProject(projects);
+    const safe=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),path,'workflow path'),'workflow path');
     try{return await inspectWorkflow(safe);}catch{return inspectWanGpSettings(safe);}
   });
+  handle(IPC.workflowValidate, (profileId:string) => validateAndRecordProfile(projects, settings.get(), profileId));
 
-  ipcMain.handle(IPC.systemProbe, async()=>{const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');return probeSystem(project);});
-  ipcMain.handle(IPC.comfyPing, async(_event,url?:string)=>{const project=projects.getCurrent();const target=url||project?.settings.comfyUrl||'http://127.0.0.1:8188';return new ComfyClient(target,project?.settings.localOnly??true).ping();});
-  ipcMain.handle(IPC.systemReveal,(_event,path:string)=>{const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');const root=resolve(project.rootPath),target=resolve(path);if(!(target===root||target.startsWith(`${root}${sep}`)))throw new Error('Refusing to reveal a path outside the current project.');shell.showItemInFolder(target);});
+  handle(IPC.systemProbe, async()=>probeSystem(requireProject(projects),settings.get()));
+  handle(IPC.comfyPing, async(url?:string)=>{
+    const machine=settings.get();
+    const target=url||machine.comfy.url;
+    return new ComfyClient(target,true).ping();
+  });
+  handle(IPC.systemReveal,async(path:string)=>{
+    const project=requireProject(projects);
+    const safe=await assertExistingPathInside(project.rootPath,path,'reveal path');
+    shell.showItemInFolder(safe);
+  });
 
-  ipcMain.handle(IPC.renderEnqueue,(_event,request:RenderRequest)=>queue.enqueue(request));
-  ipcMain.handle(IPC.renderEnqueueBatch,(_event,request:RenderBatchRequest)=>queue.enqueueBatch(request));
-  ipcMain.handle(IPC.renderRetry,(_event,jobId:string)=>queue.retry(jobId));
-  ipcMain.handle(IPC.renderCancel,(_event,jobId:string)=>queue.cancel(jobId));
-  ipcMain.handle(IPC.renderSnapshot,()=>queue.snapshot());
+  handle(IPC.renderEnqueue,(request:RenderRequest)=>queue.enqueue(request));
+  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>queue.enqueueBatch(request));
+  handle(IPC.renderRetry,(jobId:string)=>queue.retry(jobId));
+  handle(IPC.renderCancel,(jobId:string)=>queue.cancel(jobId));
+  handle(IPC.renderSnapshot,()=>queue.snapshot());
 
-  ipcMain.handle(IPC.directorPlanScene,async(_event,sceneId:string)=>{const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');const scene=project.scenes.find(s=>s.id===sceneId);if(!scene)throw new Error('Scene not found.');return planSceneWithLocalDirector(project,scene);});
-  ipcMain.handle(IPC.directorReviewShot,async(_event,shotId:string)=>{const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');const shot=project.shots.find(s=>s.id===shotId);if(!shot)throw new Error('Shot not found.');return reviewShotWithLocalDirector(project,shot);});
-  ipcMain.handle(IPC.keyframeGenerate,(_event,request:KeyframeRequest)=>generateKeyframe(projects,request));
-  ipcMain.handle(IPC.timelineExport,async()=>{const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');return{outputPath:await exportTimeline(project)};});
-  ipcMain.handle(IPC.capcutPrepareHandoff,async()=>{const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');return prepareCapCutHandoff(project);});
+  handle(IPC.directorPlanScene,async(sceneId:string)=>{
+    const project=requireProject(projects);
+    const scene=project.scenes.find(s=>s.id===sceneId);
+    if(!scene)throw new Error('Scene not found.');
+    return planSceneWithLocalDirector(project,scene,settings.get());
+  });
+  handle(IPC.directorReviewShot,async(shotId:string)=>{
+    const project=requireProject(projects);
+    const shot=project.shots.find(s=>s.id===shotId);
+    if(!shot)throw new Error('Shot not found.');
+    return reviewShotWithLocalDirector(project,shot,settings.get());
+  });
+  handle(IPC.keyframeGenerate,(request:KeyframeRequest)=>generateKeyframe(projects,settings.get(),request));
+  handle(IPC.timelineExport,async()=>({outputPath:await exportTimeline(requireProject(projects),settings.get())}));
+  handle(IPC.capcutPrepareHandoff,async()=>prepareCapCutHandoff(requireProject(projects)));
 
   queue.on('snapshot',snapshot=>{for(const window of BrowserWindow.getAllWindows())if(!window.isDestroyed())window.webContents.send(IPC.queueEvent,snapshot);});
+}
+
+function requireProject(projects: ProjectService): FilmProject {
+  const project=projects.getCurrent();
+  if(!project)throw new Error('Open a project first.');
+  return project;
 }

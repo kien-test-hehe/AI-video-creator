@@ -1,4 +1,4 @@
-import type { AssetKind, ContinuityReview, DirectorShotDraft, FilmProject, KeyframeRequest, ParsedScene, PreflightReport, QueueSnapshot, RenderBatchRequest, RenderRequest, SystemProbe, WorkflowProfile } from './types';
+import type { AppMachineSettings, AssetKind, ContinuityReview, DirectorShotDraft, FilmProject, KeyframeRequest, ParsedScene, PreflightReport, QueueSnapshot, RenderBatchRequest, RenderRequest, SystemProbe, WorkflowProfile } from './types';
 
 export interface CapCutHandoffResult { directory: string; manifestPath: string; taskPath: string; prompt: string; }
 
@@ -11,11 +11,16 @@ export interface CineforgeApi {
     parseScript(script: string): Promise<ParsedScene[]>;
     preflight(): Promise<PreflightReport>;
   };
+  settings: {
+    get(): Promise<AppMachineSettings>;
+    save(settings: AppMachineSettings): Promise<AppMachineSettings>;
+  };
   asset: { import(kind: AssetKind): Promise<FilmProject | null>; };
   workflow: {
     importComfy(): Promise<{ path: string; format: 'api' | 'ui'; suggestedBindings: WorkflowProfile['bindings']; warnings?: string[] } | null>;
     importWanGp(): Promise<{ path: string; format: 'wangp-settings'; suggestedBindings: WorkflowProfile['bindings']; warnings?: string[] } | null>;
     inspect(path: string): Promise<{ format: 'api' | 'ui' | 'wangp-settings'; suggestedBindings: WorkflowProfile['bindings'] }>;
+    validate(profileId: string): Promise<FilmProject>;
   };
   system: {
     probe(): Promise<SystemProbe>;
