@@ -31,6 +31,9 @@ describe('drag-drop asset assignment',()=>{
    const shot:Shot={id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],status:'draft',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}};
    const asset=(id:string,kind:Asset['kind']):Asset=>({id,kind,name:id,sourcePath:id,projectPath:`assets/${id}.png`,tags:[],notes:'',createdAt:new Date(0).toISOString()});
    expect(autoAssignAssetToShot(shot,asset('hero','character')).role).toBe('character');
+   expect(autoAssignAssetToShot(shot,asset('look','reference')).role).toBe('visual reference');
+   expect(autoAssignAssetToShot(shot,asset('coat','wardrobe')).role).toBe('prop / wardrobe');
+   expect(shot.referenceAssetIds).toEqual(['look']);expect(shot.propAssetIds).toEqual(['coat']);
    expect(autoAssignAssetToShot(shot,asset('start','keyframe')).role).toBe('start frame');
    expect(autoAssignAssetToShot(shot,asset('end','image')).role).toBe('end frame');
    expect(autoAssignAssetToShot(shot,asset('extra','image')).ok).toBe(false);
