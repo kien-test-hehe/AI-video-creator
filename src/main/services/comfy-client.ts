@@ -87,9 +87,23 @@ export class ComfyClient {
     return res.json();
   }
 
-  async interrupt(): Promise<void> {
-    const res = await this.request('/interrupt', { method: 'POST' }, 10_000);
+  async deleteQueued(promptId:string):Promise<void>{
+    const res=await this.request('/queue',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delete:[promptId]})},10_000);
+    if(!res.ok)throw new Error(`ComfyUI queue delete failed: ${res.status}`);
+  }
+
+  async interrupt(promptId?:string): Promise<void> {
+    const res = await this.request('/interrupt', {
+      method: 'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify(promptId?{prompt_id:promptId}:{})
+    }, 10_000);
     if (!res.ok) throw new Error(`ComfyUI interrupt failed: ${res.status}`);
+  }
+
+  async cancelPrompt(promptId:string):Promise<void>{
+    await this.deleteQueued(promptId);
+    await this.interrupt(promptId);
   }
 
   async download(ref: ComfyFileRef): Promise<Uint8Array> {
