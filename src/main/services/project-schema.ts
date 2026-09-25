@@ -212,6 +212,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     characterAssetIds: filterIds(source.characterAssetIds,4),
     locationAssetId: optionalAsset(source.locationAssetId),
     propAssetIds: filterIds(source.propAssetIds,2),
+    referenceAssetIds: filterIds(source.referenceAssetIds,4),
     startFrameAssetId: optionalAsset(source.startFrameAssetId),
     endFrameAssetId: optionalAsset(source.endFrameAssetId),
     referenceVideoAssetId: optionalAsset(source.referenceVideoAssetId),
