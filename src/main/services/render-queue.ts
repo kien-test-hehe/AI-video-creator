@@ -146,18 +146,29 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async recoverActiveJob(jobId:string):Promise<void>{
+    let recoveredJob:RenderJob|undefined;
     try{
       const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job?.spec)throw new Error('Recovered job has no immutable spec.');
+      recoveredJob=job;
       await this.verifyImmutableSpec(project,job);
       const runtime=job.spec.workflowProfile.runtime??(job.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
       await this.updateJob(jobId,{status:'recovering',message:`Recovering ${runtime} job after restart`},true,true);
       if(runtime==='wangp')await this.recoverWanGp(project,job);
       else await this.recoverComfy(project,job);
     }catch(error){
+      if(recoveredJob)await this.cleanupRejectedRecovery(recoveredJob).catch(()=>undefined);
       await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
     }finally{
       this.runningJobId=undefined;this.emitSnapshot();void this.pump();
     }
+  }
+
+  private async cleanupRejectedRecovery(job:RenderJob):Promise<void>{
+    const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+    if(runtime!=='wangp')return;
+    const machine=this.settings.get();
+    if(machine.wangp.executionMode==='docker'){await stopWanGpDocker(machine,job.id);return;}
+    if(job.backendPid&&isProcessAlive(job.backendPid)&&await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))await killProcessTree(job.backendPid);
   }
 
   private async recoverWanGp(project:FilmProject,job:RenderJob):Promise<void>{
