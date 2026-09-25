@@ -20,7 +20,7 @@ export const useAppStore=create<AppState>((set,get)=>({
     const next=structuredClone(current);
     next.renderJobs=structuredClone(mainProject.renderJobs);next.renderOutputs=structuredClone(mainProject.renderOutputs);
     const runtime=new Map(mainProject.shots.map(shot=>[shot.id,shot]));
-    for(const shot of next.shots){const server=runtime.get(shot.id);if(!server)continue;if(shotProjectRenderInputKey(next,shot)!==shotProjectRenderInputKey(mainProject,server)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';continue;}shot.status=server.status;shot.latestRenderId=server.latestRenderId;}
+    for(const shot of next.shots){const server=runtime.get(shot.id);if(!server)continue;if(shotProjectRenderInputKey(next,shot)!==shotProjectRenderInputKey(mainProject,server))continue;shot.status=server.status;shot.latestRenderId=server.latestRenderId;}
     const serverProfiles=new Map(mainProject.settings.workflowProfiles.map(profile=>[profile.id,profile]));
     next.settings.workflowProfiles=next.settings.workflowProfiles.map(local=>{
       const server=serverProfiles.get(local.id);if(!server)return local;
