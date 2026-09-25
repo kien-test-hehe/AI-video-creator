@@ -7,7 +7,7 @@ import { chooseModelForShot } from '../src/shared/routing';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import type { Asset, FilmProject, Shot } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
-import { reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow } from '../src/renderer/src/studio-logic';
+import { insertTimelineOutput, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -50,6 +50,10 @@ describe('Studio workflow routing and timeline drag',()=>{
    expect(routeShotToWorkflow(shot,unvalidated).ok).toBe(false);
    expect(resolveStudioWorkflow([unvalidated,valid],shot)?.id).toBe('v');
    expect(shot.generation.workflowProfileId).toBeUndefined();
+ });
+ it('inserts a rendered take at the requested canonical timeline position',()=>{
+   const project={shots:[{id:'s1'},{id:'s2'}],renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'}],timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}]} as unknown as FilmProject;
+   expect(insertTimelineOutput(project,'o2','a')).toBe(true);expect(project.timeline.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(project.timeline.map(clip=>clip.order)).toEqual([0,1]);
  });
  it('reorders canonical timeline clips by drag target',()=>{
    const project={timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},{id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},{id:'c',shotId:'s3',renderOutputId:'o3',track:0,order:2,trimInSec:0,volume:1}]} as unknown as FilmProject;
