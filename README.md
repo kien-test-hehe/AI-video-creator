@@ -89,19 +89,20 @@ Each queued render freezes:
 
 Retry refuses to claim exactness when those inputs changed.
 
-Runtime progress is journaled separately from canonical project JSON, so verbose model logs do not rewrite the whole project. After restart, signed queued jobs are re-queued, ComfyUI jobs reconcile by prompt ID, and WanGP jobs reconcile by PID. Unsigned active state from a foreign project becomes `orphaned` and never auto-runs.
+Runtime progress is journaled separately from canonical project JSON, so verbose model logs do not rewrite the whole project. After restart, signed queued jobs are re-queued, ComfyUI jobs reconcile by prompt ID, native WanGP jobs verify the recovered process command line before attaching by PID, and Docker WanGP jobs reconcile by deterministic container identity. If immutable workflow/assets/runtime no longer match, the verified WanGP backend is stopped and the job becomes `orphaned`. Unsigned active state from a foreign project never auto-runs.
 
 ## Production backends
 
 ### WanGP
 
-WanGP is the primary production runtime. CineForge supports:
+WanGP is the primary production runtime. `setup.cmd` installs the repository-pinned upstream commit into `.runtime/Wan2GP`; model weights download on first use. CineForge supports:
 
-- native process execution;
-- optional isolated Docker execution;
-- exported settings JSON;
-- explicit JSON-path bindings;
-- ambiguity-safe binding inference;
+- native process execution as the primary RTX 5060 Ti route;
+- optional isolated Docker execution with deterministic per-job container names;
+- direct upstream model-catalog discovery and managed profile provisioning;
+- manual exported-settings import for custom routes;
+- explicit JSON-path bindings and ambiguity-safe binding inference;
+- automatic Start/End/reference prompt-mode activation when those assets are attached;
 - dry-run validation;
 - host→container path mapping limited to explicit mounts.
 
@@ -194,10 +195,13 @@ Code signing credentials are intentionally not stored in this repository.
 
 1. dependency lock/install;
 2. TypeScript;
-3. ESLint;
+3. zero-warning ESLint;
 4. unit/security tests;
-5. core smoke tests;
-6. Electron/Vite build.
+5. WanGP Python bridge tests;
+6. core smoke tests;
+7. Electron/Vite production build;
+8. Linux Electron packaging;
+9. Windows PowerShell bootstrap parsing + NSIS installer packaging.
 
 A model route is **not** considered hardware-validated merely because source CI is green. The exact runtime/model must also complete a real render on the target GPU.
 
