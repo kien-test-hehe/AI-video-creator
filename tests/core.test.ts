@@ -7,7 +7,7 @@ import { chooseModelForShot } from '../src/shared/routing';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import type { Asset, FilmProject, Shot } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
-import { insertTimelineOutput, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow } from '../src/renderer/src/studio-logic';
+import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioWorkflowIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -53,6 +53,15 @@ describe('Studio workflow routing and timeline drag',()=>{
    expect(routeShotToWorkflow(shot,unvalidated).ok).toBe(false);
    expect(resolveStudioWorkflow([unvalidated,valid],shot)?.id).toBe('v');
    expect(shot.generation.workflowProfileId).toBeUndefined();
+ });
+ it('never hides a broken explicit workflow behind an auto fallback',()=>{
+   const shot:Shot={id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],status:'draft',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true,workflowProfileId:'explicit'}};
+   const explicit={id:'explicit',runtime:'wangp' as const,purpose:'video' as const,name:'Explicit disabled',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/explicit.json',workflowFormat:'wangp-settings' as const,bindings:[],enabled:false,validation:{structuralStatus:'valid' as const}};
+   const fallback={...explicit,id:'fallback',name:'Valid fallback',enabled:true,workflowPath:'workflows/fallback.json'};
+   const resolved=resolveStudioWorkflow([explicit,fallback],shot);
+   expect(resolved?.id).toBe('explicit');
+   expect(isStudioWorkflowReady(resolved,shot)).toBe(false);
+   expect(studioWorkflowIssue(resolved,shot)).toMatch(/disabled/i);
  });
  it('inserts a rendered take at the requested canonical timeline position',()=>{
    const project={shots:[{id:'s1'},{id:'s2'}],renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'}],timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}]} as unknown as FilmProject;
