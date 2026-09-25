@@ -20,6 +20,7 @@ import { duplicateTimelineOrderKey, timelineOutputIssue } from '../src/shared/ti
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint } from '../src/main/services/runtime-fingerprint';
+import { AppSettingsService } from '../src/main/services/app-settings-service';
 import { tmpdir } from 'node:os';
 
 const api: ApiWorkflow = {
@@ -213,6 +214,19 @@ describe('rendered take QC policy',()=>{
     const passingNew=output({passed:true,issues:[]});passingNew.id='pass-new';passingNew.createdAt='2026-01-02T00:00:00.000Z';
     expect(latestPassingVideoTake([passingOld,failingNew,passingNew])?.id).toBe('pass-new');
     expect(latestPassingVideoTake([failingNew])).toBeUndefined();
+  });
+});
+describe('machine settings persistence recovery',()=>{
+  it('recovers the previous valid machine settings from backup after primary corruption',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-settings-'));
+    try{
+      const service=new AppSettingsService(root);await service.load();
+      const first=service.get();first.director.model='director-first';await service.save(first);
+      const second=service.get();second.director.model='director-second';await service.save(second);
+      await writeFile(join(root,'machine-settings.v1.json'),'{broken','utf8');
+      const recovered=new AppSettingsService(root);await recovered.load();
+      expect(recovered.get().director.model).toBe('director-first');
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
 describe('hardware advisor',()=>{
