@@ -156,10 +156,12 @@ export class RenderQueueService extends EventEmitter {
         await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
         this.pending.push(job.id);continue;
       }
-      if(!recoveryStarted&&['submitted','running','recovering','stalled','downloading'].includes(job.status)){
-        recoveryStarted=true;this.runningJobId=job.id;void this.recoverActiveJob(job.id);continue;
+      if(['submitted','running','recovering','stalled','downloading'].includes(job.status)){
+        if(!recoveryStarted){recoveryStarted=true;this.runningJobId=job.id;void this.recoverActiveJob(job.id);continue;}
+        await this.updateJob(job.id,{status:'orphaned',progress:0,message:'Additional backend-active job was not resumed automatically',error:'More than one submitted/running job was found after restart. CineForge serializes GPU work and will not requeue this job because its previous backend execution may still exist. Verify the backend, then retry explicitly if needed.'},true,true);
+        continue;
       }
-      await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · serialized behind the active job'},true,true);
+      await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
       this.pending.push(job.id);
     }
     this.emitSnapshot();if(!this.runningJobId)void this.pump();
