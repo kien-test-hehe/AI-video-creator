@@ -11,7 +11,7 @@ import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { collectComfyFileRefs, inferMediaType, uniqueComfyFileRefs } from './comfy-output';
 import { waitForComfyCompletion } from './comfy-runner';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
-import { sha256File } from './runtime-fingerprint';
+import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { killProcessTree } from './process-utils';
 
 function keyframePrompt(shot:Shot,role:'start'|'end'):string{
@@ -31,7 +31,11 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   throwIfAborted(signal);const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');if(project.rootPath!==request.projectRoot)throw new Error('Keyframe request does not match the open project.');
   const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');const profile=chooseProfile(project,request.workflowProfileId);
   const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
-  if(profile.validation?.sourceSha256&&await sha256File(workflowPath)!==profile.validation.sourceSha256)throw new Error('Keyframe profile changed after validation. Revalidate it first.');
+  if(!profile.validation?.sourceSha256)throw new Error('Keyframe profile has no validated source fingerprint. Revalidate it first.');
+  if(await sha256File(workflowPath)!==profile.validation.sourceSha256)throw new Error('Keyframe profile changed after validation. Revalidate it first.');
+  if(!profile.validation.runtimeFingerprint)throw new Error('Keyframe profile has no validated runtime fingerprint. Revalidate it on this workstation.');
+  const currentRuntime=await fingerprintRuntime(machine,profile);
+  if(currentRuntime.environmentSha256!==profile.validation.runtimeFingerprint)throw new Error('Local AI runtime changed after keyframe profile validation. Revalidate it before generating keyframes.');
 
   const values:WorkflowValues={prompt:keyframePrompt(shot,request.role),negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:1,fps:1,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed+(request.role==='end'?1:0),filenamePrefix:`cineforge/keyframes/${shot.id}/${request.role}`};
   const continuityIds=[...(shot.referenceAssetIds??[]),...shot.characterAssetIds,...(shot.locationAssetId?[shot.locationAssetId]:[]),...shot.propAssetIds];
