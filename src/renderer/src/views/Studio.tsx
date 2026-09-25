@@ -404,7 +404,7 @@ function InspectorFrame({kicker,title,action,actionLabel,children}:{kicker:strin
 function InspectorRows({rows}:{rows:Array<[string,string]>}){return <div className="studio-inspector-rows">{rows.map(([label,value])=><div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>;}
 
 function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelected,setError}:{project:FilmProject;shot:Shot;latestPath?:string;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
-  const{setProject,setNotice}=useAppStore();
+  const{setProject,setNotice,setBusy}=useAppStore();
   const[continuityBusy,setContinuityBusy]=useState(false);
   const[continuityReview,setContinuityReview]=useState<ContinuityReview>();
   const[keyframeBusy,setKeyframeBusy]=useState<'start'|'end'|null>(null);
