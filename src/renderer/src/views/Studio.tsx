@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
-import type { Asset, AssetKind, GenerationMode, ModelFamily, QualityIntent, Shot, WorkflowProfile } from '../../../shared/types';
+import type { Asset, AssetKind, FilmProject, GenerationMode, ModelFamily, QualityIntent, Shot, WorkflowProfile } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
@@ -165,7 +165,7 @@ export function Studio(){
       <div className="studio-command-title"><span className="eyebrow">UNIFIED PRODUCTION WORKSPACE</span><strong>{project.story.title||project.name}</strong></div>
       <div className="studio-hud">
         <Hud label="GPU" value={probe?.gpu?.name?.replace(/^NVIDIA GeForce /,'')||'probe…'} tone={probe?.gpu?'good':'muted'}/>
-        <Hud label="VRAM" value={probe?.gpu?.totalVramMb?`${(probe.gpu.freeVramMb! /1024).toFixed(1)}/${(probe.gpu.totalVramMb/1024).toFixed(0)} GB`:'—'} tone={probe?.gpu?'good':'muted'}/>
+        <Hud label="VRAM" value={probe?.gpu?.totalVramMb?`${((probe.gpu.freeVramMb??0)/1024).toFixed(1)}/${(probe.gpu.totalVramMb/1024).toFixed(0)} GB`:'—'} tone={probe?.gpu?'good':'muted'}/>
         <Hud label="WanGP" value={probe?.wangp.available?'ready':'check'} tone={probe?.wangp.available?'good':'warn'}/>
         <Hud label="Comfy" value={probe?.comfy.reachable?'online':'optional'} tone={probe?.comfy.reachable?'good':'muted'}/>
         <Hud label="CapCut" value={project.settings.capcut.pro?'Pro':'Free'} tone="muted"/>
@@ -197,7 +197,7 @@ export function Studio(){
       </aside>
 
       <main className="studio-canvas-panel">
-        <div className="studio-canvas-title"><div><span className="eyebrow">PIPELINE GRAPH</span><strong>Story → scenes → shots → workflows → render → edit</strong></div><span>Drop an asset directly on any shot node</span></div>
+        <div className="studio-canvas-title"><div><span className="eyebrow">PIPELINE GRAPH</span><strong>Story → scenes → shots → workflows → render → edit</strong></div><span>Canvas position is visual only · drag assets onto shots</span></div>
         <div className="studio-viewport" ref={viewportRef} onScroll={updateViewRect}>
           <div className="studio-world-shell" style={{width:graph.width*zoom,height:graph.height*zoom}}>
             <div className="studio-world" style={{width:graph.width,height:graph.height,transform:`scale(${zoom})`}}>
@@ -227,7 +227,7 @@ export function Studio(){
   </section>;
 }
 
-function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onSelectShot,onOpen,onDropAsset}:{node:StudioNode;project:NonNullable<ReturnType<typeof useAppStore.getState>['project']>;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onSelectShot:(id?:string)=>void;onOpen:(view:ViewId)=>void;onDropAsset:(event:DragEvent<HTMLElement>,shotId:string)=>void}){
+function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onSelectShot,onOpen,onDropAsset}:{node:StudioNode;project:FilmProject;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onSelectShot:(id?:string)=>void;onOpen:(view:ViewId)=>void;onDropAsset:(event:DragEvent<HTMLElement>,shotId:string)=>void}){
   const shot=node.shotId?project.shots.find(item=>item.id===node.shotId):undefined;
   const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
   const className=['studio-node',`node-${node.kind}`,selected?'selected':'',active?'on-path':'',locked?'locked':''].filter(Boolean).join(' ');
@@ -254,7 +254,7 @@ function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioN
   return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`}/>;
 }
 
-function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelected,setError}:{project:NonNullable<ReturnType<typeof useAppStore.getState>['project']>;shot:Shot;latestPath?:string;updateProject:(mutator:(project:NonNullable<ReturnType<typeof useAppStore.getState>['project']>)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
+function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelected,setError}:{project:FilmProject;shot:Shot;latestPath?:string;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
   const mutate=(fn:(shot:Shot)=>void)=>updateProject(next=>{const target=next.shots.find(item=>item.id===shot.id);if(target)fn(target);});
   const matching=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&profile.workflowPath);
   const changeModel=(model:ModelFamily)=>mutate(target=>{const defaults=MODEL_DEFAULTS[model];target.generation={...target.generation,...defaults,modelFamily:model,seed:target.generation.seed,negativePrompt:target.generation.negativePrompt,quality:target.generation.quality,workflowProfileId:undefined};});
@@ -297,7 +297,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
   </div>;
 }
 
-function DropSlot({label,ids,project,onDrop,clear}:{label:string;ids:string[];project:NonNullable<ReturnType<typeof useAppStore.getState>['project']>;onDrop:(event:DragEvent<HTMLElement>)=>void;clear:(id:string)=>void}){
+function DropSlot({label,ids,project,onDrop,clear}:{label:string;ids:string[];project:FilmProject;onDrop:(event:DragEvent<HTMLElement>)=>void;clear:(id:string)=>void}){
   const assets=ids.map(id=>project.assets.find(asset=>asset.id===id)).filter((asset):asset is Asset=>Boolean(asset));
   return <section className="studio-drop-slot" onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';}} onDrop={onDrop}><span>{label}</span>{assets.length===0?<small>Drop here</small>:<div className="studio-slot-assets">{assets.map(asset=><button key={asset.id} title="Remove" onClick={()=>clear(asset.id)}>{isVisual(asset)?<img src={projectMediaUrl(asset.projectPath)} alt=""/>:<b>{asset.kind==='audio'?'♪':'▶'}</b>}<em>{asset.name}</em><i>×</i></button>)}</div>}</section>;
 }
@@ -332,4 +332,9 @@ function assignAsset(shot:Shot,asset:Asset):void{
 function scrollToNode(id:string,nodes:Map<string,StudioNode>,viewport:HTMLDivElement|null,zoom:number):void{
   const node=nodes.get(id);if(!node||!viewport)return;
   viewport.scrollTo({left:Math.max(0,(node.x-node.width)*zoom),top:Math.max(0,(node.y-120)*zoom),behavior:'smooth'});
+}
+
+function reorderTimeline(project:FilmProject,sourceId:string,targetId:string,updateProject:(mutator:(project:FilmProject)=>void)=>void):void{
+  if(sourceId===targetId||!project.timeline.some(clip=>clip.id===sourceId)||!project.timeline.some(clip=>clip.id===targetId))return;
+  updateProject(next=>{const ordered=[...next.timeline].sort((a,b)=>a.order-b.order);const from=ordered.findIndex(clip=>clip.id===sourceId),to=ordered.findIndex(clip=>clip.id===targetId);if(from<0||to<0)return;const[moved]=ordered.splice(from,1);ordered.splice(to,0,moved);ordered.forEach((clip,index)=>clip.order=index);next.timeline=ordered;});
 }
