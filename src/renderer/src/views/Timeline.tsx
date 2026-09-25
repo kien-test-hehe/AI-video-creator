@@ -4,7 +4,7 @@ import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
 import { insertTimelineOutput, reorderTimeline } from '../studio-logic';
-import { takeUseConfirmationMessage } from '../take-policy';
+import { takeUseConfirmationMessage } from '../../../shared/take-policy';
 
 export function Timeline(){
   const{project,updateProject,setError,setNotice,setBusy}=useAppStore();
