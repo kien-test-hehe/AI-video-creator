@@ -19,8 +19,8 @@ export const useAppStore=create<AppState>((set,get)=>({
     const current=state.project;if(!current||current.id!==mainProject.id)return{project:mainProject,projectDirty:false};
     const next=structuredClone(current);
     next.renderJobs=structuredClone(mainProject.renderJobs);next.renderOutputs=structuredClone(mainProject.renderOutputs);
-    const runtime=new Map(mainProject.shots.map(shot=>[shot.id,{status:shot.status,latestRenderId:shot.latestRenderId}]));
-    for(const shot of next.shots){const value=runtime.get(shot.id);if(value){shot.status=value.status;shot.latestRenderId=value.latestRenderId;}}
+    const runtime=new Map(mainProject.shots.map(shot=>[shot.id,shot]));
+    for(const shot of next.shots){const server=runtime.get(shot.id);if(!server)continue;if(shotRenderInputKey(shot)!==shotRenderInputKey(server)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';continue;}shot.status=server.status;shot.latestRenderId=server.latestRenderId;}
     const serverProfiles=new Map(mainProject.settings.workflowProfiles.map(profile=>[profile.id,profile]));
     next.settings.workflowProfiles=next.settings.workflowProfiles.map(local=>{
       const server=serverProfiles.get(local.id);if(!server)return local;
