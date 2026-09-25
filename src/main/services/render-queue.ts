@@ -101,23 +101,28 @@ export class RenderQueueService extends EventEmitter {
     const wasRunning=this.runningJobId===jobId;
     const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(wasRunning&&runtime==='comfyui'&&!this.settings.get().comfy.dedicatedInstance)throw new Error('Safe cancellation is disabled for a shared ComfyUI instance. Configure a dedicated CineForge ComfyUI instance first.');
-    this.cancelled.add(jobId);this.pending=this.pending.filter(id=>id!==jobId);
+    this.pending=this.pending.filter(id=>id!==jobId);
     if(wasRunning){
       if(runtime==='wangp'){
+        this.cancelled.add(jobId);
         const machine=this.settings.get(),child=this.wanGpProcesses.get(jobId);
         if(machine.wangp.executionMode==='docker'){
           await stopWanGpDocker(machine,job.id);
           if(child?.pid)await killProcessTree(child.pid);
         }else if(child?.pid)await killProcessTree(child.pid);
         else if(job.backendPid){
-          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');
+          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py'])){this.cancelled.delete(jobId);throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');}
           await killProcessTree(job.backendPid);
         }
       }else{
-        const machine=this.settings.get();
-        await new ComfyClient(machine.comfy.url,true).interrupt().catch(()=>undefined);
+        if(job.comfyPromptId){
+          const machine=this.settings.get(),client=new ComfyClient(machine.comfy.url,true);
+          try{await client.cancelPrompt(job.comfyPromptId);}
+          catch(error){throw new Error(`ComfyUI did not confirm cancellation for ${job.comfyPromptId}: ${error instanceof Error?error.message:String(error)}`);}
+        }
+        this.cancelled.add(jobId);
       }
-    }
+    }else this.cancelled.add(jobId);
     await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled'},true,true);
     await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(shot)shot.status=shot.latestRenderId?'rendered':'draft';});
     if(!wasRunning){this.cancelled.delete(jobId);void this.pump();}
