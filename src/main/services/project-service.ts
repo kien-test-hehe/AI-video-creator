@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { dialog } from 'electron';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
@@ -26,6 +26,11 @@ export class ProjectService {
     const resolvedRoot=resolve(rootPath),projectFile=join(resolvedRoot,PROJECT_FILE);
     try{await stat(projectFile);throw new Error('This folder already contains a CineForge project. Use Open instead, or choose a new/empty folder.');}
     catch(error:any){if(error?.code!=='ENOENT')throw error;}
+    try{
+      const harmless=new Set(['.DS_Store','Thumbs.db','desktop.ini']);
+      const existing=(await readdir(resolvedRoot)).filter(name=>!harmless.has(name));
+      if(existing.length)throw new Error(`Choose an empty folder for a new CineForge project. “${resolvedRoot}” already contains ${existing.length} item(s).`);
+    }catch(error:any){if(error?.code!=='ENOENT')throw error;}
     await this.ensureFolders(resolvedRoot);
     const now = new Date().toISOString();
     const project: FilmProject = {
