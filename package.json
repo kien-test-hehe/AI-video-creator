@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:smoke": "tsx scripts/core-smoke.mts",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "workflows:fetch": "node scripts/fetch-reference-workflows.mjs",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
