@@ -160,6 +160,6 @@ if (-not $SkipBuild) {
 }
 
 Write-Host "`nCineForge workstation setup is ready." -ForegroundColor Green
-Write-Host 'Run: .\run-windows.ps1'
+Write-Host 'Run: start.cmd'
 Write-Host 'CapCut Pro is NOT assumed. New projects default to CapCut Free / No Pro.'
 Write-Host 'WanGP model weights download on demand on the first generation for each chosen model.'
