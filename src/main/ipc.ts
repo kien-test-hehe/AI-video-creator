@@ -20,6 +20,7 @@ import { prepareCapCutHandoff } from './services/capcut-handoff';
 import { assertTrustedIpcSender } from './services/ipc-security';
 import { validateAndRecordProfile } from './services/profile-validation';
 import { writeCodexMachineContext } from './services/machine-context';
+import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/wangp-catalog-service';
 
 type Handler = (...args: any[]) => any;
 
@@ -95,6 +96,8 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     try{return await inspectWorkflow(safe);}catch{return inspectWanGpSettings(safe);}
   });
   handle(IPC.workflowValidate, (profileId:string) => validateAndRecordProfile(projects, settings.get(), profileId));
+  handle(IPC.workflowWanGpCatalog, () => listWanGpCatalog(settings.get()));
+  handle(IPC.workflowProvisionWanGp, () => provisionRecommendedWanGpProfiles(projects,settings));
 
   handle(IPC.systemProbe, async()=>{
     const project=requireProject(projects),machine=settings.get(),probe=await probeSystem(project,machine);
