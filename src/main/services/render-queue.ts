@@ -32,6 +32,7 @@ const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
 
 export class RenderQueueService extends EventEmitter {
   private pending:string[]=[];
+  private recoveryPending:string[]=[];
   private runningJobId?:string;
   private cancelled=new Set<string>();
   private wanGpProcesses=new Map<string,ChildProcess>();
@@ -53,7 +54,7 @@ export class RenderQueueService extends EventEmitter {
     return{runningJobId:this.runningJobId,jobs};
   }
 
-  isBusy():boolean{return Boolean(this.runningJobId||this.pending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
+  isBusy():boolean{return Boolean(this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
 
   async enqueue(request:RenderRequest):Promise<QueueSnapshot>{
     const project=this.requireProject();
@@ -102,6 +103,7 @@ export class RenderQueueService extends EventEmitter {
   async cancel(jobId:string):Promise<QueueSnapshot>{
     this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
     const wasRunning=this.runningJobId===jobId;
+    if(this.recoveryPending.includes(jobId))throw new Error('This backend-active job is waiting for serialized recovery. Let it become the active recovery job before cancelling so CineForge can confirm the backend stop safely.');
     const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(wasRunning&&runtime==='comfyui'&&!this.settings.get().comfy.dedicatedInstance)throw new Error('Safe cancellation is disabled for a shared ComfyUI instance. Configure a dedicated CineForge ComfyUI instance first.');
     this.pending=this.pending.filter(id=>id!==jobId);
@@ -140,7 +142,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   async reconcileAfterProjectOpen():Promise<void>{
-    this.pending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
+    this.pending=[];this.recoveryPending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
     const project=this.projects.getCurrent();if(!project)return;
     const journals=await this.journal.readAll(project.rootPath);const byId=new Map(journals.map(j=>[j.id,j]));
     const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id))).sort((a,b)=>a.job.createdAt.localeCompare(b.job.createdAt));
@@ -168,8 +170,8 @@ export class RenderQueueService extends EventEmitter {
       }
       if(['submitted','running','recovering','stalled','downloading'].includes(job.status)){
         if(!recoveryStarted){recoveryStarted=true;this.runningJobId=job.id;void this.recoverActiveJob(job.id);continue;}
-        await this.updateJob(job.id,{status:'orphaned',progress:0,message:'Additional backend-active job was not resumed automatically',error:'More than one submitted/running job was found after restart. CineForge serializes GPU work and will not requeue this job because its previous backend execution may still exist. Verify the backend, then retry explicitly if needed.'},true,true);
-        continue;
+        await this.updateJob(job.id,{status:'recovering',message:'Waiting for serialized backend recovery; no new GPU work will start before this backend identity is resolved.'},true,true);
+        this.recoveryPending.push(job.id);continue;
       }
       await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
       this.pending.push(job.id);
@@ -193,7 +195,10 @@ export class RenderQueueService extends EventEmitter {
         await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
       }
     }finally{
-      this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
+      this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;
+      const nextRecovery=this.recoveryPending.shift();
+      if(nextRecovery){this.runningJobId=nextRecovery;this.emitSnapshot();void this.recoverActiveJob(nextRecovery);}
+      else{this.emitSnapshot();void this.pump();}
     }
   }
 
@@ -357,7 +362,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async pump():Promise<void>{
-    if(this.runningJobId||!this.pending.length)return;
+    if(this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
     const jobId=this.pending.shift()!;if(this.cancelled.has(jobId)){this.cancelled.delete(jobId);return void this.pump();}
     this.runningJobId=jobId;this.emitSnapshot();
     try{await this.run(jobId);}
