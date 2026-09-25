@@ -103,6 +103,12 @@ export class ProjectService {
         const state = runtime.get(shot.id);
         if (state) { shot.status = state.status; shot.latestRenderId = state.latestRenderId; }
       }
+      const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
+      incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>{
+        const current=currentProfiles.get(profile.id);if(!current)return profile;
+        if(profileConfigKey(profile)!==profileConfigKey(current))return profile;
+        return{...profile,validation:structuredClone(current.validation)};
+      });
       await this.validateStoragePaths(incoming);
       return this.persistUnlocked(incoming);
     });
@@ -252,4 +258,12 @@ export class ProjectService {
     try{await writeFile(join(rootPath,'.cineforge','.gitignore'),'*\n!.gitignore\n',{encoding:'utf8',flag:'wx'});}
     catch(error:any){if(error?.code!=='EEXIST')throw error;}
   }
+}
+
+function profileConfigKey(profile:FilmProject['settings']['workflowProfiles'][number]):string{
+  return JSON.stringify({
+    runtime:profile.runtime,purpose:profile.purpose,name:profile.name,modelFamily:profile.modelFamily,mode:profile.mode,
+    workflowPath:profile.workflowPath,workflowFormat:profile.workflowFormat,bindings:profile.bindings,enabled:profile.enabled,
+    notes:profile.notes,modelFingerprint:profile.modelFingerprint
+  });
 }
