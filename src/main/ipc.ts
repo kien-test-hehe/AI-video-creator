@@ -144,6 +144,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.renderRetry,(jobId:string)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before retrying a render.');return queue.retry(jobId);});
   handle(IPC.renderCancel,(jobId:string)=>queue.cancel(jobId));
   handle(IPC.renderSnapshot,()=>queue.snapshot());
+  handle(IPC.renderOutputDelete,(outputId:string)=>projects.deleteRenderOutput(outputId));
 
   handle(IPC.directorPlanScene,async(sceneId:string)=>{
     const project=requireProject(projects);
