@@ -41,8 +41,18 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   }
   values.referenceImages=continuityPaths;
   for(const[i,path]of continuityPaths.slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:path});
-  if(profile.mode==='i2i'&&request.role==='end'&&shot.startFrameAssetId){
-    const start=project.assets.find(a=>a.id===shot.startFrameAssetId);if(start){const startPath=await assertExistingRelativeProjectPath(project.rootPath,start.projectPath,'assets',`asset path for ${start.name}`);values.startImage=startPath;values.referenceImages=[startPath,...(values.referenceImages??[])].slice(0,10);}
+  if(request.role==='end'&&shot.startFrameAssetId){
+    const start=project.assets.find(a=>a.id===shot.startFrameAssetId);
+    if(start){
+      const startPath=await assertExistingRelativeProjectPath(project.rootPath,start.projectPath,'assets',`asset path for ${start.name}`),keys=new Set(profile.bindings.map(binding=>binding.key));
+      if(profile.mode==='i2i'&&keys.has('startImage'))values.startImage=startPath;
+      if(keys.has('referenceImages'))values.referenceImages=[startPath,...(values.referenceImages??[])].slice(0,10);
+      else{
+        const slots=['referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const,existing=(values.referenceImages??[]);
+        values.referenceImages=[startPath,...existing].slice(0,slots.filter(key=>keys.has(key)).length);
+        values.referenceImages.forEach((path,index)=>Object.assign(values,{[slots[index]]:path}));
+      }
+    }
   }
 
   const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
