@@ -3,7 +3,7 @@ import type { HardwarePlan, SystemProbe } from '../../shared/types';
 export function deriveHardwarePlan(input:Pick<SystemProbe,'gpu'|'memory'|'cpu'>):HardwarePlan{
   const name=input.gpu?.name||'',vram=input.gpu?.totalVramMb||0;
   const notes:string[]=[];
-  if(/RTX\\s*50/i.test(name)&&vram>=15000){
+  if(/RTX\s*50/i.test(name)&&vram>=15000){
     notes.push('RTX 50-series detected: prefer the current WanGP Python 3.11 / PyTorch 2.10 / CUDA 13.x stack.');
     notes.push('16 GB VRAM: use WanGP profile 4, short 4–6s shots, and avoid 1080p as a default batch resolution.');
     notes.push('LTX-2.5 Distilled NVFP4 is the default general route; use HunyuanVideo 1.5 selectively for hero I2V shots.');
