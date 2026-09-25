@@ -15,7 +15,7 @@ const api: CineforgeApi = {
     get: () => ipcRenderer.invoke(IPC.settingsGet),
     save: settings => ipcRenderer.invoke(IPC.settingsSave, settings)
   },
-  asset: { import: kind => ipcRenderer.invoke(IPC.assetImport, kind) },
+  asset: { import: kind => ipcRenderer.invoke(IPC.assetImport, kind), delete: assetId => ipcRenderer.invoke(IPC.assetDelete, assetId) },
   workflow: {
     importComfy: () => ipcRenderer.invoke(IPC.workflowImportComfy),
     importWanGp: () => ipcRenderer.invoke(IPC.workflowImportWanGp),

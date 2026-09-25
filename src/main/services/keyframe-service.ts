@@ -49,6 +49,11 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   if(runtime==='wangp')generatedPath=await generateWithWanGp(project,machine,profile,values,shot,request.role);
   else generatedPath=await generateWithComfy(project,machine,profile,values,shot,request.role);
 
+  const current=projects.getCurrent();
+  if(!current||current.id!==project.id||current.rootPath!==project.rootPath||!current.shots.some(item=>item.id===shot.id)){
+    await rm(generatedPath,{force:true}).catch(()=>undefined);
+    throw new Error('The project or target shot changed while the keyframe was generating. The generated staging file was discarded safely.');
+  }
   const assetId=randomUUID(),extension=extname(generatedPath)||'.png',relativePath=join('assets','keyframe',`${shot.id}-${request.role}-${assetId}${extension}`);
   const target=await assertSafeWritePath(join(project.rootPath,'assets'),join(project.rootPath,relativePath),'generated keyframe');
   await mkdir(join(project.rootPath,'assets','keyframe'),{recursive:true});await copyFile(generatedPath,target);await rm(generatedPath,{force:true}).catch(()=>undefined);

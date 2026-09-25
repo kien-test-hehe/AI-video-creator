@@ -177,6 +177,7 @@ export interface PreflightReport { createdAt:ISODate;ready:boolean;issues:Valida
 export interface TechnicalQcResult {
   checkedAt: ISODate;
   passed: boolean;
+  warnings?: string[];
   durationSec?: number;
   width?: number;
   height?: number;

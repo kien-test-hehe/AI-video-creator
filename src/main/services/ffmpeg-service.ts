@@ -6,7 +6,7 @@ import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared
 import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
 import { killProcessTree } from './process-utils';
 
-interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean}
+interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean;durationSec?:number}
 
 export async function exportTimeline(project:FilmProject,machine:AppMachineSettings,signal?:AbortSignal):Promise<string>{
   throwIfAborted(signal);
@@ -54,6 +54,8 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
 async function normalizeClip(machine:AppMachineSettings,input:string,output:string,clip:TimelineClip,info:ProbeInfo,master:ProbeInfo,signal?:AbortSignal):Promise<void>{
   throwIfAborted(signal);
   if(clip.trimOutSec!=null&&clip.trimOutSec<=clip.trimInSec)throw new Error(`Invalid timeline trim: out (${clip.trimOutSec}s) must be greater than in (${clip.trimInSec}s).`);
+  if(info.durationSec!=null&&clip.trimInSec>=info.durationSec)throw new Error(`Invalid timeline trim: in (${clip.trimInSec}s) is beyond media duration (${info.durationSec.toFixed(3)}s).`);
+  if(info.durationSec!=null&&clip.trimOutSec!=null&&clip.trimOutSec>info.durationSec+0.02)throw new Error(`Invalid timeline trim: out (${clip.trimOutSec}s) exceeds media duration (${info.durationSec.toFixed(3)}s).`);
   if(!Number.isFinite(clip.volume)||clip.volume<0)throw new Error(`Invalid timeline volume: ${clip.volume}`);
   const args:string[]=['-y'];
   if(clip.trimInSec>0)args.push('-ss',String(clip.trimInSec));
@@ -73,10 +75,11 @@ async function normalizeClip(machine:AppMachineSettings,input:string,output:stri
 }
 
 async function probeVideo(ffprobe:string,input:string,signal?:AbortSignal):Promise<ProbeInfo>{
-  const stdout=await runCapture(ffprobe,['-v','error','-print_format','json','-show_streams',input],60_000,signal);
-  const parsed=JSON.parse(stdout) as{streams?:any[]};const video=parsed.streams?.find(s=>s.codec_type==='video');if(!video)throw new Error(`No video stream found: ${input}`);
+  const stdout=await runCapture(ffprobe,['-v','error','-print_format','json','-show_streams','-show_format',input],60_000,signal);
+  const parsed=JSON.parse(stdout) as{streams?:any[];format?:{duration?:string|number}};const video=parsed.streams?.find(s=>s.codec_type==='video');if(!video)throw new Error(`No video stream found: ${input}`);
   const rate=String(video.avg_frame_rate||video.r_frame_rate||'24/1').split('/').map(Number);const fps=rate[1]?rate[0]/rate[1]:rate[0]||24;
-  return{width:Number(video.width)||1280,height:Number(video.height)||720,fps:Math.max(1,Math.round(fps*1000)/1000),hasAudio:Boolean(parsed.streams?.some(s=>s.codec_type==='audio'))};
+  const rawDuration=Number(video.duration??parsed.format?.duration),durationSec=Number.isFinite(rawDuration)&&rawDuration>0?rawDuration:undefined;
+  return{width:Number(video.width)||1280,height:Number(video.height)||720,fps:Math.max(1,Math.round(fps*1000)/1000),hasAudio:Boolean(parsed.streams?.some(s=>s.codec_type==='audio')),durationSec};
 }
 
 function run(command:string,args:string[],timeoutMs=60*60_000,signal?:AbortSignal):Promise<void>{
