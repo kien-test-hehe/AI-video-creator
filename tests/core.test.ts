@@ -182,6 +182,7 @@ describe('Comfy cancellation history',()=>{
   it('distinguishes interrupted history from normal terminal history',()=>{
     expect(historyWasInterrupted({status:{messages:[['execution_interrupted',{prompt_id:'p'}]]}})).toBe(true);
     expect(historyWasInterrupted({status:{messages:[['execution_success',{prompt_id:'p'}]]}})).toBe(false);
+    expect(historyWasInterrupted({prompt:['execution_interrupted'],status:{messages:[['execution_success',{}]]}})).toBe(false);
   });
 });
 describe('WanGP list-valued binding inference',()=>{
