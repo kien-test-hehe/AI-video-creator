@@ -17,7 +17,9 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
   const safe = await assertExistingPathInside(join(project.rootPath,'workflows'),lexical,`workflow path for ${profile.name}`);
   const sourceSha256 = await sha256File(safe);
   const runtime = profile.runtime ?? (profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
-  const errors = runtime === 'wangp' ? await validateWanGpProfile(profile) : await validateProfileBindings(profile);
+  const modeErrors=profilePurposeModeErrors(profile);
+  const runtimeErrors = runtime === 'wangp' ? await validateWanGpProfile(profile) : await validateProfileBindings(profile);
+  const errors=[...modeErrors,...runtimeErrors];
   const fingerprint = await fingerprintRuntime(machine, profile);
   const now = new Date().toISOString();
 
@@ -41,4 +43,13 @@ export function profileCompatibilityErrors(profile: WorkflowProfile, shot: { gen
   if(profile.modelFamily!==shot.generation.modelFamily)errors.push(`Profile model family ${profile.modelFamily} does not match shot model ${shot.generation.modelFamily}.`);
   if(profile.mode!==shot.generation.mode)errors.push(`Profile mode ${profile.mode} does not match shot mode ${shot.generation.mode}.`);
   return errors;
+}
+
+
+function profilePurposeModeErrors(profile:WorkflowProfile):string[]{
+  const imageMode=profile.mode==='t2i'||profile.mode==='i2i';
+  if(profile.purpose==='video'&&imageMode)return[`Video profile “${profile.name}” cannot use image-only mode ${profile.mode}.`];
+  if(profile.purpose==='image'&&!imageMode)return[`Image profile “${profile.name}” must use t2i or i2i, not ${profile.mode}.`];
+  if(profile.purpose==='audio'||profile.purpose==='utility')return[`${profile.purpose} workflow profiles are stored for forward compatibility but are not executable by the current CineForge routing layer.`];
+  return[];
 }
