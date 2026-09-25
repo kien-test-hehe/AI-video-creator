@@ -2,6 +2,7 @@ import type { DragEvent } from 'react';
 import { MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../../shared/defaults';
 import type { Shot } from '../../../shared/types';
 import { useAppStore } from '../store';
+import { autoAssignAssetToShot } from '../asset-assignment';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 
 export function Storyboard(){
@@ -49,18 +50,14 @@ export function Storyboard(){
     }
     const assetId=event.dataTransfer.getData('application/x-cineforge-asset');
     if(!assetId)return;
+    let result:{ok:boolean;role:string;message:string}|undefined;
     updateProject(p=>{
       const shot=p.shots.find(s=>s.id===targetShotId),asset=p.assets.find(a=>a.id===assetId);if(!shot||!asset)return;
-      if(asset.kind==='character'){if(!shot.characterAssetIds.includes(asset.id)&&shot.characterAssetIds.length<4)shot.characterAssetIds.push(asset.id);}
-      else if(asset.kind==='location')shot.locationAssetId=asset.id;
-      else if(['prop','wardrobe','reference'].includes(asset.kind)){if(!shot.propAssetIds.includes(asset.id)&&shot.propAssetIds.length<2)shot.propAssetIds.push(asset.id);}
-      else if(['image','keyframe'].includes(asset.kind)){if(!shot.startFrameAssetId)shot.startFrameAssetId=asset.id;else shot.endFrameAssetId=asset.id;}
-      else if(asset.kind==='audio')shot.audioAssetId=asset.id;
-      else if(asset.kind==='video')shot.referenceVideoAssetId=asset.id;
-      if(shot.status==='draft')shot.status='ready';
+      result=autoAssignAssetToShot(shot,asset);
     });
     const asset=project.assets.find(a=>a.id===assetId);const shot=project.shots.find(s=>s.id===targetShotId);
-    setNotice(asset&&shot?'Assigned '+asset.name+' → '+shot.title:undefined);
+    if(result?.ok)setNotice(asset&&shot?asset.name+' → '+shot.title+': '+result.message:result.message);
+    else if(result)setError(result.message);
   };
 
   return <Page title="Storyboard" subtitle="Drag shots to reorder them. Drag characters, locations, props, keyframes, audio or video from Assets directly onto a shot.">
