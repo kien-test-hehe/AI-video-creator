@@ -1,14 +1,18 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { access, readdir } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import type { AppMachineSettings, FilmProject } from '../../shared/types';
 import { mapHostPathToWanGpRuntime } from './runtime-path-mapper';
+
+const execFileAsync=promisify(execFile);
 
 export interface WanGpRunOptions {
   settingsPath:string;
   outputDir:string;
   onLog?:(line:string)=>void;
   dryRun?:boolean;
+  runId?:string;
 }
 
 export function wangpEntrypoint(machine:AppMachineSettings):string{return resolve(machine.wangp.rootPath,machine.wangp.entrypoint||'wgp.py');}
@@ -40,7 +44,8 @@ function startDockerWanGp(project:FilmProject,machine:AppMachineSettings,options
   if(!cfg.rootPath.trim())throw new Error('WanGP root path is required in Docker mode so models/config can be mounted.');
   const settingsPath=mapHostPathToWanGpRuntime(project,machine,options.settingsPath),outputDir=mapHostPathToWanGpRuntime(project,machine,options.outputDir);
   const entrypoint=`${cfg.docker.wangpMount.replace(/\/+$/,'')}/${cfg.entrypoint}`;
-  const args=['run','--rm','--gpus','all','-v',`${project.rootPath}:${cfg.docker.projectMount}`,'-v',`${cfg.rootPath}:${cfg.docker.wangpMount}`,'-w',cfg.docker.wangpMount,image,'python',entrypoint,'--process',settingsPath,'--output-dir',outputDir,'--profile',String(cfg.profile||4),'--verbose','1'];
+  const containerName=wanGpContainerName(options.runId||basename(options.settingsPath,'.json'));
+  const args=['run','--rm','--name',containerName,'--gpus','all','-v',`${project.rootPath}:${cfg.docker.projectMount}`,'-v',`${cfg.rootPath}:${cfg.docker.wangpMount}`,'-w',cfg.docker.wangpMount,image,'python',entrypoint,'--process',settingsPath,'--output-dir',outputDir,'--profile',String(cfg.profile||4),'--verbose','1'];
   if(options.dryRun)args.push('--dry-run');if(cfg.attention&&cfg.attention!=='auto')args.push('--attention',cfg.attention);
   return spawnWithLogs(cfg.docker.command,args,{onLog:options.onLog});
 }
@@ -56,3 +61,22 @@ export async function waitWanGp(child:ChildProcess):Promise<void>{await new Prom
 const MEDIA_EXT=new Set(['.mp4','.mov','.webm','.mkv','.avi','.png','.jpg','.jpeg','.webp','.wav','.mp3','.flac','.m4a','.aac']);
 export async function collectWanGpOutputs(root:string):Promise<string[]>{const out:string[]=[];const walk=async(dir:string)=>{for(const entry of await readdir(dir,{withFileTypes:true})){const path=join(dir,entry.name);if(entry.isDirectory())await walk(path);else{const lower=entry.name.toLowerCase(),dot=lower.lastIndexOf('.');if(dot>=0&&MEDIA_EXT.has(lower.slice(dot)))out.push(path);}}};await walk(root).catch(()=>undefined);return out.sort();}
 export function outputMediaType(path:string):'video'|'image'|'audio'|'unknown'{const ext=basename(path).toLowerCase().split('.').pop()||'';if(['mp4','mov','webm','mkv','avi'].includes(ext))return'video';if(['png','jpg','jpeg','webp'].includes(ext))return'image';if(['wav','mp3','flac','m4a','aac'].includes(ext))return'audio';return'unknown';}
+
+
+export function wanGpContainerName(runId:string):string{
+  const safe=runId.toLowerCase().replace(/[^a-z0-9_.-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,48)||'job';
+  return `cineforge-${safe}`;
+}
+
+export async function isWanGpDockerRunning(machine:AppMachineSettings,runId:string):Promise<boolean>{
+  const name=wanGpContainerName(runId);
+  try{
+    const{stdout}=await execFileAsync(machine.wangp.docker.command,['inspect','-f','{{.State.Running}}',name],{timeout:8000});
+    return stdout.trim().toLowerCase()==='true';
+  }catch{return false;}
+}
+
+export async function stopWanGpDocker(machine:AppMachineSettings,runId:string):Promise<void>{
+  const name=wanGpContainerName(runId);
+  await execFileAsync(machine.wangp.docker.command,['rm','-f',name],{timeout:15_000}).catch(()=>undefined);
+}
