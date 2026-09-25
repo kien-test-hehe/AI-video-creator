@@ -4,13 +4,15 @@ CineForge 0.3 separates **portable project state** from **machine runtime config
 
 ## Workstation setup
 
-Open **Settings → Machine Settings** and configure WanGP (native or Docker), FFmpeg + FFprobe, optional dedicated ComfyUI, and optional local OpenAI-compatible Director. These values live under Electron's `userData` directory and are never trusted from a project file.
+On the primary Windows target, run `setup.cmd`. It prepares the pinned machine-local WanGP runtime, portable Node, FFmpeg/FFprobe and CineForge dependencies. Machine paths/endpoints still live under Electron's `userData` directory and are never trusted from a project file. Settings remains available for advanced native/Docker overrides, optional dedicated ComfyUI, and an optional loopback OpenAI-compatible Director.
 
 ## WanGP production profiles
 
-For every route: validate the preset in WanGP, export its settings JSON, import it, review every binding ambiguity, record a model/checkpoint fingerprint when available, click **Validate profile**, then enable it. Changing the imported settings invalidates the source hash and blocks rendering until revalidation.
+For the pinned native runtime, CineForge reads WanGP's model catalog directly and auto-provisions/validates managed settings profiles for the available recommended routes. The current managed preference order is LTX-2.5 Distilled NVFP4 for general/audio-aware shots, HunyuanVideo 1.5 I2V for hero shots, Wan 2.2 TI2V 5B for motion-heavy fallback, and Qwen Image 2.1 for keyframes when exposed by the installed catalog.
 
-Recommended starting routes on 16 GB VRAM are LTX 2.5 Fast I2V/AV for general/audio-aware shots, HunyuanVideo 1.5 I2V for quality-biased hero shots, and Wan 2.2 5B I2V for motion/action fallback. Add long-video routes only after separate validation.
+Manual WanGP settings import remains available for custom models/presets. Any imported or managed settings file is source-hashed; changing it blocks production rendering until revalidation. Record an immutable model/checkpoint fingerprint when available for stronger reproducibility.
+
+Long shots remain on the managed LTX route by default and are warned by preflight; optional FramePack/other long-video routes are only used when explicitly configured and validated.
 
 ## Reproducibility
 
