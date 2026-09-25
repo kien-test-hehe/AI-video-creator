@@ -15,6 +15,7 @@ import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { killProcessTree } from './process-utils';
 import { planShotReferences } from './reference-plan';
 import { keyframeProjectInputKey } from '../../shared/shot-signature';
+import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 
 function keyframePrompt(shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
@@ -96,10 +97,13 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
 
   const baseline={projectId:project.id,rootPath:project.rootPath,shotId:shot.id,role:request.role,profileId:profile.id,inputSignature,workflowSha256,runtimeFingerprint:currentRuntime.environmentSha256,assetFingerprints};
   const assertCurrent=(checkRuntime=true)=>assertKeyframeSnapshotCurrent(projects,machine,baseline,checkRuntime);
-  const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+  const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),workflowSnapshotRoot=join(project.rootPath,'cache','keyframe-workflows',randomUUID());
   let generatedPath:string;
-  if(runtime==='wangp')generatedPath=await generateWithWanGp(project,machine,profile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
-  else generatedPath=await generateWithComfy(project,machine,profile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
+  try{
+    const snapshotProfile=await stageWorkflowProfileSnapshot(project.rootPath,profile,workflowSha256,workflowSnapshotRoot);
+    if(runtime==='wangp')generatedPath=await generateWithWanGp(project,machine,snapshotProfile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
+    else generatedPath=await generateWithComfy(project,machine,snapshotProfile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
+  }finally{await rm(workflowSnapshotRoot,{recursive:true,force:true}).catch(()=>undefined);}
   throwIfAborted(signal);
 
   try{await assertCurrent(false);}
