@@ -39,6 +39,7 @@ export async function shutdownForegroundOperations():Promise<void>{
 
 export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
   let keyframeBusy = false;
+  let directorBusy = false;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
       assertTrustedIpcSender(event,trustedRendererUrl);
@@ -46,8 +47,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     });
   };
 
-  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active renders, keyframe generation, timeline export, or CapCut handoff before switching projects.');};
-  const assertGpuGenerationAvailable=()=>{if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
+  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||directorBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active renders, local Director work, keyframe generation, timeline export, or CapCut handoff before switching projects.');};
+  const assertGpuGenerationAvailable=()=>{if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
+  const assertDirectorAvailable=()=>{if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
 
   handle(IPC.projectCreate, async (name?: string) => {
     assertProjectSwitchAllowed();
@@ -73,13 +75,13 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
   handle(IPC.assetImport, (kind: AssetKind) => projects.importAsset(kind));
   handle(IPC.assetDelete, (assetId:string) => {
-    if(queue.isBusy()||keyframeBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active generation/export/handoff before deleting project assets.');
+    if(queue.isBusy()||keyframeBusy||directorBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active generation/Director/export/handoff before deleting project assets.');
     return projects.deleteAsset(assetId);
   });
 
   handle(IPC.settingsGet, () => settings.get());
   handle(IPC.settingsSave, async (next: AppMachineSettings) => {
-    if (queue.isBusy()||keyframeBusy) throw new Error('Machine runtime settings cannot change while render jobs or keyframe generation are active.');
+    if (queue.isBusy()||keyframeBusy||directorBusy) throw new Error('Machine runtime settings cannot change while render jobs, keyframe generation, or local Director work are active.');
     return settings.save(next);
   });
 
@@ -140,9 +142,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     shell.showItemInFolder(safe);
   });
 
-  handle(IPC.renderEnqueue,(request:RenderRequest)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before queueing a video render.');return queue.enqueue(request);});
-  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before queueing video renders.');return queue.enqueueBatch(request);});
-  handle(IPC.renderRetry,(jobId:string)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before retrying a render.');return queue.retry(jobId);});
+  handle(IPC.renderEnqueue,(request:RenderRequest)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before queueing a video render.');return queue.enqueue(request);});
+  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before queueing video renders.');return queue.enqueueBatch(request);});
+  handle(IPC.renderRetry,(jobId:string)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before retrying a render.');return queue.retry(jobId);});
   handle(IPC.renderCancel,(jobId:string)=>queue.cancel(jobId));
   handle(IPC.renderSnapshot,()=>queue.snapshot());
   handle(IPC.renderOutputDelete,(outputId:string)=>{
@@ -151,16 +153,22 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
 
   handle(IPC.directorPlanScene,async(sceneId:string)=>{
-    const project=requireProject(projects);
-    const scene=project.scenes.find(s=>s.id===sceneId);
-    if(!scene)throw new Error('Scene not found.');
-    return planSceneWithLocalDirector(project,scene,settings.get());
+    assertDirectorAvailable();directorBusy=true;
+    try{
+      const project=requireProject(projects);
+      const scene=project.scenes.find(s=>s.id===sceneId);
+      if(!scene)throw new Error('Scene not found.');
+      return await planSceneWithLocalDirector(project,scene,settings.get());
+    }finally{directorBusy=false;}
   });
   handle(IPC.directorReviewShot,async(shotId:string)=>{
-    const project=requireProject(projects);
-    const shot=project.shots.find(s=>s.id===shotId);
-    if(!shot)throw new Error('Shot not found.');
-    return reviewShotWithLocalDirector(project,shot,settings.get());
+    assertDirectorAvailable();directorBusy=true;
+    try{
+      const project=requireProject(projects);
+      const shot=project.shots.find(s=>s.id===shotId);
+      if(!shot)throw new Error('Shot not found.');
+      return await reviewShotWithLocalDirector(project,shot,settings.get());
+    }finally{directorBusy=false;}
   });
   handle(IPC.keyframeGenerate,async(request:KeyframeRequest)=>{
     assertGpuGenerationAvailable();keyframeBusy=true;activeKeyframeAbortController=new AbortController();
