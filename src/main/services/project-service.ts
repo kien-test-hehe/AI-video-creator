@@ -129,7 +129,7 @@ export class ProjectService {
 
   async importAsset(kind: AssetKind): Promise<FilmProject | null> {
     if (!this.current) throw new Error('Open a project first.');
-    const result = await dialog.showOpenDialog({ title: `Import ${kind}`, properties: ['openFile', 'multiSelections'] });
+    const result = await dialog.showOpenDialog({ title: `Import ${kind}`, properties: ['openFile', 'multiSelections'], filters: assetImportFilters(kind) });
     if (result.canceled || result.filePaths.length === 0) return null;
     return this.mutate(async project => {
       for (const sourcePath of result.filePaths) {
@@ -147,6 +147,27 @@ export class ProjectService {
         });
       }
     });
+  }
+
+  async deleteAsset(assetId:string):Promise<FilmProject>{
+    const current=this.current;if(!current)throw new Error('Open a project first.');
+    const asset=current.assets.find(item=>item.id===assetId);if(!asset)throw new Error('Asset not found.');
+    const absolute=await assertExistingRelativeProjectPath(current.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`).catch(()=>undefined);
+    const updated=await this.mutate(project=>{
+      project.assets=project.assets.filter(item=>item.id!==assetId);
+      for(const shot of project.shots){
+        shot.characterAssetIds=shot.characterAssetIds.filter(id=>id!==assetId);
+        shot.propAssetIds=shot.propAssetIds.filter(id=>id!==assetId);
+        shot.referenceAssetIds=(shot.referenceAssetIds??[]).filter(id=>id!==assetId);
+        if(shot.locationAssetId===assetId)shot.locationAssetId=undefined;
+        if(shot.startFrameAssetId===assetId)shot.startFrameAssetId=undefined;
+        if(shot.endFrameAssetId===assetId)shot.endFrameAssetId=undefined;
+        if(shot.referenceVideoAssetId===assetId)shot.referenceVideoAssetId=undefined;
+        if(shot.audioAssetId===assetId)shot.audioAssetId=undefined;
+      }
+    });
+    if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete asset file after removing it from the project: ${absolute}`,error));
+    return updated;
   }
 
   applyParsedScenes(parsed: ParsedScene[]): Promise<FilmProject> {
@@ -269,4 +290,10 @@ function profileConfigKey(profile:FilmProject['settings']['workflowProfiles'][nu
     workflowPath:profile.workflowPath,workflowFormat:profile.workflowFormat,bindings:profile.bindings,enabled:profile.enabled,
     notes:profile.notes,modelFingerprint:profile.modelFingerprint
   });
+}
+
+function assetImportFilters(kind:AssetKind):Array<{name:string;extensions:string[]}>{
+  if(kind==='video')return[{name:'Video',extensions:['mp4','mov','webm','mkv','avi']}];
+  if(kind==='audio')return[{name:'Audio',extensions:['wav','mp3','flac','m4a','aac','ogg']}];
+  return[{name:'Images',extensions:['png','jpg','jpeg','webp','bmp']}];
 }
