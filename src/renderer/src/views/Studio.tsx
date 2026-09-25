@@ -106,7 +106,7 @@ export function Studio(){
     return{nodes,edges,width:2070,height};
   },[project,queue.jobs,selectedShot,sortedShots]);
 
-  const nodes=useMemo(()=>graph.nodes.map(node=>({...node,...(positions[node.id]||{})})),[graph.nodes,positions]);
+  const nodes=useMemo(()=>graph.nodes.map(node=>{const saved=positions[node.id],x=saved?.x??node.x,y=saved?.y??node.y;return{...node,x:Math.min(Math.max(0,graph.width-node.width),Math.max(0,x)),y:Math.min(Math.max(0,graph.height-node.height),Math.max(0,y))};}),[graph.height,graph.nodes,graph.width,positions]);
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
   const activeNodeIds=useMemo(()=>{
     const ids=new Set<string>();if(selectedShot){ids.add(`shot:${selectedShot.id}`);ids.add(`scene:${selectedShot.sceneId}`);const route=project?resolveWorkflow(project.settings.workflowProfiles,selectedShot):undefined;if(route)ids.add(`workflow:${route.id}`);}return ids;
@@ -121,10 +121,10 @@ export function Studio(){
   const resetLayout=()=>setPositions({});
   const fitAll=()=>{
     const el=viewportRef.current;if(!el)return;
-    const next=Math.max(.48,Math.min(1,Math.min((el.clientWidth-30)/graph.width,(el.clientHeight-30)/graph.height)));
+    const next=Math.max(.2,Math.min(1,Math.min((el.clientWidth-30)/graph.width,(el.clientHeight-30)/graph.height)));
     setZoom(next);requestAnimationFrame(()=>{el.scrollTo({left:0,top:0,behavior:'smooth'});});
   };
-  const changeZoom=(delta:number)=>setZoom(value=>Math.max(.48,Math.min(1.25,Math.round((value+delta)*100)/100)));
+  const changeZoom=(delta:number)=>setZoom(value=>Math.max(.2,Math.min(1.25,Math.round((value+delta)*100)/100)));
 
   const beginNodeDrag=(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>{
     if(locked||event.button!==0)return;
@@ -378,8 +378,9 @@ function isVisual(asset:Asset):boolean{return['image','reference','keyframe','ch
 function compact(value:string,max:number):string{const clean=value.replace(/\s+/g,' ').trim();return clean.length>max?`${clean.slice(0,max-1)}…`:clean;}
 function relativeOutput(root:string,path:string):string{const base=root.replace(/\\/g,'/').replace(/\/$/,'');const value=path.replace(/\\/g,'/');return value.startsWith(`${base}/`)?value.slice(base.length+1):value;}
 function resolveWorkflow(profiles:WorkflowProfile[],shot:Shot):WorkflowProfile|undefined{
-  const explicit=shot.generation.workflowProfileId?profiles.find(profile=>profile.id===shot.generation.workflowProfileId&&profile.enabled):undefined;
-  return explicit||profiles.find(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&profile.workflowPath);
+  const usable=(profile:WorkflowProfile)=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode;
+  const explicit=shot.generation.workflowProfileId?profiles.find(profile=>profile.id===shot.generation.workflowProfileId&&usable(profile)):undefined;
+  return explicit||profiles.find(usable);
 }
 function scrollToNode(id:string,nodes:Map<string,StudioNode>,viewport:HTMLDivElement|null,zoom:number):void{
   const node=nodes.get(id);if(!node||!viewport)return;
