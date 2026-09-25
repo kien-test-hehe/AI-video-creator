@@ -3,7 +3,7 @@ import type { WorkflowBinding,WorkflowBindingKey,WorkflowProfile } from '../../s
 import type { WorkflowValues } from './workflow-engine';
 
 const KEY_HINTS:Record<WorkflowBindingKey,string[]>={
-  prompt:['prompt','text_prompt','positive_prompt'],negativePrompt:['negative_prompt','negative'],width:['width'],height:['height'],frames:['frames','num_frames','frame_count','length'],fps:['fps','frame_rate'],steps:['steps','num_steps'],cfg:['cfg','guidance','guidance_scale'],seed:['seed'],
+  prompt:['prompt','text_prompt','positive_prompt'],negativePrompt:['negative_prompt','negative'],width:['width'],height:['height'],resolution:['resolution','size'],frames:['frames','num_frames','frame_count','length','video_length'],fps:['fps','frame_rate','force_fps'],steps:['steps','num_steps'],cfg:['cfg','guidance','guidance_scale'],seed:['seed'],
   startImage:['start_image','image_start','input_image'],endImage:['end_image','image_end','last_image'],locationImage:['location_image','scene_image'],
   characterImage1:['character_image_1','character1'],characterImage2:['character_image_2','character2'],characterImage3:['character_image_3','character3'],characterImage4:['character_image_4','character4'],
   propImage1:['prop_image_1','prop1'],propImage2:['prop_image_2','prop2'],referenceImage1:['reference_image_1','reference1','reference_image','image_reference'],referenceImage2:['reference_image_2','reference2'],referenceImage3:['reference_image_3','reference3'],referenceImage4:['reference_image_4','reference4'],
