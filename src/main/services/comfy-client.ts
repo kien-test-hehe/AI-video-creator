@@ -169,5 +169,6 @@ function queueState(queue:any,promptId:string):'running'|'pending'|'absent'{
 
 
 export function historyWasInterrupted(history:unknown):boolean{
-  try{return JSON.stringify(history).includes('"execution_interrupted"');}catch{return false;}
+  const messages=(history as any)?.status?.messages;
+  return Array.isArray(messages)&&messages.some((message:any)=>Array.isArray(message)&&message[0]==='execution_interrupted');
 }
