@@ -25,7 +25,7 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
       backend,
       url: new URL(machine.comfy.url).origin,
       runtimeVersion,
-      systemStats: ping.systemStats ?? null
+      stableSystem: stableComfySystem(ping.systemStats)
     });
     return { backend, runtimeVersion, environmentSha256 };
   }
@@ -87,4 +87,10 @@ function extractComfyVersion(stats: unknown): string {
 function objectKeySorter(_key: string, value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   return Object.fromEntries(Object.entries(value as Record<string,unknown>).sort(([a],[b])=>a.localeCompare(b)));
+}
+
+function stableComfySystem(stats:unknown):unknown{
+  const value=stats as any,system=value?.system??value??{};
+  const devices=Array.isArray(value?.devices)?value.devices.map((d:any)=>({name:d?.name,type:d?.type,index:d?.index,total_vram:d?.vram_total??d?.total_vram})):[];
+  return{os:system?.os,python_version:system?.python_version,pytorch_version:system?.pytorch_version,embedded_python:system?.embedded_python,comfyui_version:system?.comfyui_version??value?.comfyui_version,devices};
 }
