@@ -78,8 +78,9 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
 async function commandText(command:string,args:string[],timeout=10_000,full=false):Promise<string>{
   try {
     const { stdout, stderr } = await execFileAsync(command,args,{timeout,maxBuffer:8*1024*1024});
-    const text=`${stdout}\n${stderr}`.trim();
-    return full?text:(text.split(/\r?\n/).filter(Boolean)[0] || '');
+    const out=stdout.trim(),err=stderr.trim();
+    if(full)return out;
+    return (out||err).split(/\r?\n/).filter(Boolean)[0] || '';
   } catch { return ''; }
 }
 
