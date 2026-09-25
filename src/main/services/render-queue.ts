@@ -117,10 +117,16 @@ export class RenderQueueService extends EventEmitter {
         }else throw new Error('WanGP process is no longer running; wait for output finalization instead of marking the job cancelled.');
         this.cancelled.add(jobId);
       }else{
-        if(job.comfyPromptId){
-          const machine=this.settings.get(),client=new ComfyClient(machine.comfy.url,true);
-          try{await client.cancelPrompt(job.comfyPromptId);}
-          catch(error){throw new Error(`ComfyUI did not confirm cancellation for ${job.comfyPromptId}: ${error instanceof Error?error.message:String(error)}`);}
+        const machine=this.settings.get(),client=new ComfyClient(machine.comfy.url,true);
+        let promptId=job.comfyPromptId;
+        if(!promptId){
+          this.cancelled.add(jobId);
+          try{promptId=await this.waitForComfyPromptOrExit(jobId);}
+          catch(error){this.cancelled.delete(jobId);throw error;}
+        }
+        if(promptId){
+          try{await client.cancelPrompt(promptId);}
+          catch(error){this.cancelled.delete(jobId);throw new Error(`ComfyUI did not confirm cancellation for ${promptId}: ${error instanceof Error?error.message:String(error)}`);}
         }
         this.cancelled.add(jobId);
       }
@@ -221,6 +227,17 @@ export class RenderQueueService extends EventEmitter {
   private requireProject():FilmProject{const project=this.projects.getCurrent();if(!project)throw new Error('Open a project first.');return project;}
 
   private hasActiveJobForShot(shotId:string):boolean{return this.snapshot().jobs.some(j=>j.shotId===shotId&&ACTIVE.has(j.status));}
+
+  private async waitForComfyPromptOrExit(jobId:string,timeoutMs=35_000):Promise<string|undefined>{
+    const deadline=Date.now()+timeoutMs;
+    while(Date.now()<deadline){
+      const live=this.snapshot().jobs.find(job=>job.id===jobId);
+      if(live?.comfyPromptId)return live.comfyPromptId;
+      if(this.runningJobId!==jobId)return undefined;
+      await sleep(100);
+    }
+    throw new Error('ComfyUI submission is still unresolved; cancellation was not confirmed, so the GPU slot remains reserved.');
+  }
 
   private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile,machine:AppMachineSettings,knownRuntimeFingerprint?:RenderRuntimeFingerprint):Promise<RenderJob>{
     if(profile.validation?.structuralStatus!=='valid')throw new Error(`Profile “${profile.name}” must be validated in Settings before rendering.`);
@@ -445,6 +462,14 @@ export class RenderQueueService extends EventEmitter {
 
     const prompt=await compileProfile(profile,values);await this.verifyImmutableSpec(this.requireProject(),job);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
     await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to ComfyUI',comfyPromptId:queued.prompt_id,lastHeartbeatAt:new Date().toISOString()},true,true);
+    if(this.cancelled.has(job.id)){
+      try{await client.cancelPrompt(queued.prompt_id);}
+      catch(error){
+        this.cancelled.delete(job.id);
+        await this.updateJob(job.id,{status:'submitted',message:`Cancellation was not confirmed; render continues under the reserved GPU slot · ${error instanceof Error?error.message:String(error)}`},true,true);
+      }
+      if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
+    }
     let history:any;
     try{history=await waitForComfyCompletion(client,queued.prompt_id,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:'running',progress:.35,message:`ComfyUI · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});}
     catch(error){if(error instanceof Error&&/timed out/i.test(error.message))await client.interrupt().catch(()=>undefined);throw error;}
