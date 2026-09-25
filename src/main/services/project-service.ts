@@ -7,6 +7,7 @@ import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../sha
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject } from './project-schema';
 import { shotProjectRenderInputKey } from '../../shared/shot-signature';
+import { latestPassingVideoTake } from '../../shared/take-policy';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -193,7 +194,7 @@ export class ProjectService {
       project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId).sort((a,b)=>a.order-b.order).map((clip,index)=>({...clip,order:index}));
       const shot=project.shots.find(item=>item.id===output.shotId);
       if(shot?.latestRenderId===outputId){
-        const fallback=[...project.renderOutputs].filter(item=>item.shotId===shot.id&&item.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+        const fallback=latestPassingVideoTake(project.renderOutputs.filter(item=>item.shotId===shot.id));
         shot.latestRenderId=fallback?.id;
         if(!fallback&&shot.status==='rendered')shot.status='ready';
       }
