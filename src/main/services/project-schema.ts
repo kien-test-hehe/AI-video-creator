@@ -62,7 +62,6 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const shots = array(source.shots).slice(0,100_000).map(value => sanitizeShot(value, sceneIds, assetIds, assetKinds));
   const shotIds = new Set(shots.map(s=>s.id));
   const renderOutputs = array(source.renderOutputs).slice(0,100_000).map(value => sanitizeRenderOutput(value, shotIds));
-  const outputIds = new Set(renderOutputs.map(o=>o.id));
   const outputById = new Map(renderOutputs.map(output=>[output.id,output] as const));
   const renderJobs = array(source.renderJobs).slice(0,100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds, assetKinds));
   const jobIds=new Set(renderJobs.map(job=>job.id));
