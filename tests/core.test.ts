@@ -15,6 +15,7 @@ import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, shotKey
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
+import { selectRecoveryJob } from '../src/shared/recovery-policy';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -170,6 +171,18 @@ describe('active render project guards',()=>{
     const project={shots:[{id:'s1'}]} as unknown as FilmProject;
     expect(removedActiveRenderShotIds(project,jobs)).toEqual(['s3']);
     expect(removedActiveRenderShotIds({shots:[{id:'s1'},{id:'s3'}]} as unknown as FilmProject,jobs)).toEqual([]);
+  });
+});
+describe('signed journal recovery policy',()=>{
+  const job=(status:any,updatedAt:string)=>({id:'j',shotId:'s',createdAt:'2026-01-01T00:00:00.000Z',updatedAt,status,progress:0,message:'',modelFamily:'ltx-2.5-fast',outputs:[]}) as any;
+  it('uses a newer signed active state but never resurrects a newer terminal project state',()=>{
+    expect(selectRecoveryJob(job('queued','2026-01-01T00:00:01.000Z'),job('running','2026-01-01T00:00:02.000Z')).job.status).toBe('running');
+    const terminal=selectRecoveryJob(job('cancelled','2026-01-01T00:00:03.000Z'),job('running','2026-01-01T00:00:02.000Z'));
+    expect(terminal.job.status).toBe('cancelled');expect(terminal.signed).toBe(false);
+  });
+  it('persists a newer signed terminal state over a stale active project summary',()=>{
+    const selected=selectRecoveryJob(job('running','2026-01-01T00:00:01.000Z'),job('cancelled','2026-01-01T00:00:02.000Z'));
+    expect(selected.job.status).toBe('cancelled');expect(selected.signed).toBe(true);expect(selected.persistTerminal).toBe(true);
   });
 });
 describe('rendered take QC policy',()=>{
