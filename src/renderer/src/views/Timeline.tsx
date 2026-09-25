@@ -4,6 +4,7 @@ import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
 import { insertTimelineOutput, reorderTimeline } from '../studio-logic';
+import { takeUseConfirmationMessage } from '../take-policy';
 
 export function Timeline(){
   const{project,updateProject,setError,setNotice,setBusy}=useAppStore();
@@ -13,9 +14,8 @@ export function Timeline(){
   const videoOutputs=project.renderOutputs.filter(output=>output.mediaType==='video');
   const confirmTake=(outputId:string):boolean=>{
     const output=project.renderOutputs.find(item=>item.id===outputId);if(!output)return false;
-    if(output.technicalQc?.passed===false)return window.confirm(`This take failed technical QC:\n\n${output.technicalQc.issues.join('\n')||'Unknown QC failure'}\n\nUse it in the canonical timeline anyway?`);
-    if(!output.technicalQc)return window.confirm('This take has no technical QC record. Use it in the canonical timeline anyway?');
-    return true;
+    const message=takeUseConfirmationMessage(output,'timeline');
+    return !message||window.confirm(message);
   };
   const add=(outputId:string)=>{if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});};
   const remove=(id:string)=>updateProject(next=>{next.timeline=next.timeline.filter(clip=>clip.id!==id).map((clip,index)=>({...clip,order:index}));});
