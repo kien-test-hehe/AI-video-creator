@@ -9,7 +9,7 @@ import type {
 } from '../../shared/types';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
-import { ComfyClient } from './comfy-client';
+import { ComfyClient, promptQueueState } from './comfy-client';
 import { compileProfile, type WorkflowValues } from './workflow-engine';
 import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, isWanGpDockerRunning, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
@@ -211,7 +211,7 @@ export class RenderQueueService extends EventEmitter {
     let history=await client.history(job.comfyPromptId);
     if(!history){
       const queue=await client.queue();
-      if(!JSON.stringify(queue).includes(job.comfyPromptId))throw new Error('ComfyUI no longer has this prompt in history or queue.');
+      if(promptQueueState(queue,job.comfyPromptId)==='absent')throw new Error('ComfyUI no longer has this prompt in history or queue.');
       history=await waitForComfyCompletion(client,job.comfyPromptId,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:'recovering',message:`ComfyUI recovered · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});
     }
     await this.finalizeComfyHistory(project,job,client,history);
