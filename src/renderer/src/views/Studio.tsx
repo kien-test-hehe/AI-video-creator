@@ -327,12 +327,17 @@ function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioN
 }
 
 function StudioInspector({node,asset,project,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
-  if(asset)return <InspectorFrame kicker="ASSET" title={asset.name} action={()=>setView('assets')} actionLabel="Open Assets ↗">
-    {isVisual(asset)?<img className="studio-inspector-asset-preview" src={projectMediaUrl(asset.projectPath)} alt=""/>:<div className="studio-inspector-asset-glyph">{asset.kind==='audio'?'♪':'▶'}</div>}
-    <InspectorRows rows={[['Kind',asset.kind],['Project path',asset.projectPath],['Tags',asset.tags.join(', ')||'—'],['Created',new Date(asset.createdAt).toLocaleString()]]}/>
-    <div className="studio-inspector-section"><span className="eyebrow">CONTINUITY NOTES</span><p className="studio-inspector-copy">{asset.notes||'No continuity notes yet.'}</p></div>
-    <p className="muted">Drag this asset onto a shot node for automatic assignment, or onto a precise inspector slot to control its role.</p>
-  </InspectorFrame>;
+  if(asset){
+    const mutateAsset=(fn:(target:Asset)=>void)=>updateProject(next=>{const target=next.assets.find(item=>item.id===asset.id);if(target)fn(target);});
+    return <InspectorFrame kicker="ASSET" title={asset.name} action={()=>setView('assets')} actionLabel="Open Assets ↗">
+      {isVisual(asset)?<img className="studio-inspector-asset-preview" src={projectMediaUrl(asset.projectPath)} alt=""/>:<div className="studio-inspector-asset-glyph">{asset.kind==='audio'?'♪':'▶'}</div>}
+      <InspectorRows rows={[['Kind',asset.kind],['Project path',asset.projectPath],['Created',new Date(asset.createdAt).toLocaleString()]]}/>
+      <label>Name<input value={asset.name} onChange={event=>mutateAsset(target=>target.name=event.target.value)}/></label>
+      <label>Tags<input value={asset.tags.join(', ')} onChange={event=>mutateAsset(target=>target.tags=event.target.value.split(',').map(value=>value.trim()).filter(Boolean))} placeholder="hero, night, wardrobe-a"/></label>
+      <label>Continuity notes<textarea className="short" value={asset.notes} onChange={event=>mutateAsset(target=>target.notes=event.target.value)} placeholder="Identity, wardrobe, material, color, spatial rules…"/></label>
+      <p className="muted">Drag this asset onto a shot node for automatic assignment, or onto a precise inspector slot to control its role.</p>
+    </InspectorFrame>;
+  }
   if(!node)return <div className="studio-mini-empty">Select any pipeline node or asset to inspect it here.</div>;
   if(node.kind==='shot'&&shot)return <ShotInspector project={project} shot={shot} latestPath={latestPath} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>;
   if(node.kind==='workflow'){
