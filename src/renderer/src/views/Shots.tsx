@@ -30,14 +30,21 @@ export function Shots(){
   const dropAsset=(event:DragEvent<HTMLElement>,slot:'character'|'location'|'prop'|'start'|'end'|'video'|'audio')=>{
     event.preventDefault();if(!selected)return;
     const assetId=event.dataTransfer.getData('application/x-cineforge-asset');const asset=project.assets.find(a=>a.id===assetId);if(!asset)return;
+    const allowed=slot==='character'?asset.kind==='character':
+      slot==='location'?asset.kind==='location':
+      slot==='prop'?['prop','wardrobe','reference'].includes(asset.kind):
+      slot==='start'?['image','reference','keyframe','character','location'].includes(asset.kind):
+      slot==='end'?['image','reference','keyframe'].includes(asset.kind):
+      slot==='video'?asset.kind==='video':asset.kind==='audio';
+    if(!allowed){setError(`${asset.name} (${asset.kind}) cannot be dropped into ${slot}.`);return;}
     mutate(s=>{
-      if(slot==='character'){if(asset.kind!=='character')throw new Error('Only character assets can be dropped here.');if(!s.characterAssetIds.includes(asset.id)&&s.characterAssetIds.length<4)s.characterAssetIds.push(asset.id);}
-      else if(slot==='location'){if(asset.kind!=='location')throw new Error('Only location assets can be dropped here.');s.locationAssetId=asset.id;}
-      else if(slot==='prop'){if(!['prop','wardrobe','reference'].includes(asset.kind))throw new Error('Drop a prop, wardrobe or reference asset here.');if(!s.propAssetIds.includes(asset.id)&&s.propAssetIds.length<2)s.propAssetIds.push(asset.id);}
-      else if(slot==='start'){if(!['image','reference','keyframe','character','location'].includes(asset.kind))throw new Error('This asset cannot be used as a start frame.');s.startFrameAssetId=asset.id;}
-      else if(slot==='end'){if(!['image','reference','keyframe'].includes(asset.kind))throw new Error('This asset cannot be used as an end frame.');s.endFrameAssetId=asset.id;}
-      else if(slot==='video'){if(asset.kind!=='video')throw new Error('Only video assets can be dropped here.');s.referenceVideoAssetId=asset.id;}
-      else if(slot==='audio'){if(asset.kind!=='audio')throw new Error('Only audio assets can be dropped here.');s.audioAssetId=asset.id;}
+      if(slot==='character'){if(!s.characterAssetIds.includes(asset.id)&&s.characterAssetIds.length<4)s.characterAssetIds.push(asset.id);}
+      else if(slot==='location')s.locationAssetId=asset.id;
+      else if(slot==='prop'){if(!s.propAssetIds.includes(asset.id)&&s.propAssetIds.length<2)s.propAssetIds.push(asset.id);}
+      else if(slot==='start')s.startFrameAssetId=asset.id;
+      else if(slot==='end')s.endFrameAssetId=asset.id;
+      else if(slot==='video')s.referenceVideoAssetId=asset.id;
+      else if(slot==='audio')s.audioAssetId=asset.id;
     });
   };
   const startAsset=selected?.startFrameAssetId?project.assets.find(a=>a.id===selected.startFrameAssetId):undefined;const endAsset=selected?.endFrameAssetId?project.assets.find(a=>a.id===selected.endFrameAssetId):undefined;const latest=selected?.latestRenderId?project.renderOutputs.find(o=>o.id===selected.latestRenderId):undefined;const takes=selected?[...project.renderOutputs].filter(o=>o.shotId===selected.id&&o.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt)):[];const matchingProfiles=selected?project.settings.workflowProfiles.filter(p=>p.enabled&&(p.purpose??'video')==='video'&&p.modelFamily===selected.generation.modelFamily&&p.mode===selected.generation.mode&&p.workflowPath):[];
