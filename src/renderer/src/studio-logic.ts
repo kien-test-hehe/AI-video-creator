@@ -25,12 +25,23 @@ export function routeShotToWorkflow(shot:Shot,profile:WorkflowProfile):WorkflowR
 
 
 export function resolveStudioWorkflow(profiles:WorkflowProfile[],shot:Shot):WorkflowProfile|undefined{
-  const usable=(profile:WorkflowProfile)=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode;
-  const explicit=shot.generation.workflowProfileId?profiles.find(profile=>profile.id===shot.generation.workflowProfileId&&usable(profile)):undefined;
-  if(explicit)return explicit;
-  const candidates=profiles.filter(usable);
+  if(shot.generation.workflowProfileId)return profiles.find(profile=>profile.id===shot.generation.workflowProfileId);
+  const candidates=profiles.filter(profile=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode);
   return candidates.find(profile=>profile.validation?.structuralStatus==='valid')||candidates[0];
 }
+
+export function studioWorkflowIssue(profile:WorkflowProfile|undefined,shot:Shot):string|undefined{
+  if(!profile)return'No matching video workflow.';
+  if(!profile.enabled)return`${profile.name} is disabled.`;
+  if(!profile.workflowPath)return`${profile.name} has no workflow/settings file.`;
+  if((profile.purpose??'video')!=='video')return`${profile.name} is not a video workflow.`;
+  if(profile.modelFamily!==shot.generation.modelFamily)return`${profile.name} targets ${profile.modelFamily}, but this shot is ${shot.generation.modelFamily}.`;
+  if(profile.mode!==shot.generation.mode)return`${profile.name} is ${profile.mode}, but this shot is ${shot.generation.mode}.`;
+  if(profile.validation?.structuralStatus!=='valid')return`${profile.name} is ${profile.validation?.structuralStatus||'unvalidated'}.`;
+  return undefined;
+}
+
+export function isStudioWorkflowReady(profile:WorkflowProfile|undefined,shot:Shot):boolean{return !studioWorkflowIssue(profile,shot);}
 
 export function reorderTimeline(project:FilmProject,sourceId:string,targetId:string):boolean{
   if(sourceId===targetId)return false;
