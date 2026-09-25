@@ -7,7 +7,7 @@ const KEY_HINTS:Record<WorkflowBindingKey,string[]>={
   startImage:['start_image','image_start','input_image'],endImage:['end_image','image_end','last_image'],locationImage:['location_image','scene_image'],
   characterImage1:['character_image_1','character1'],characterImage2:['character_image_2','character2'],characterImage3:['character_image_3','character3'],characterImage4:['character_image_4','character4'],
   propImage1:['prop_image_1','prop1'],propImage2:['prop_image_2','prop2'],referenceImages:['image_refs','reference_images'],referenceImage1:['reference_image_1','reference1','reference_image','image_reference'],referenceImage2:['reference_image_2','reference2'],referenceImage3:['reference_image_3','reference3'],referenceImage4:['reference_image_4','reference4'],
-  inputAudio:['input_audio','audio_path'],inputVideo:['input_video','video_path'],filenamePrefix:['filename_prefix','output_prefix']
+  inputAudio:['audio_guide','input_audio','audio_path'],inputVideo:['video_guide','input_video','video_path'],filenamePrefix:['filename_prefix','output_prefix']
 };
 
 function transformValue(value:unknown,transform:WorkflowBinding['transform']):unknown{switch(transform){case'integer':return Math.round(Number(value));case'float':return Number(value);case'boolean':return Boolean(value);case'string':return value==null?'':String(value);default:return value;}}
