@@ -15,7 +15,7 @@ import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, isWanGpDockerRunning, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
 import { routeWorkflow } from './model-router';
 import { collectComfyHistoryOutputRefs, inferMediaType } from './comfy-output';
-import { waitForComfyCompletion } from './comfy-runner';
+import { waitForComfyCompletion, waitForComfyPromptRelease } from './comfy-runner';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
@@ -192,7 +192,7 @@ export class RenderQueueService extends EventEmitter {
     }catch(error){
       if(this.cancelled.has(jobId))await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled',error:undefined},true,true);
       else{
-        if(recoveredJob)await this.cleanupRejectedRecovery(recoveredJob).catch(()=>undefined);
+        if(recoveredJob)await this.cleanupRejectedRecovery(recoveredJob);
         await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
       }
     }finally{
@@ -204,11 +204,22 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async cleanupRejectedRecovery(job:RenderJob):Promise<void>{
-    const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
-    if(runtime!=='wangp')return;
-    const machine=this.settings.get();
-    if(machine.wangp.executionMode==='docker'){await stopWanGpDocker(machine,job.id);return;}
-    if(job.backendPid&&isProcessAlive(job.backendPid)&&await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))await killProcessTree(job.backendPid);
+    const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),machine=this.settings.get();
+    if(runtime==='comfyui'){
+      if(!job.comfyPromptId)return;
+      const client=new ComfyClient(machine.comfy.url,true);
+      try{await this.confirmComfyCancellation(job.id,client,job.comfyPromptId);}
+      catch{await waitForComfyPromptRelease(client,job.comfyPromptId,{onTick:message=>this.updateJob(job.id,{status:'stalled',message},false).catch(()=>undefined)});}
+      return;
+    }
+    if(machine.wangp.executionMode==='docker'){
+      while(await isWanGpDockerRunning(machine,job.id)){try{await stopWanGpDocker(machine,job.id);}catch{await sleep(2000);}}
+      return;
+    }
+    if(job.backendPid&&isProcessAlive(job.backendPid)){
+      if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))return;
+      while(isProcessAlive(job.backendPid)){try{await killProcessTree(job.backendPid);}catch{await sleep(2000);}}
+    }
   }
 
   private async recoverWanGp(project:FilmProject,job:RenderJob):Promise<void>{
@@ -270,15 +281,20 @@ export class RenderQueueService extends EventEmitter {
 
   private async waitForComfyWithSafeTimeout(client:ComfyClient,job:RenderJob,promptId:string,recovering:boolean):Promise<any>{
     try{
-      return await waitForComfyCompletion(client,promptId,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:recovering?'recovering':'running',progress:recovering?Math.max(job.progress,.35):.35,message:`${recovering?'ComfyUI recovered':'ComfyUI'} · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});
+      return await waitForComfyCompletion(client,promptId,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:recovering?'recovering':'running',progress:recovering?Math.max(job.progress,.35):.35,message:`${recovering?'ComfyUI recovered':'ComfyUI'} · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false).catch(error=>console.warn('Comfy progress journal update failed; retaining GPU ownership.',error))});
     }catch(error){
-      if(!(error instanceof Error)||!/timed out/i.test(error.message))throw error;
-      try{await this.confirmComfyCancellation(job.id,client,promptId);}
-      catch(cancelError){
-        await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timed out; cancellation is unconfirmed, so the GPU slot remains reserved · ${cancelError instanceof Error?cancelError.message:String(cancelError)}`,lastHeartbeatAt:new Date().toISOString()},true,true);
-        return this.waitForComfyResolutionAfterTimeout(client,job,promptId);
+      if(this.cancelled.has(job.id))throw error;
+      if(error instanceof Error&&/timed out/i.test(error.message)){
+        try{await this.confirmComfyCancellation(job.id,client,promptId);}
+        catch(cancelError){
+          await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timed out; cancellation is unconfirmed, so the GPU slot remains reserved · ${cancelError instanceof Error?cancelError.message:String(cancelError)}`,lastHeartbeatAt:new Date().toISOString()},true,true).catch(()=>undefined);
+          return this.waitForComfyResolutionAfterTimeout(client,job,promptId);
+        }
+        throw new Error(`${error.message} Backend cancellation was confirmed.`);
       }
-      throw new Error(`${error.message} Backend cancellation was confirmed.`);
+      await this.updateJob(job.id,{status:'stalled',message:`ComfyUI polling failed; GPU slot remains reserved until backend release · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
+      await waitForComfyPromptRelease(client,promptId,{onTick:message=>this.updateJob(job.id,{status:'stalled',message},false).catch(()=>undefined)});
+      throw error;
     }
   }
 
@@ -288,7 +304,7 @@ export class RenderQueueService extends EventEmitter {
       let history:any|null;
       try{history=await client.history(promptId);}
       catch(error){
-        await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timeout recovery cannot read history; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false);
+        await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timeout recovery cannot read history; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
         await sleep(5000);continue;
       }
       if(history){
@@ -299,11 +315,11 @@ export class RenderQueueService extends EventEmitter {
       let state:'running'|'pending'|'absent';
       try{state=promptQueueState(await client.queue(),promptId);}
       catch(error){
-        await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timeout recovery cannot read queue state; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false);
+        await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timeout recovery cannot read queue state; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
         await sleep(5000);continue;
       }
       if(state==='absent')throw new Error('ComfyUI prompt disappeared after timeout without terminal history; backend no longer owns the GPU slot.');
-      await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timed out but prompt is still ${state}; GPU slot remains reserved`,lastHeartbeatAt:new Date().toISOString()},false);
+      await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timed out but prompt is still ${state}; GPU slot remains reserved`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
       await sleep(5000);
     }
   }
