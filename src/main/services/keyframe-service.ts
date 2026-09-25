@@ -115,10 +115,10 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
   }
   throwIfAborted(signal);
   const workflow=await compileProfile(profile,values);const queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role}});
-  const onAbort=()=>{void client.interrupt().catch(()=>undefined);};signal?.addEventListener('abort',onAbort,{once:true});
+  const onAbort=()=>{void client.cancelPrompt(queued.prompt_id).catch(()=>undefined);};signal?.addEventListener('abort',onAbort,{once:true});
   let history:any;
   try{history=await waitForComfyCompletion(client,queued.prompt_id,{timeoutMs:60*60_000,cancelled:()=>Boolean(signal?.aborted)});throwIfAborted(signal);}
-  catch(error){if(signal?.aborted){await client.interrupt().catch(()=>undefined);throw new Error('Keyframe generation cancelled.');}throw error;}
+  catch(error){if(signal?.aborted){try{await client.cancelPrompt(queued.prompt_id);}catch(cancelError){throw new Error(`Keyframe cancellation was requested but ComfyUI did not confirm it: ${cancelError instanceof Error?cancelError.message:String(cancelError)}`);}throw new Error('Keyframe generation cancelled.');}throw error;}
   finally{signal?.removeEventListener('abort',onAbort);}
   const refs=uniqueComfyFileRefs(collectComfyFileRefs(history?.outputs||history));const imageRef=refs.find(r=>inferMediaType(r.filename)==='image');if(!imageRef)throw new Error('Image workflow completed but returned no image output.');
   const bytes=await client.download(imageRef),durable=join(project.rootPath,'cache','keyframe-stage',`${randomUUID()}${extname(imageRef.filename)||'.png'}`);await mkdir(join(project.rootPath,'cache','keyframe-stage'),{recursive:true});await writeFile(durable,bytes);return durable;
