@@ -109,6 +109,16 @@
         }
       ],
       "category": "AudioVideo"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "scripts/wangp_bridge.py",
+        "to": "scripts/wangp_bridge.py"
+      },
+      {
+        "from": "runtime/WANGP_PIN.txt",
+        "to": "runtime/WANGP_PIN.txt"
+      }
+    ]
   }
 }
