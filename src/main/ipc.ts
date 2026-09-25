@@ -57,17 +57,18 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   const assertWorkflowMaintenanceAvailable=()=>{assertProjectStable();if(activeExportAbortController||queue.isBusy()||keyframeBusy||directorBusy)throw new Error('Finish or cancel active timeline export, render, keyframe, or Director work before validating or provisioning workflow profiles.');};
   const withWorkflowValidationLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{if(workflowValidationBusy)throw new Error('A workflow validation/provisioning task is already running.');workflowValidationBusy=true;try{return await operation();}finally{workflowValidationBusy=false;}};
   const withProjectSwitchLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{assertProjectSwitchAllowed();projectSwitchBusy=true;try{return await operation();}finally{projectSwitchBusy=false;}};
+  const runPostSwitchStep=async(operation:()=>Promise<unknown>):Promise<string|undefined>=>{try{await operation();return undefined;}catch(error){const message=error instanceof Error?error.message:String(error);console.warn('Post-switch project task failed:',message);return message;}};
 
   handle(IPC.projectCreate, (name?: string) => withProjectSwitchLock(async()=>{
     const created=await projects.createWithDialog(name);
-    if(created)await withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings));
+    if(created){const warning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(warning)console.warn('WanGP auto-provision warning:',warning);}
     return projects.getCurrent();
   }));
   handle(IPC.projectOpen, () => withProjectSwitchLock(async()=>{
     const opened = await projects.openWithDialog();
     if (opened) {
-      await withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings));
-      await queue.reconcileAfterProjectOpen();
+      const provisionWarning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(provisionWarning)console.warn('WanGP auto-provision warning:',provisionWarning);
+      const recoveryWarning=await runPostSwitchStep(()=>queue.reconcileAfterProjectOpen());if(recoveryWarning)console.warn('Render recovery warning:',recoveryWarning);
     }
     return projects.getCurrent();
   }));
