@@ -337,6 +337,7 @@ function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioN
 }
 
 function StudioInspector({node,asset,project,probe,preflightReport,preflightFresh,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;probe?:SystemProbe;preflightReport?:PreflightReport;preflightFresh:boolean;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
+  const{setProject,setNotice}=useAppStore();
   if(asset){
     const mutateAsset=(fn:(target:Asset)=>void)=>updateProject(next=>{const target=next.assets.find(item=>item.id===asset.id);if(target)fn(target);});
     return <InspectorFrame kicker="ASSET" title={asset.name} action={()=>setView('assets')} actionLabel="Open Assets ↗">
@@ -345,6 +346,7 @@ function StudioInspector({node,asset,project,probe,preflightReport,preflightFres
       <label>Name<input value={asset.name} onChange={event=>mutateAsset(target=>target.name=event.target.value)}/></label>
       <label>Tags<input value={asset.tags.join(', ')} onChange={event=>mutateAsset(target=>target.tags=event.target.value.split(',').map(value=>value.trim()).filter(Boolean))} placeholder="hero, night, wardrobe-a"/></label>
       <label>Continuity notes<textarea className="short" value={asset.notes} onChange={event=>mutateAsset(target=>target.notes=event.target.value)} placeholder="Identity, wardrobe, material, color, spatial rules…"/></label>
+      <button className="ghost danger" onClick={async()=>{if(!window.confirm(`Delete “${asset.name}” from this project and clear all shot references to it?`))return;try{await useAppStore.getState().persist();setProject(await window.cineforge.asset.delete(asset.id));setNotice(`Deleted asset: ${asset.name}`);}catch(error){setError(error instanceof Error?error.message:String(error));}}}>Delete asset</button>
       <p className="muted">Drag this asset onto a shot node for automatic assignment, or onto a precise inspector slot to control its role.</p>
     </InspectorFrame>;
   }
