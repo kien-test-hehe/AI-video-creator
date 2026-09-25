@@ -40,3 +40,13 @@ export function reorderTimeline(project:FilmProject,sourceId:string,targetId:str
   const[moved]=ordered.splice(from,1);ordered.splice(to,0,moved);ordered.forEach((clip,index)=>clip.order=index);project.timeline=ordered;
   return true;
 }
+
+export function insertTimelineOutput(project:FilmProject,outputId:string,beforeClipId?:string):boolean{
+  const output=project.renderOutputs.find(item=>item.id===outputId&&item.mediaType==='video');if(!output)return false;
+  if(!project.shots.some(shot=>shot.id===output.shotId))return false;
+  const ordered=[...project.timeline].sort((a,b)=>a.order-b.order);
+  const target=beforeClipId?ordered.findIndex(clip=>clip.id===beforeClipId):ordered.length;
+  const index=target<0?ordered.length:target;
+  ordered.splice(index,0,{id:crypto.randomUUID(),shotId:output.shotId,renderOutputId:output.id,track:0,order:index,trimInSec:0,volume:1});
+  ordered.forEach((clip,order)=>clip.order=order);project.timeline=ordered;return true;
+}
