@@ -17,6 +17,7 @@ let queue: RenderQueueService;
 let machineSettings: AppSettingsService;
 let mainWindow: BrowserWindow | null = null;
 let ipcRegistered = false;
+let trustedRendererUrl = '';
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -35,11 +36,11 @@ function createWindow(): void {
       webviewTag: false
     }
   });
-  lockDownWebContents(mainWindow.webContents);
+  lockDownWebContents(mainWindow.webContents,trustedRendererUrl);
   mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
 
-  if (process.env.ELECTRON_RENDERER_URL) void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+  if(process.env.ELECTRON_RENDERER_URL)void mainWindow.loadURL(trustedRendererUrl);
+  else void mainWindow.loadFile(join(__dirname,'../renderer/index.html'));
 }
 
 function registerMediaProtocol(): void {
@@ -59,6 +60,7 @@ function registerMediaProtocol(): void {
 }
 
 app.whenReady().then(async () => {
+  trustedRendererUrl=process.env.ELECTRON_RENDERER_URL||pathToFileURL(join(__dirname,'../renderer/index.html')).toString();
   machineSettings = new AppSettingsService(app.getPath('userData'));
   await machineSettings.load();
   projects = new ProjectService();
@@ -69,7 +71,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler(() => false);
 
   if (!ipcRegistered) {
-    registerIpc(projects, queue, machineSettings);
+    registerIpc(projects, queue, machineSettings,trustedRendererUrl);
     ipcRegistered = true;
   }
   createWindow();
