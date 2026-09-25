@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadPortableProject } from '../src/main/services/project-schema';
-import { assertExistingPathInside } from '../src/main/services/path-safety';
+import { assertExistingPathInside, assertExistingProjectMediaPath } from '../src/main/services/path-safety';
 import { analyzeWanGpBindings } from '../src/main/services/wangp-engine';
 import { profileCompatibilityErrors } from '../src/main/services/profile-validation';
 import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
@@ -92,6 +92,21 @@ describe('canonical filesystem containment',()=>{
   });
 });
 
+
+describe('project media protocol scope',()=>{
+  it('serves only files below assets/ or renders/ and blocks project internals',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-media-'));
+    try{
+      await mkdir(join(root,'assets'),{recursive:true});await mkdir(join(root,'renders'),{recursive:true});await mkdir(join(root,'.cineforge'),{recursive:true});
+      await writeFile(join(root,'assets','a.png'),'a');await writeFile(join(root,'renders','r.mp4'),'r');await writeFile(join(root,'.cineforge','jobs.json'),'secret');await writeFile(join(root,'cineforge.project.json'),'{}');
+      await expect(assertExistingProjectMediaPath(root,'assets/a.png')).resolves.toContain('a.png');
+      await expect(assertExistingProjectMediaPath(root,'renders/r.mp4')).resolves.toContain('r.mp4');
+      await expect(assertExistingProjectMediaPath(root,'.cineforge/jobs.json')).rejects.toThrow(/non-media/i);
+      await expect(assertExistingProjectMediaPath(root,'cineforge.project.json')).rejects.toThrow(/non-media/i);
+      await expect(assertExistingProjectMediaPath(root,'assets/../cineforge.project.json')).rejects.toThrow();
+    }finally{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));}
+  });
+});
 
 describe('renderer navigation trust',()=>{
   it('accepts only the exact packaged renderer file in production mode',()=>{
