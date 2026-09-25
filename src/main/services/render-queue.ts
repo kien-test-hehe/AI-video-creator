@@ -25,6 +25,7 @@ import { isExpectedProcess, isProcessAlive, killProcessTree } from './process-ut
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
 import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { selectRecoveryJob } from '../../shared/recovery-policy';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -142,12 +143,21 @@ export class RenderQueueService extends EventEmitter {
     this.pending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
     const project=this.projects.getCurrent();if(!project)return;
     const journals=await this.journal.readAll(project.rootPath);const byId=new Map(journals.map(j=>[j.id,j]));
-    const jobs=project.renderJobs.map(j=>byId.get(j.id)??j).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
+    const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id))).sort((a,b)=>a.job.createdAt.localeCompare(b.job.createdAt));
     let recoveryStarted=false;
-    for(const job of jobs){
-      const signed=byId.has(job.id);
+    for(const selection of selections){
+      const job=selection.job,signed=selection.signed;
       this.liveJobs.set(job.id,structuredClone(job));
-      if(TERMINAL.has(job.status))continue;
+      if(TERMINAL.has(job.status)){
+        if(selection.persistTerminal){
+          await this.projects.mutate(p=>{
+            const target=p.renderJobs.find(item=>item.id===job.id);if(target)Object.assign(target,structuredClone(job));
+            const shot=p.shots.find(item=>item.id===job.shotId);
+            if(shot&&['queued','rendering'].includes(shot.status))shot.status=shot.latestRenderId?'rendered':job.status==='failed'?'failed':'ready';
+          });
+        }
+        continue;
+      }
       if(!signed){
         await this.updateJob(job.id,{status:'orphaned',progress:0,message:'Untrusted runtime state was not resumed',error:'No valid installation-signed job journal exists for this active job. Queue a new render explicitly.'},true,false);
         continue;
