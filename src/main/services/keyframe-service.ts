@@ -50,9 +50,9 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   else generatedPath=await generateWithComfy(project,machine,profile,values,shot,request.role);
 
   const current=projects.getCurrent();
-  if(!current||current.id!==project.id||current.rootPath!==project.rootPath){
+  if(!current||current.id!==project.id||current.rootPath!==project.rootPath||!current.shots.some(item=>item.id===shot.id)){
     await rm(generatedPath,{force:true}).catch(()=>undefined);
-    throw new Error('The open project changed while the keyframe was generating. The generated staging file was discarded safely.');
+    throw new Error('The project or target shot changed while the keyframe was generating. The generated staging file was discarded safely.');
   }
   const assetId=randomUUID(),extension=extname(generatedPath)||'.png',relativePath=join('assets','keyframe',`${shot.id}-${request.role}-${assetId}${extension}`);
   const target=await assertSafeWritePath(join(project.rootPath,'assets'),join(project.rootPath,relativePath),'generated keyframe');
