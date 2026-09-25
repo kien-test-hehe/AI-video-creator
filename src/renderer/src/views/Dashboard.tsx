@@ -21,7 +21,8 @@ export function Dashboard(){
     if(!project)return;
     try{
       await useAppStore.getState().persist();
-      const checked=await window.cineforge.project.preflight();setReport(checked);setProbe(checked.probe);
+      const checked=await window.cineforge.project.preflight();
+      setReport(checked);setProbe(checked.probe);
       if(!checked.ready){setError('Preflight has blocking errors. Fix them before batch rendering.');return;}
       const ordered=[...project.shots].sort((a,b)=>{
         const sa=project.scenes.find(s=>s.id===a.sceneId)?.index??0;
@@ -37,18 +38,18 @@ export function Dashboard(){
   return <Page title="Production overview" subtitle="Codex reads the machine profile, local AI renders within the detected hardware budget, and CapCut finishes." actions={<div className="row"><button className="ghost" onClick={runProbe}>Probe system</button><button className="ghost" disabled={!project||checking||project.shots.length===0} onClick={preflight}>{checking?'Checking…':'Run preflight'}</button><button className="primary" disabled={!project||checking||project.shots.length===0} onClick={queueUnrendered}>Render unrendered</button></div>}>
     {!project?<Empty>Create or open a project to start.</Empty>:<>
       <div className="metric-grid">
-        <Card kicker="STORY" title={${project.scenes.length} scenes}><strong className="metric">{project.shots.length}</strong><span>shots planned</span></Card>
-        <Card kicker="ASSETS" title={${project.assets.length} references}><strong className="metric">{project.assets.filter(a=>a.kind==='character').length}</strong><span>characters</span></Card>
-        <Card kicker="RENDERS" title={${project.renderOutputs.length} outputs}><strong className="metric">{project.renderJobs.filter(j=>j.status==='done').length}</strong><span>completed jobs</span></Card>
+        <Card kicker="STORY" title={String(project.scenes.length)+' scenes'}><strong className="metric">{project.shots.length}</strong><span>shots planned</span></Card>
+        <Card kicker="ASSETS" title={String(project.assets.length)+' references'}><strong className="metric">{project.assets.filter(a=>a.kind==='character').length}</strong><span>characters</span></Card>
+        <Card kicker="RENDERS" title={String(project.renderOutputs.length)+' outputs'}><strong className="metric">{project.renderJobs.filter(j=>j.status==='done').length}</strong><span>completed jobs</span></Card>
         <Card kicker="PREFLIGHT" title={report?(report.ready?'Ready to render':'Needs attention'):'Not checked'}><strong className="metric">{report?.issues.filter(i=>i.level==='error').length??'—'}</strong><span>blocking issues</span></Card>
       </div>
       <div className="grid two">
         <Card title="Local workstation" kicker="SYSTEM" actions={probe?.codexContextPath?<button className="ghost" onClick={()=>window.cineforge.system.reveal(probe.codexContextPath!)}>Codex context ↗</button>:undefined}>
           <div className="status-list">
-            <div><span>CPU</span><strong>{probe?.cpu?${probe.cpu.model} · ${probe.cpu.physicalCores??'?'}C/${probe.cpu.logicalCores}T:'—'}</strong></div>
-            <div><span>RAM</span><strong>{probe?.memory?${(probe.memory.totalMb/1024).toFixed(1)} GB · ${(probe.memory.freeMb/1024).toFixed(1)} GB free:'—'}</strong></div>
+            <div><span>CPU</span><strong>{probe?.cpu?(probe.cpu.model+' · '+String(probe.cpu.physicalCores??'?')+'C/'+probe.cpu.logicalCores+'T'):'—'}</strong></div>
+            <div><span>RAM</span><strong>{probe?.memory?((probe.memory.totalMb/1024).toFixed(1)+' GB · '+(probe.memory.freeMb/1024).toFixed(1)+' GB free'):'—'}</strong></div>
             <div><span>GPU</span><strong>{probe?.gpu?.name||'Not detected'}</strong></div>
-            <div><span>VRAM</span><strong>{probe?.gpu?.totalVramMb?${(probe.gpu.totalVramMb/1024).toFixed(1)} GB · ${((probe.gpu.freeVramMb||0)/1024).toFixed(1)} GB free:'—'}</strong></div>
+            <div><span>VRAM</span><strong>{probe?.gpu?.totalVramMb?((probe.gpu.totalVramMb/1024).toFixed(1)+' GB · '+((probe.gpu.freeVramMb||0)/1024).toFixed(1)+' GB free'):'—'}</strong></div>
             <div><span>NVIDIA driver / CUDA</span><strong>{probe?.gpu?.driver||'—'} / {probe?.gpu?.cudaVersion||'—'}</strong></div>
             <div><span>Hardware tier</span><Pill>{probe?.hardwarePlan.tier||'unknown'}</Pill></div>
             <div><span>WanGP production</span><Pill>{probe?.wangp.available?'Ready':probe?.wangp.configured?'Error':'Not configured'}</Pill></div>
@@ -69,7 +70,7 @@ export function Dashboard(){
           </div>
         </Card>
       </div>
-      {report&&<Card title="Preflight report" kicker={report.ready?'READY':'CHECKS'}>{report.issues.length===0?<div className="preflight-ok">No issues found.</div>:<div className="issue-list">{report.issues.map((issue,i)=><div key={${issue.code}-${i}} className={`issue ${${issue.level}}><Pill>{issue.level}</Pill><code>{issue.code}</code><span>{issue.message}</span></div>)}</div>}</Card>}
+      {report&&<Card title="Preflight report" kicker={report.ready?'READY':'CHECKS'}>{report.issues.length===0?<div className="preflight-ok">No issues found.</div>:<div className="issue-list">{report.issues.map((issue,i)=><div key={issue.code+'-'+i} className={'issue '+issue.level}><Pill>{issue.level}</Pill><code>{issue.code}</code><span>{issue.message}</span></div>)}</div>}</Card>}
     </>}
   </Page>;
 }
