@@ -35,7 +35,7 @@ export interface CineforgeApi {
     snapshot(): Promise<QueueSnapshot>;
     onQueueEvent(handler: (snapshot: QueueSnapshot) => void): () => void;
   };
-  timeline: { export(): Promise<{ outputPath: string } | null>; };
+  timeline: { export(): Promise<{ outputPath: string } | null>; cancelExport(): Promise<void>; };
   director: {
     planScene(sceneId: string): Promise<DirectorShotDraft[]>;
     reviewShot(shotId: string): Promise<ContinuityReview>;
