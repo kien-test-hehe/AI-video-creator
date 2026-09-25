@@ -7,6 +7,7 @@ import { chooseModelForShot } from '../src/shared/routing';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import type { Asset, Shot } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
+import { reorderTimeline, routeShotToWorkflow } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -34,6 +35,17 @@ describe('drag-drop asset assignment',()=>{
    expect(autoAssignAssetToShot(shot,asset('end','image')).role).toBe('end frame');
    expect(autoAssignAssetToShot(shot,asset('extra','image')).ok).toBe(false);
    expect(shot.status).toBe('ready');
+ });
+});
+describe('Studio workflow routing and timeline drag',()=>{
+ it('routes a shot through an enabled profile without losing shot intent fields',()=>{
+   const shot:Shot={id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],status:'draft',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'hero',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:99,negativePrompt:'keep me',includeAudio:true}};
+   const result=routeShotToWorkflow(shot,{id:'wf',runtime:'wangp',purpose:'video',name:'Wan motion',modelFamily:'wan-2.2-5b',mode:'i2v',workflowPath:'workflows/wan.json',workflowFormat:'wangp-settings',bindings:[],enabled:true});
+   expect(result.ok).toBe(true);expect(shot.generation.workflowProfileId).toBe('wf');expect(shot.generation.modelFamily).toBe('wan-2.2-5b');expect(shot.generation.seed).toBe(99);expect(shot.generation.negativePrompt).toBe('keep me');expect(shot.generation.quality).toBe('hero');expect(shot.status).toBe('ready');
+ });
+ it('reorders canonical timeline clips by drag target',()=>{
+   const project={timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},{id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},{id:'c',shotId:'s3',renderOutputId:'o3',track:0,order:2,trimInSec:0,volume:1}]} as any;
+   expect(reorderTimeline(project,'c','a')).toBe(true);expect(project.timeline.map((clip:any)=>clip.id)).toEqual(['c','a','b']);expect(project.timeline.map((clip:any)=>clip.order)).toEqual([0,1,2]);
  });
 });
 describe('hardware advisor',()=>{
