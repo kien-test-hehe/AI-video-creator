@@ -8,6 +8,7 @@ export interface WorkflowValues {
   negativePrompt: string;
   width: number;
   height: number;
+  resolution: string;
   frames: number;
   fps: number;
   steps?: number;
@@ -91,8 +92,9 @@ const INPUT_NAME_HINTS: Record<WorkflowBindingKey, string[]> = {
   negativePrompt: ['negative_prompt', 'negative', 'text'],
   width: ['width'],
   height: ['height'],
-  frames: ['length', 'frames', 'frame_count', 'num_frames'],
-  fps: ['fps', 'frame_rate'],
+  resolution: ['resolution', 'size'],
+  frames: ['length', 'frames', 'frame_count', 'num_frames', 'video_length'],
+  fps: ['fps', 'frame_rate', 'force_fps'],
   steps: ['steps', 'num_steps'],
   cfg: ['cfg', 'guidance', 'guidance_scale'],
   seed: ['seed', 'noise_seed'],
