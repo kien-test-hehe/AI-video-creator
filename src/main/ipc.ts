@@ -60,6 +60,10 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     return preflightProject(project, settings.get());
   });
   handle(IPC.assetImport, (kind: AssetKind) => projects.importAsset(kind));
+  handle(IPC.assetDelete, (assetId:string) => {
+    if(queue.isBusy()||keyframeBusy)throw new Error('Finish or cancel active generation before deleting project assets.');
+    return projects.deleteAsset(assetId);
+  });
 
   handle(IPC.settingsGet, () => settings.get());
   handle(IPC.settingsSave, async (next: AppMachineSettings) => {
