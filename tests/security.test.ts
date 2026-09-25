@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadPortableProject } from '../src/main/services/project-schema';
@@ -8,6 +8,8 @@ import { analyzeWanGpBindings } from '../src/main/services/wangp-engine';
 import { profileCompatibilityErrors } from '../src/main/services/profile-validation';
 import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
 import type { WorkflowProfile } from '../src/shared/types';
+import { stageWorkflowProfileSnapshot } from '../src/main/services/workflow-snapshot';
+import { sha256File } from '../src/main/services/runtime-fingerprint';
 
 describe('portable project trust boundary',()=>{
   it('migrates v1 but discards executable paths and external endpoint settings',()=>{
@@ -105,6 +107,20 @@ describe('project media protocol scope',()=>{
       await expect(assertExistingProjectMediaPath(root,'cineforge.project.json')).rejects.toThrow(/non-media/i);
       await expect(assertExistingProjectMediaPath(root,'assets/../cineforge.project.json')).rejects.toThrow();
     }finally{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));}
+  });
+});
+
+describe('immutable workflow staging',()=>{
+  it('copies the exact hashed workflow into project cache and rejects changed source bytes',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-workflow-snapshot-'));
+    try{
+      await mkdir(join(root,'workflows'),{recursive:true});const source=join(root,'workflows','wf.json');await writeFile(source,'{"prompt":"a"}','utf8');
+      const expected=await sha256File(source),profile={id:'p',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:source,workflowFormat:'wangp-settings',bindings:[],enabled:true} as WorkflowProfile;
+      const staged=await stageWorkflowProfileSnapshot(root,profile,expected,join(root,'cache','wf'));
+      expect(staged.workflowPath).toContain(join('cache','wf'));expect(await sha256File(staged.workflowPath)).toBe(expected);
+      await writeFile(source,'{"prompt":"changed"}','utf8');
+      await expect(stageWorkflowProfileSnapshot(root,profile,expected,join(root,'cache','wf2'))).rejects.toThrow(/changed while staging/i);
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
 
