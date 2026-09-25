@@ -236,7 +236,7 @@ export class RenderQueueService extends EventEmitter {
     const workflowSha256=await sha256File(workflowPath);
     if(profile.validation.sourceSha256!==workflowSha256)throw new Error(`Profile “${profile.name}” changed after validation. Revalidate it before rendering.`);
     const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
-    if(runtime==='comfyui'&&!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance because cancellation/recovery uses server-wide queue controls.');
+    if(runtime==='comfyui'&&!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance for workload isolation, deterministic recovery, and safe legacy cancellation fallback.');
     const assetFingerprints=await this.fingerprintAssets(project,shot);
     const runtimeFingerprint=knownRuntimeFingerprint??await fingerprintRuntime(machine,profile);
     if(!profile.validation?.runtimeFingerprint)throw new Error(`Profile “${profile.name}” has no validated runtime fingerprint. Revalidate it on this workstation before rendering.`);
