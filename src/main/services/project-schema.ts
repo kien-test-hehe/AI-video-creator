@@ -132,7 +132,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
 
 function sanitizeBinding(value: unknown): WorkflowBinding {
   const source = asObject(value, 'binding');
-  const keys = new Set(['prompt','negativePrompt','width','height','frames','fps','steps','cfg','seed','startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo','filenamePrefix']);
+  const keys = new Set(['prompt','negativePrompt','width','height','resolution','frames','fps','steps','cfg','seed','startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo','filenamePrefix']);
   if (!keys.has(source.key)) throw new Error(`Invalid workflow binding key: ${String(source.key)}`);
   const selector = source.selector && typeof source.selector === 'object' ? {
     ...(str(source.selector.nodeId, '', 128) ? { nodeId: str(source.selector.nodeId, '', 128) } : {}),
