@@ -7,7 +7,7 @@ import { validateComfyNodeAvailability, validateProfileBindings } from './workfl
 import { validateWanGpProfile } from './wangp-engine';
 import { probeSystem } from './system-probe';
 import { ComfyClient } from './comfy-client';
-import { workflowExecutionKey } from '../../shared/shot-signature';
+import { shotProjectRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
 
 export async function validateAndRecordProfile(projects: ProjectService, machine: AppMachineSettings, profileId: string): Promise<FilmProject> {
   const project = projects.getCurrent();
@@ -48,6 +48,7 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
     const target=p.settings.workflowProfiles.find(item=>item.id===profileId);
     if(!target)throw new Error('Workflow profile was removed while validation was running. Validation result was discarded.');
     if(workflowExecutionKey(target)!==profileInputKey)throw new Error('Workflow profile configuration changed while validation was running. Validation result was discarded; validate again.');
+    const before=new Map(p.shots.map(shot=>[shot.id,shotProjectRenderInputKey(p,shot)]));
     target.validation = {
       ...(target.validation ?? { structuralStatus:'unvalidated' }),
       structuralStatus: errors.length ? 'invalid' : 'valid',
@@ -57,6 +58,11 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
       lastError: errors.length ? errors.join('\n') : undefined,
       lastSuccessfulRenderAt: target.validation?.lastSuccessfulRenderAt
     };
+    for(const shot of p.shots){
+      if(before.get(shot.id)===shotProjectRenderInputKey(p,shot))continue;
+      shot.latestRenderId=undefined;
+      if(['rendered','failed'].includes(shot.status))shot.status='ready';
+    }
   });
 }
 
