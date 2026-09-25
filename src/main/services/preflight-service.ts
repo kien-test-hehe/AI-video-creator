@@ -18,7 +18,17 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
   for(const shot of project.shots){
     const refs=[...shot.characterAssetIds,...shot.propAssetIds,shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((id):id is string=>Boolean(id));
     for(const assetId of new Set(refs))if(!project.assets.some(a=>a.id===assetId))issues.push({level:'error',code:'SHOT_ASSET_MISSING',shotId:shot.id,assetId,message:`${shot.title}: referenced asset no longer exists (${assetId}).`});
-    try{const profile=routeWorkflow(project,shot);routed.set(profile.id,profile);}
+    try{
+      const profile=routeWorkflow(project,shot);routed.set(profile.id,profile);
+      const keys=new Set(profile.bindings.map(binding=>binding.key));
+      if(shot.startFrameAssetId&&!keys.has('startImage'))issues.push({level:'error',code:'START_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a start frame is attached but “${profile.name}” has no startImage binding, so the frame would be ignored.`});
+      if(shot.endFrameAssetId&&!keys.has('endImage'))issues.push({level:'warning',code:'END_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: an end frame is attached but “${profile.name}” has no endImage binding.`});
+      const hasVisualRefs=Boolean(shot.characterAssetIds.length||shot.locationAssetId||shot.propAssetIds.length);
+      const hasReferenceBinding=keys.has('referenceImages')||['characterImage1','locationImage','propImage1','referenceImage1'].some(key=>keys.has(key as any));
+      if(hasVisualRefs&&!hasReferenceBinding)issues.push({level:'warning',code:'CONTINUITY_REFS_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: visual continuity assets are attached but the selected workflow has no image-reference binding; only their text descriptions will influence generation.`});
+      if(shot.audioAssetId&&!keys.has('inputAudio'))issues.push({level:'warning',code:'AUDIO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: input audio is attached but “${profile.name}” has no inputAudio binding.`});
+      if(shot.referenceVideoAssetId&&!keys.has('inputVideo'))issues.push({level:'warning',code:'VIDEO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a motion/reference video is attached but “${profile.name}” has no inputVideo binding.`});
+    }
     catch(error){issues.push({level:'error',code:'SHOT_NO_WORKFLOW',shotId:shot.id,message:`${shot.title}: ${error instanceof Error?error.message:String(error)}`});}
     if(shot.generation.mode!=='t2v'&&!shot.startFrameAssetId&&shot.generation.mode!=='ia2v')issues.push({level:'info',code:'SHOT_NO_START_FRAME',shotId:shot.id,message:`${shot.title}: no start frame is attached; consistency may be lower for ${shot.generation.mode}.`});
     if(shot.generation.width<256||shot.generation.height<256||shot.generation.frames<1||shot.generation.fps<1)issues.push({level:'error',code:'SHOT_INVALID_DIMENSIONS',shotId:shot.id,message:`${shot.title}: invalid width/height/frames/fps values.`});
