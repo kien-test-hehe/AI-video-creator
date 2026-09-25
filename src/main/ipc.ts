@@ -35,12 +35,17 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
 
   handle(IPC.projectCreate, async (name?: string) => {
     if (queue.isBusy()) throw new Error('Finish or cancel the active render queue before switching projects.');
-    return projects.createWithDialog(name);
+    const created=await projects.createWithDialog(name);
+    if(created)await autoProvisionWanGpIfNeeded(projects,settings);
+    return projects.getCurrent();
   });
   handle(IPC.projectOpen, async () => {
     if (queue.isBusy()) throw new Error('Finish or cancel the active render queue before switching projects.');
     const opened = await projects.openWithDialog();
-    if (opened) await queue.reconcileAfterProjectOpen();
+    if (opened) {
+      await autoProvisionWanGpIfNeeded(projects,settings);
+      await queue.reconcileAfterProjectOpen();
+    }
     return projects.getCurrent();
   });
   handle(IPC.projectSave, (project: FilmProject) => projects.saveFromRenderer(project));
@@ -150,4 +155,14 @@ function requireProject(projects: ProjectService): FilmProject {
   const project=projects.getCurrent();
   if(!project)throw new Error('Open a project first.');
   return project;
+}
+
+
+async function autoProvisionWanGpIfNeeded(projects:ProjectService,settings:AppSettingsService):Promise<void>{
+  const project=projects.getCurrent(),machine=settings.get();
+  if(!project||machine.wangp.executionMode!=='native'||!machine.wangp.rootPath.trim())return;
+  const usable=project.settings.workflowProfiles.some(profile=>profile.enabled&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
+  if(usable)return;
+  try{await provisionRecommendedWanGpProfiles(projects,settings);}
+  catch(error){console.warn('Automatic WanGP profile provisioning was skipped:',error);}
 }
