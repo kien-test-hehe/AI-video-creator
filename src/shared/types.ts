@@ -155,7 +155,7 @@ export interface SystemProbe {
   ffmpeg:{available:boolean;version?:string;ffprobeAvailable:boolean;encoderAvailable?:boolean;};
   capcut:{installed:boolean;path?:string;configuredTier:'free'|'pro';};
   comfy:{reachable:boolean;url:string;systemStats?:unknown;error?:string;};
-  wangp:{configured:boolean;available:boolean;executionMode:WanGpExecutionMode;rootPath:string;entrypoint?:string;pythonPath?:string;runtimeVersion?:string;pythonVersion?:string;torchVersion?:string;torchCudaVersion?:string;cudaAvailable?:boolean;error?:string;};
+  wangp:{configured:boolean;available:boolean;executionMode:WanGpExecutionMode;rootPath:string;entrypoint?:string;pythonPath?:string;runtimeVersion?:string;pythonVersion?:string;torchVersion?:string;torchCudaVersion?:string;cudaAvailable?:boolean;torchError?:string;error?:string;};
   docker?:{available:boolean;version?:string;gpuAccessible?:boolean;error?:string;};
   hardwarePlan:HardwarePlan;
   codexContextPath?:string;
