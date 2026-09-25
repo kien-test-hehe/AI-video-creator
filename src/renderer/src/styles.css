@@ -12,3 +12,5 @@
 .studio-empty{padding:28px}
 @media(max-width:1450px){.studio-layout{grid-template-columns:220px minmax(0,1fr) 320px}.studio-commandbar{grid-template-columns:minmax(180px,1fr) auto}.studio-hud{display:none}.studio-bottom-dock{grid-template-columns:1fr 1fr}}
 @media(max-width:1180px){.studio-layout{grid-template-columns:190px minmax(0,1fr) 280px}.studio-command-actions .ghost:nth-of-type(4),.studio-command-actions .ghost:nth-of-type(5){display:none}.studio-inline-numbers{grid-template-columns:1fr 1fr}}
+
+.app-shell.studio-shell{grid-template-columns:72px 1fr}.sidebar.compact{width:72px;padding:16px 9px}.sidebar.compact .brand{justify-content:center;padding:4px 0 14px}.sidebar.compact .brand>div:last-child,.sidebar.compact .project-chip,.sidebar.compact .sidebar-foot{display:none}.sidebar.compact nav{gap:6px}.sidebar.compact nav button{justify-content:center;height:42px;padding:8px;font-size:0}.sidebar.compact nav button span{width:auto;font-size:16px;margin:0}.sidebar.compact nav button.active{box-shadow:inset 2px 0 0 var(--accent)}.studio-edge.warning{stroke:#b66a50;stroke-dasharray:5 4;opacity:.9}.studio-edge.warning.active{stroke:#ff8c6f;stroke-width:2.2}
