@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from 'react';
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
 import { chooseModelForShot } from '../../../shared/routing';
-import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot } from '../../../shared/types';
+import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow } from '../studio-logic';
@@ -9,7 +9,7 @@ import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
 
 type Point={x:number;y:number};
-type StudioNodeKind='story'|'assets'|'scene'|'shot'|'workflow'|'queue'|'timeline'|'capcut';
+type StudioNodeKind='story'|'assets'|'system'|'scene'|'shot'|'workflow'|'queue'|'timeline'|'capcut';
 interface StudioNode{id:string;kind:StudioNodeKind;x:number;y:number;width:number;height:number;title:string;subtitle:string;shotId?:string;sceneId?:string;profileId?:string;}
 interface StudioEdge{id:string;source:string;target:string;kind?:'primary'|'asset'|'warning';}
 interface ViewRect{left:number;top:number;width:number;height:number;}
@@ -30,6 +30,7 @@ export function Studio(){
   const[importKind,setImportKind]=useState<AssetKind>('reference');
   const[assetSearch,setAssetSearch]=useState('');
   const[preflightBusy,setPreflightBusy]=useState(false);
+  const[preflightReport,setPreflightReport]=useState<PreflightReport>();
   const[showLibrary,setShowLibrary]=useState(true);
   const[showInspector,setShowInspector]=useState(true);
   const[showDock,setShowDock]=useState(true);
@@ -71,6 +72,7 @@ export function Studio(){
     const edges:StudioEdge[]=[];
     nodes.push({id:'story',kind:'story',x:40,y:70,width:230,height:132,title:project.story.title||project.name,subtitle:project.story.logline||'Script / story bible'});
     nodes.push({id:'assets',kind:'assets',x:40,y:280,width:230,height:132,title:'Asset Library',subtitle:`${project.assets.length} continuity / media assets`});
+    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${probe?.hardwarePlan.tier||'hardware unknown'} · WanGP ${probe?.wangp.available?'ready':'check'}`});
 
     let sceneShotCursor=42;
     for(const scene of project.scenes){
@@ -117,7 +119,7 @@ export function Studio(){
     const workflowRows=profiles.length+(unbound.length?1:0);
     const height=Math.max(900,180+Math.max(sceneShotCursor,42+workflowRows*142));
     return{nodes,edges,width:2070,height};
-  },[project,queue.jobs,selectedShot,sortedShots]);
+  },[probe?.hardwarePlan.tier,probe?.wangp.available,project,queue.jobs,selectedShot,sortedShots]);
 
   const nodes=useMemo(()=>graph.nodes.map(node=>{const saved=positions[node.id],x=saved?.x??node.x,y=saved?.y??node.y;return{...node,x:Math.min(Math.max(0,graph.width-node.width),Math.max(0,x)),y:Math.min(Math.max(0,graph.height-node.height),Math.max(0,y))};}),[graph.height,graph.nodes,graph.width,positions]);
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
@@ -197,7 +199,7 @@ export function Studio(){
   };
 
   const runPreflight=async():Promise<PreflightReport|undefined>=>{
-    try{setPreflightBusy(true);await useAppStore.getState().persist();const report=await window.cineforge.project.preflight();setProbe(report.probe);const blockers=report.issues.filter(issue=>issue.level==='error').length;setPreflightSummary(report.ready?'ready':`${blockers} blocker${blockers===1?'':'s'}`);if(report.ready)setNotice('Preflight passed.');else setError(`Preflight found ${blockers} blocking issue${blockers===1?'':'s'}. Open System for the full report.`);return report;}
+    try{setPreflightBusy(true);await useAppStore.getState().persist();const report=await window.cineforge.project.preflight();setPreflightReport(report);setProbe(report.probe);const blockers=report.issues.filter(issue=>issue.level==='error').length;setPreflightSummary(report.ready?'ready':`${blockers} blocker${blockers===1?'':'s'}`);if(report.ready)setNotice('Preflight passed.');else setError(`Preflight found ${blockers} blocking issue${blockers===1?'':'s'}. Open System for the full report.`);return report;}
     catch(error){setError(error instanceof Error?error.message:String(error));return undefined;}finally{setPreflightBusy(false);}
   };
   const renderAll=async()=>{
@@ -280,7 +282,7 @@ export function Studio(){
       </main>
 
       {showInspector&&<aside className="studio-inspector">
-        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
+        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} probe={probe} preflightReport={preflightReport} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
       </aside>}
     </div>
 
@@ -302,7 +304,7 @@ function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerM
   const routeableProfile=Boolean(profile?.enabled&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&(profile.purpose??'video')==='video');
   const visual=shot?shotPreviewAsset(project,shot):undefined;
   const className=['studio-node',`node-${node.kind}`,selected?'selected':'',active?'on-path':'',locked?'locked':''].filter(Boolean).join(' ');
-  const openView:Partial<Record<StudioNodeKind,ViewId>>={story:'story',assets:'assets',scene:'storyboard',shot:'shots',workflow:'settings',queue:'queue',timeline:'timeline',capcut:'finishing'};
+  const openView:Partial<Record<StudioNodeKind,ViewId>>={story:'story',assets:'assets',system:'dashboard',scene:'storyboard',shot:'shots',workflow:'settings',queue:'queue',timeline:'timeline',capcut:'finishing'};
   return <article className={className} style={{left:node.x,top:node.y,width:node.width,minHeight:node.height}} onDragOver={shot?event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';}:undefined} onDrop={shot?event=>onDropToShot(event,shot.id):undefined}>
     <header className="studio-node-drag" onPointerDown={event=>onPointerDown(event,node)} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
       <span className="studio-node-kind">{node.kind}</span><span>{locked?'●':'⠿'}</span>
@@ -326,7 +328,7 @@ function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioN
   return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`}/>;
 }
 
-function StudioInspector({node,asset,project,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
+function StudioInspector({node,asset,project,probe,preflightReport,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;probe?:SystemProbe;preflightReport?:PreflightReport;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
   if(asset){
     const mutateAsset=(fn:(target:Asset)=>void)=>updateProject(next=>{const target=next.assets.find(item=>item.id===asset.id);if(target)fn(target);});
     return <InspectorFrame kicker="ASSET" title={asset.name} action={()=>setView('assets')} actionLabel="Open Assets ↗">
