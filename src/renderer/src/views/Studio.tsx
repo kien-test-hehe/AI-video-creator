@@ -20,24 +20,17 @@ const ACTIVE_JOB_STATUSES=new Set(['queued','preparing','uploading','submitted',
 
 export function Studio(){
   const{project,probe,queue,selectedShotId,selectShot,updateProject,setProject,setQueue,setView,setError,setNotice,setProbe}=useAppStore();
+  const projectId=project?.id;
   const[zoom,setZoom]=useState(.78);
   const[locked,setLocked]=useState(false);
   const[assetKind,setAssetKind]=useState<AssetKind|'all'>('all');
   const[importKind,setImportKind]=useState<AssetKind>('reference');
   const[assetSearch,setAssetSearch]=useState('');
-  const[positions,setPositions]=useState<Record<string,Point>>({});
+  const[positions,setPositions]=useState<Record<string,Point>>(()=>loadStudioLayout(projectId));
   const[viewRect,setViewRect]=useState<ViewRect>({left:0,top:0,width:1000,height:700});
   const viewportRef=useRef<HTMLDivElement>(null);
   const dragState=useRef<{id:string;pointerId:number;startClient:Point;startNode:Point}|null>(null);
 
-  const projectId=project?.id;
-  useEffect(()=>{
-    if(!projectId)return;
-    try{
-      const raw=localStorage.getItem(`cineforge:studio-layout:${projectId}`);
-      setPositions(raw?JSON.parse(raw):{});
-    }catch{setPositions({});}
-  },[projectId]);
   useEffect(()=>{
     if(!projectId)return;
     const timer=setTimeout(()=>{try{localStorage.setItem(`cineforge:studio-layout:${projectId}`,JSON.stringify(positions));}catch{}},250);
@@ -229,7 +222,7 @@ export function Studio(){
         <div className="studio-job-strip">{queue.jobs.length===0?<span className="muted">Nothing queued.</span>:queue.jobs.slice(0,8).map(job=>{const shot=project.shots.find(item=>item.id===job.shotId);return <div className="studio-job" key={job.id}><span className={`job-dot ${job.status}`}/><div><strong>{shot?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}%</small></div><div className="studio-job-progress"><i style={{width:`${Math.round(job.progress*100)}%`}}/></div></div>;})}</div>
       </section>
       <section className="studio-dock-block timeline-dock"><div className="studio-dock-head"><div><span className="eyebrow">TIMELINE</span><strong>{project.timeline.length} clips</strong></div><button className="ghost" onClick={()=>setView('timeline')}>Open timeline ↗</button></div>
-        <div className="studio-timeline-strip">{project.timeline.length===0?<span className="muted">Build a cut from rendered takes.</span>:[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} onClick={()=>{if(shot){selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
+        <div className="studio-timeline-strip">{project.timeline.length===0?<span className="muted">Build a cut from rendered takes.</span>:[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>{event.preventDefault();const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(sourceId)reorderTimeline(project,sourceId,clip.id,updateProject);}} onClick={()=>{if(shot){selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
       </section>
     </footer>
   </section>;
@@ -337,4 +330,9 @@ function scrollToNode(id:string,nodes:Map<string,StudioNode>,viewport:HTMLDivEle
 function reorderTimeline(project:FilmProject,sourceId:string,targetId:string,updateProject:(mutator:(project:FilmProject)=>void)=>void):void{
   if(sourceId===targetId||!project.timeline.some(clip=>clip.id===sourceId)||!project.timeline.some(clip=>clip.id===targetId))return;
   updateProject(next=>{const ordered=[...next.timeline].sort((a,b)=>a.order-b.order);const from=ordered.findIndex(clip=>clip.id===sourceId),to=ordered.findIndex(clip=>clip.id===targetId);if(from<0||to<0)return;const[moved]=ordered.splice(from,1);ordered.splice(to,0,moved);ordered.forEach((clip,index)=>clip.order=index);next.timeline=ordered;});
+}
+
+function loadStudioLayout(projectId?:string):Record<string,Point>{
+  if(!projectId)return{};
+  try{const raw=localStorage.getItem(`cineforge:studio-layout:${projectId}`);return raw?JSON.parse(raw):{};}catch{return{};}
 }
