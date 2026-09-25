@@ -27,6 +27,7 @@ type Handler = (...args: any[]) => any;
 export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
   let exportAbortController: AbortController | null = null;
   let keyframeBusy = false;
+  let keyframeAbortController:AbortController|null=null;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
       assertTrustedIpcSender(event,trustedRendererUrl);
@@ -147,9 +148,14 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     return reviewShotWithLocalDirector(project,shot,settings.get());
   });
   handle(IPC.keyframeGenerate,async(request:KeyframeRequest)=>{
-    assertGpuGenerationAvailable();keyframeBusy=true;
-    try{return await generateKeyframe(projects,settings.get(),request);}
-    finally{keyframeBusy=false;}
+    assertGpuGenerationAvailable();keyframeBusy=true;keyframeAbortController=new AbortController();
+    try{return await generateKeyframe(projects,settings.get(),request,keyframeAbortController.signal);}
+    finally{keyframeBusy=false;keyframeAbortController=null;}
+  });
+  handle(IPC.keyframeCancel,async()=>{
+    if(!keyframeBusy||!keyframeAbortController)return false;
+    keyframeAbortController.abort();
+    return true;
   });
   handle(IPC.timelineExport,async()=>{
     if(exportAbortController)throw new Error('A timeline export is already running.');
