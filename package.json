@@ -16,10 +16,10 @@
     "lint": "eslint . --max-warnings=0",
     "workflows:fetch": "node scripts/fetch-reference-workflows.mjs",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win nsis --x64",
-    "dist:linux": "npm run build && electron-builder --linux AppImage --x64",
-    "dist:mac": "npm run build && electron-builder --mac dmg"
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "dist:linux": "npm run build && electron-builder --linux AppImage --x64 --publish never",
+    "dist:mac": "npm run build && electron-builder --mac dmg --publish never"
   },
   "dependencies": {
     "react": "19.3.0",
