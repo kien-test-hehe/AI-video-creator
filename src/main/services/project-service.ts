@@ -60,6 +60,8 @@ export class ProjectService {
     }
     catch (primaryError) {
       try {
+        const backupInfo=await stat(backup);
+        if(backupInfo.size>50*1024*1024)throw new Error('Backup project file exceeds the 50 MB safety limit.');
         raw = JSON.parse(await readFile(backup, 'utf8'));
         await copyFile(backup, file);
         console.warn('Recovered CineForge project from backup after the primary project file could not be parsed.', primaryError);
