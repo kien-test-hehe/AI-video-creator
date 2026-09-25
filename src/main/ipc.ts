@@ -84,7 +84,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-wangp-${basename(source)}`),'WanGP settings import');
     await copyFile(source,target);
     const inspected=await inspectWanGpSettings(target);
-    return{path:target,...inspected,warnings:['WanGP settings are version/model specific. Review ambiguous bindings and validate the profile before production rendering.']};
+    return{path:target,...inspected,warnings:[...inspected.warnings,'WanGP settings are version/model specific. Review ambiguous bindings and validate the profile before production rendering.']};
   });
 
   handle(IPC.workflowInspect, async (path:string)=>{
