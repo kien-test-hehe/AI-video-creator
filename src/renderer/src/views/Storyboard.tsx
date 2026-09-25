@@ -1,7 +1,7 @@
 import { useState, type DragEvent } from 'react';
 import { MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../../shared/defaults';
 import type { ModelFamily, Shot } from '../../../shared/types';
-import { filterDirectorAssetIds, isValidatedVideoModel, sceneDirectorInputKey } from '../../../shared/director-signature';
+import { filterDirectorAssetIds, isValidatedVideoModel, sceneDirectorInputKey, validatedVideoRouteForModel } from '../../../shared/director-signature';
 import { useAppStore } from '../store';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { Card, Empty, Page, Pill } from '../components/Ui';
@@ -34,14 +34,14 @@ export function Storyboard(){
         for(const draft of drafts){
           const requested=draft.preferredModel as ModelFamily|undefined;
           const model=isValidatedVideoModel(p,requested)?requested:PRIMARY_VIDEO_MODEL;
-          const validatedModel=isValidatedVideoModel(p,model)?model:undefined;
-          if(!validatedModel)continue;
+          const validatedModel=isValidatedVideoModel(p,model)?model:undefined,route=validatedVideoRouteForModel(p,validatedModel);
+          if(!validatedModel||!route)continue;
           index+=1;added+=1;const d=MODEL_DEFAULTS[validatedModel],id=crypto.randomUUID();
           const characterAssetIds=filterDirectorAssetIds(p,'character',draft.characterAssetIds||[]).slice(0,4);
           const referenceAssetIds=filterDirectorAssetIds(p,'reference',draft.referenceAssetIds||[]).slice(0,4);
           const propAssetIds=filterDirectorAssetIds(p,'prop',draft.propAssetIds||[]).slice(0,2);
           const locationAssetId=filterDirectorAssetIds(p,'location',draft.locationAssetId?[draft.locationAssetId]:[])[0];
-          const shot:Shot={id,sceneId,index,title:draft.title||('Shot '+scene.index+'.'+index),prompt:draft.prompt,camera:draft.camera,action:draft.action,dialogue:draft.dialogue,continuityNotes:draft.continuityNotes,characterAssetIds,locationAssetId,propAssetIds,referenceAssetIds,status:'draft',generation:{modelFamily:validatedModel,mode:d.mode||'i2v',quality:draft.quality,width:d.width||768,height:d.height||432,frames:d.frames||97,fps:d.fps||24,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??false}};
+          const shot:Shot={id,sceneId,index,title:draft.title||('Shot '+scene.index+'.'+index),prompt:draft.prompt,camera:draft.camera,action:draft.action,dialogue:draft.dialogue,continuityNotes:draft.continuityNotes,characterAssetIds,locationAssetId,propAssetIds,referenceAssetIds,status:'draft',generation:{modelFamily:validatedModel,mode:route.mode,quality:draft.quality,width:d.width||768,height:d.height||432,frames:d.frames||97,fps:d.fps||24,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??false,workflowProfileId:route.id}};
           p.shots.push(shot);scene.shotIds.push(id);
         }
         if(!added)throw new Error('Director returned no shot compatible with the currently validated local video routes.');
