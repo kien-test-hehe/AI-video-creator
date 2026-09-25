@@ -9,7 +9,7 @@ import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { collectComfyFileRefs, inferMediaType, uniqueComfyFileRefs } from './comfy-output';
-import { waitForComfyCompletion } from './comfy-runner';
+import { waitForComfyCompletion, waitForComfyPromptRelease } from './comfy-runner';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { killProcessTree } from './process-utils';
@@ -99,7 +99,7 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
   let generatedPath:string;
   if(runtime==='wangp')generatedPath=await generateWithWanGp(project,machine,profile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
-  else generatedPath=await generateWithComfy(project,machine,profile,values,shot,request.role,assertCurrent,signal);
+  else generatedPath=await generateWithComfy(project,machine,profile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
   throwIfAborted(signal);
 
   try{await assertCurrent(false);}
@@ -164,32 +164,58 @@ async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,
   }finally{await rm(cache,{recursive:true,force:true}).catch(()=>undefined);}
 }
 
-async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assertCurrent:(checkRuntime?:boolean)=>Promise<void>,signal?:AbortSignal):Promise<string>{
+async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assetFingerprints:Map<string,KeyframeAssetFingerprint>,assertCurrent:(checkRuntime?:boolean)=>Promise<void>,signal?:AbortSignal):Promise<string>{
   if(!machine.comfy.dedicatedInstance)throw new Error('ComfyUI keyframe generation requires a dedicated CineForge instance so cancellation cannot interrupt unrelated work.');
   throwIfAborted(signal);
   const client=new ComfyClient(machine.comfy.url,true);const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable: ${ping.error||machine.comfy.url}`);
   throwIfAborted(signal);
-  const stagedBySource=new Map<string,string>();
+  const expectedByPath=new Map<string,string>();
+  for(const fp of assetFingerprints.values()){
+    const asset=project.assets.find(item=>item.id===fp.assetId);if(!asset)throw new Error(`Referenced asset not found: ${fp.assetId}`);
+    const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
+    expectedByPath.set(path,fp.sha256);
+  }
+  const snapshotRoot=join(project.rootPath,'cache','keyframe-comfy-inputs',randomUUID());await mkdir(snapshotRoot,{recursive:true});
+  const stagedBySource=new Map<string,string>();let snapshotIndex=0;
   const stageImage=async(path:string)=>{
     const cached=stagedBySource.get(path);if(cached)return cached;
     throwIfAborted(signal);
-    const uploaded=await client.uploadImage(path),staged=uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;
+    const expected=expectedByPath.get(path);if(!expected)throw new Error(`Keyframe Comfy input is not covered by the immutable asset snapshot: ${path}`);
+    const snapshot=await assertSafeWritePath(snapshotRoot,join(snapshotRoot,`${String(snapshotIndex++).padStart(2,'0')}-${basename(path).replace(/[^a-zA-Z0-9._-]+/g,'_')||'input.bin'}`),'keyframe Comfy immutable input');
+    await copyFile(path,snapshot);
+    if(await sha256File(snapshot)!==expected)throw new Error(`Keyframe input changed while staging the immutable ComfyUI snapshot: ${basename(path)}`);
+    const uploaded=await client.uploadImage(snapshot),staged=uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;
     stagedBySource.set(path,staged);return staged;
   };
-  const scalarKeys=['startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const;
-  for(const key of scalarKeys){const value=values[key];if(typeof value==='string'&&value)(values as any)[key]=await stageImage(value);}
-  if(values.referenceImages?.length)values.referenceImages=await Promise.all(values.referenceImages.map(stageImage));
-  throwIfAborted(signal);
-  const workflow=await compileProfile(profile,values);await assertCurrent(true);const queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role}});
-  let cancelPromise:Promise<void>|undefined;
-  const requestCancel=()=>cancelPromise??=client.cancelPrompt(queued.prompt_id);
-  const onAbort=()=>{void requestCancel().catch(()=>undefined);};signal?.addEventListener('abort',onAbort,{once:true});
-  let history:any;
-  try{history=await waitForComfyCompletion(client,queued.prompt_id,{timeoutMs:60*60_000,cancelled:()=>Boolean(signal?.aborted)});throwIfAborted(signal);}
-  catch(error){if(signal?.aborted){try{await requestCancel();}catch(cancelError){throw new Error(`Keyframe cancellation was requested but ComfyUI did not confirm it: ${cancelError instanceof Error?cancelError.message:String(cancelError)}`);}throw new Error('Keyframe generation cancelled.');}throw error;}
-  finally{signal?.removeEventListener('abort',onAbort);}
-  const refs=uniqueComfyFileRefs(collectComfyFileRefs(history?.outputs||history));const imageRef=refs.find(r=>inferMediaType(r.filename)==='image');if(!imageRef)throw new Error('Image workflow completed but returned no image output.');
-  const bytes=await client.download(imageRef),durable=join(project.rootPath,'cache','keyframe-stage',`${randomUUID()}${extname(imageRef.filename)||'.png'}`);await mkdir(join(project.rootPath,'cache','keyframe-stage'),{recursive:true});await writeFile(durable,bytes);return durable;
+  try{
+    const scalarKeys=['startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const;
+    for(const key of scalarKeys){const value=values[key];if(typeof value==='string'&&value)(values as any)[key]=await stageImage(value);}
+    if(values.referenceImages?.length)values.referenceImages=await Promise.all(values.referenceImages.map(stageImage));
+    throwIfAborted(signal);
+    const workflow=await compileProfile(profile,values);await assertCurrent(true);const queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role}});
+    let cancelPromise:Promise<void>|undefined;
+    const requestCancel=()=>cancelPromise??=client.cancelPrompt(queued.prompt_id);
+    const onAbort=()=>{void requestCancel().catch(()=>undefined);};signal?.addEventListener('abort',onAbort,{once:true});
+    let history:any;
+    try{history=await waitForComfyCompletion(client,queued.prompt_id,{timeoutMs:60*60_000,cancelled:()=>Boolean(signal?.aborted)});throwIfAborted(signal);}
+    catch(error){
+      if(signal?.aborted){
+        try{await requestCancel();}
+        catch{await waitForComfyPromptRelease(client,queued.prompt_id);}
+        throw new Error('Keyframe generation cancelled after ComfyUI released the prompt.');
+      }
+      if(error instanceof Error&&/timed out/i.test(error.message)){
+        try{await requestCancel();}
+        catch{await waitForComfyPromptRelease(client,queued.prompt_id);}
+        throw new Error(`${error.message} ComfyUI prompt release was confirmed before freeing the GPU slot.`);
+      }
+      await waitForComfyPromptRelease(client,queued.prompt_id);
+      throw error;
+    }
+    finally{signal?.removeEventListener('abort',onAbort);}
+    const refs=uniqueComfyFileRefs(collectComfyFileRefs(history?.outputs||history));const imageRef=refs.find(r=>inferMediaType(r.filename)==='image');if(!imageRef)throw new Error('Image workflow completed but returned no image output.');
+    const bytes=await client.download(imageRef),durable=join(project.rootPath,'cache','keyframe-stage',`${randomUUID()}${extname(imageRef.filename)||'.png'}`);await mkdir(join(project.rootPath,'cache','keyframe-stage'),{recursive:true});await writeFile(durable,bytes);return durable;
+  }finally{await rm(snapshotRoot,{recursive:true,force:true}).catch(()=>undefined);}
 }
 
 function throwIfAborted(signal?:AbortSignal):void{if(signal?.aborted)throw new Error('Keyframe generation cancelled.');}
