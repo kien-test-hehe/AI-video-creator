@@ -12,7 +12,7 @@ import { AppSettingsService } from './app-settings-service';
 import { ComfyClient } from './comfy-client';
 import { compileProfile, type WorkflowValues } from './workflow-engine';
 import { compileWanGpProfile } from './wangp-engine';
-import { collectWanGpOutputs, outputMediaType, startWanGp, waitWanGp } from './wangp-runner';
+import { collectWanGpOutputs, isWanGpDockerRunning, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
 import { routeWorkflow } from './model-router';
 import { collectComfyFileRefs, inferMediaType, uniqueComfyFileRefs } from './comfy-output';
 import { waitForComfyCompletion } from './comfy-runner';
@@ -98,8 +98,11 @@ export class RenderQueueService extends EventEmitter {
     this.cancelled.add(jobId);this.pending=this.pending.filter(id=>id!==jobId);
     if(wasRunning){
       if(runtime==='wangp'){
-        const child=this.wanGpProcesses.get(jobId);
-        if(child?.pid)await killProcessTree(child.pid);
+        const machine=this.settings.get(),child=this.wanGpProcesses.get(jobId);
+        if(machine.wangp.executionMode==='docker'){
+          await stopWanGpDocker(machine,job.id);
+          if(child?.pid)await killProcessTree(child.pid);
+        }else if(child?.pid)await killProcessTree(child.pid);
         else if(job.backendPid){
           if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');
           await killProcessTree(job.backendPid);
@@ -145,6 +148,7 @@ export class RenderQueueService extends EventEmitter {
   private async recoverActiveJob(jobId:string):Promise<void>{
     try{
       const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job?.spec)throw new Error('Recovered job has no immutable spec.');
+      await this.verifyImmutableSpec(project,job);
       const runtime=job.spec.workflowProfile.runtime??(job.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
       await this.updateJob(jobId,{status:'recovering',message:`Recovering ${runtime} job after restart`},true,true);
       if(runtime==='wangp')await this.recoverWanGp(project,job);
@@ -157,11 +161,17 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async recoverWanGp(project:FilmProject,job:RenderJob):Promise<void>{
-    const outputDir=join(project.rootPath,'renders',job.shotId,job.id);
-    if(job.backendPid&&isProcessAlive(job.backendPid)){
+    const outputDir=join(project.rootPath,'renders',job.shotId,job.id),machine=this.settings.get();
+    const started=Date.now();let stalled=false;
+    if(machine.wangp.executionMode==='docker'){
+      while(await isWanGpDockerRunning(machine,job.id)){
+        if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
+        if(Date.now()-started>12*60*60_000&&!stalled){stalled=true;await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP Docker job has exceeded 12 hours; GPU slot remains reserved until it ends or is cancelled.'},true,true);}
+        if(!stalled)await this.updateJob(job.id,{status:'recovering',progress:Math.max(job.progress,0.35),message:'WanGP Docker container is still running · recovered by container identity',lastHeartbeatAt:new Date().toISOString()},false);
+        await sleep(5000);
+      }
+    }else if(job.backendPid&&isProcessAlive(job.backendPid)){
       if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Recovered PID exists but no longer matches this WanGP job command line.');
-      const started=Date.now();
-      let stalled=false;
       while(isProcessAlive(job.backendPid)){
         if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
         if(Date.now()-started>12*60*60_000&&!stalled){stalled=true;await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP process has exceeded 12 hours; GPU slot remains reserved until it ends or is cancelled.'},true,true);}
@@ -304,12 +314,12 @@ export class RenderQueueService extends EventEmitter {
 
     if(machine.wangp.dryRunBeforeRender){
       await this.updateJob(job.id,{status:'preparing',progress:.08,message:'WanGP dry-run validation'},true,true);
-      const dry=startWanGp(project,machine,{settingsPath,outputDir,dryRun:true});if(dry.pid)await this.updateJob(job.id,{backendPid:dry.pid},false,true);
+      const dry=startWanGp(project,machine,{settingsPath,outputDir,dryRun:true,runId:job.id});if(dry.pid)await this.updateJob(job.id,{backendPid:dry.pid},false,true);
       await waitWanGp(dry);if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
     }
 
     let lastLogAt=0;
-    const child=startWanGp(project,machine,{settingsPath,outputDir,onLog:line=>{
+    const child=startWanGp(project,machine,{settingsPath,outputDir,runId:job.id,onLog:line=>{
       const now=Date.now();if(now-lastLogAt<1000)return;lastLogAt=now;
       void this.updateJob(job.id,{status:'running',progress:.35,message:`WanGP · ${line.slice(0,180)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
     }});
