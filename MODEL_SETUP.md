@@ -1,76 +1,29 @@
-# Model/runtime setup — RTX 5060 Ti 16 GB class
+# Model and runtime setup
 
-CineForge 0.2 is **WanGP-first** for production and keeps ComfyUI as a lab/fallback path.
+CineForge 0.3 separates **portable project state** from **machine runtime configuration**.
 
-## 1. WanGP
+## Workstation setup
 
-Install WanGP separately and validate the desired model/preset in WanGP itself before importing it into CineForge.
+Open **Settings → Machine Settings** and configure WanGP (native or Docker), FFmpeg + FFprobe, optional dedicated ComfyUI, and optional local OpenAI-compatible Director. These values live under Electron's `userData` directory and are never trusted from a project file.
 
-In CineForge Settings configure:
+## WanGP production profiles
 
-```text
-WanGP root    <your WanGP folder>
-Python        python / python.exe from the working WanGP environment
-Entrypoint    wgp.py
-Profile       4 by default
-Attention     auto unless the installation requires a specific backend
-```
+For every route: validate the preset in WanGP, export its settings JSON, import it, review every binding ambiguity, record a model/checkpoint fingerprint when available, click **Validate profile**, then enable it. Changing the imported settings invalidates the source hash and blocks rendering until revalidation.
 
-Then, for each route:
+Recommended starting routes on 16 GB VRAM are LTX 2.5 Fast I2V/AV for general/audio-aware shots, HunyuanVideo 1.5 I2V for quality-biased hero shots, and Wan 2.2 5B I2V for motion/action fallback. Add long-video routes only after separate validation.
 
-1. create/load the preset in WanGP;
-2. export its settings JSON;
-3. import it through **Import WanGP settings**;
-4. review inferred JSON paths;
-5. add/fix bindings for references that inference could not identify safely;
-6. enable the profile;
-7. run CineForge Preflight.
+## Reproducibility
 
-Do not assume settings exported from one WanGP/model version remain valid forever. CineForge intentionally leaves unknown settings untouched and only patches explicit bindings.
+A queued render freezes the shot/effective prompt/seed, workflow/settings SHA-256, all attached reference-asset SHA-256 hashes, local runtime fingerprint, and optional model/checkpoint fingerprint. Retry refuses to claim exactness when any of those inputs changed.
 
-## 2. Suggested route set
+## ComfyUI
 
-Start small:
+Use API-format workflows for production. CineForge refuses unsafe UI-graph conversion with connected unknown/subgraph nodes. A production Comfy route requires a dedicated CineForge instance so cancellation/recovery cannot interrupt another queue.
 
-```text
-LTX 2.5 Fast I2V/AV   general/default
-HunyuanVideo 1.5 I2V  hero/quality-biased
-Wan 2.2 5B I2V        motion/action/general fallback
-```
+## Technical QC
 
-Only install extra models when a real shot class requires them. Disk and RAM pressure become operational costs even when API cost is zero.
+Video output is inspected with FFprobe/FFmpeg for stream presence, expected duration, expected resolution/FPS, requested audio, black segments, frozen segments, and clipping-risk peaks. A video route that returns no video, or a video that fails technical QC, is not promoted to preferred take.
 
-## 3. Resolution strategy
+## CapCut
 
-For 16 GB VRAM, prefer candidate generation at practical model-native draft/final resolutions, then upscale selected takes. Do not generate many native-1080p candidates just to discard most of them.
-
-## 4. References/continuity
-
-Useful binding keys include:
-
-```text
-startImage
-endImage
-locationImage
-characterImage1..4
-propImage1..2
-referenceImage1..4
-inputAudio
-inputVideo
-```
-
-For WanGP these map to JSON paths in the exported settings. For ComfyUI they map to node selectors + input names.
-
-Create stable reference packs for recurring characters/locations before rendering a film. Carry the previous shot's ending state into the next shot when physical continuity matters.
-
-## 5. Audio
-
-Prefer local/native model audio when it fits the shot. For narration/dubbing/ASR, use locally installed tools or local loopback services so the project does not acquire a new metered provider dependency. Import the resulting WAV/SRT/media into the project or CapCut handoff.
-
-## 6. ComfyUI fallback
-
-For ComfyUI, prefer **Save (API Format)** JSON. Normal UI graphs can be imported only when CineForge can convert them completely. Connected subgraphs/unknown node types are intentionally rejected rather than silently dropped.
-
-## 7. CapCut
-
-CapCut is not a generation requirement. Build a CineForge timeline, generate a handoff, then use CapCut × Codex for finishing. Leave CapCut AI credits disabled to preserve the Codex + CapCut-only recurring-cost policy.
+Build the canonical CineForge cut first. The handoff validates every media path/trim, then writes a manifest and Codex task. CapCut AI credits remain off unless explicitly enabled.
