@@ -125,7 +125,7 @@ export class RenderQueueService extends EventEmitter {
       }
     }else this.cancelled.add(jobId);
     await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled'},true,true);
-    await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(shot)shot.status=shot.latestRenderId?'rendered':'draft';});
+    await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shot.latestRenderId?'rendered':currentSpec&&job.spec?.shot.status==='draft'?'draft':'ready';});
     if(!wasRunning){this.cancelled.delete(jobId);void this.pump();}
     return this.snapshot();
   }
@@ -286,7 +286,7 @@ export class RenderQueueService extends EventEmitter {
         const message=error instanceof Error?error.message:String(error);
         await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed',error:message},true,true);
         const current=this.projects.getCurrent(),job=current?.renderJobs.find(j=>j.id===jobId);
-        if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(shot)shot.status='failed';});
+        if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
       }
     }finally{
       this.wanGpProcesses.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
@@ -315,6 +315,13 @@ export class RenderQueueService extends EventEmitter {
     if(runtime.environmentSha256!==spec.runtimeFingerprint.environmentSha256)throw new Error('Local AI runtime changed after this job was queued. Queue a new render to accept the new runtime.');
     const currentProfile=project.settings.workflowProfiles.find(p=>p.id===spec.workflowProfile.id);
     if((currentProfile?.modelFingerprint||undefined)!==(spec.modelFingerprint||undefined))throw new Error('Model/checkpoint fingerprint changed after queue. Queue a new render.');
+  }
+
+  private isCurrentJobSpec(project:FilmProject,job:RenderJob,shot:Shot):boolean{
+    if(!job.spec)return false;
+    let currentWorkflowKey:string|undefined;
+    try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(project,shot));}catch{currentWorkflowKey=undefined;}
+    return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildPrompt(project,shot)===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
   }
 
   private baseValues(job:RenderJob):WorkflowValues{
@@ -451,9 +458,7 @@ export class RenderQueueService extends EventEmitter {
     await this.projects.mutate(p=>{
       for(const output of outputs)if(!p.renderOutputs.some(existing=>existing.id===output.id))p.renderOutputs.push(output);
       const target=p.renderJobs.find(j=>j.id===job.id);const shot=p.shots.find(s=>s.id===job.shotId);
-      let currentWorkflowKey:string|undefined;
-      if(shot&&job.spec){try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(p,shot));}catch{currentWorkflowKey=undefined;}}
-      const currentSpec=Boolean(shot&&job.spec&&shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildPrompt(p,shot)===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile));
+      const currentSpec=Boolean(shot&&this.isCurrentJobSpec(p,job,shot));
       if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message=currentSpec?'Rendered but failed technical QC':'Historical snapshot rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message=currentSpec?'Done':'Done · shot changed after queue; take kept as historical output';target.error=undefined;}}
       if(shot){if(!currentSpec){shot.latestRenderId=undefined;if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(profile&&!qcFailed){profile.validation={...(profile.validation??{structuralStatus:'valid'}),structuralStatus:'valid',sourceSha256:job.spec?.workflowSha256,lastSuccessfulRenderAt:now};}
