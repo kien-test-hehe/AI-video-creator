@@ -112,7 +112,7 @@ export class ComfyClient {
     }
 
     const before=await this.queue();
-    const state=queueState(before,promptId);
+    const state=promptQueueState(before,promptId);
     if(state==='pending')await this.deleteQueued(promptId);
     else if(state==='running')await this.interrupt(promptId);
     else if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} already finished.`);
@@ -120,7 +120,7 @@ export class ComfyClient {
 
     const deadline=Date.now()+5000;
     while(Date.now()<deadline){
-      const now=queueState(await this.queue(),promptId);
+      const now=promptQueueState(await this.queue(),promptId);
       if(now==='absent'){
         const history=await this.history(promptId);
         if(!history)return;
@@ -159,7 +159,7 @@ export class ComfyClient {
   }
 }
 
-function queueState(queue:any,promptId:string):'running'|'pending'|'absent'{
+export function promptQueueState(queue:any,promptId:string):'running'|'pending'|'absent'{
   const running=Array.isArray(queue?.queue_running)?queue.queue_running:[];
   const pending=Array.isArray(queue?.queue_pending)?queue.queue_pending:[];
   if(running.some((item:any)=>Array.isArray(item)&&item[1]===promptId))return'running';
