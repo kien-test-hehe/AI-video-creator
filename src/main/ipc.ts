@@ -52,8 +52,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
 
   const assertProjectStable=()=>{if(projectSwitchBusy)throw new Error('Wait for the current project open/create operation to finish.');};
   const assertProjectSwitchAllowed=()=>{if(projectSwitchBusy||queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish the current project switch or cancel active renders, local Director work, keyframe generation, workflow validation/provisioning, timeline export, or CapCut handoff before switching projects.');};
-  const assertGpuGenerationAvailable=()=>{assertProjectStable();if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
-  const assertDirectorAvailable=()=>{assertProjectStable();if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
+  const assertGpuGenerationAvailable=()=>{assertProjectStable();if(workflowValidationBusy)throw new Error('Wait for workflow validation/provisioning to finish before starting GPU generation.');if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
+  const assertDirectorAvailable=()=>{assertProjectStable();if(workflowValidationBusy)throw new Error('Wait for workflow validation/provisioning to finish before using the local Director.');if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
+  const assertWorkflowMaintenanceAvailable=()=>{assertProjectStable();if(queue.isBusy()||keyframeBusy||directorBusy)throw new Error('Finish or cancel active render, keyframe, or Director work before validating or provisioning workflow profiles.');};
   const withWorkflowValidationLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{if(workflowValidationBusy)throw new Error('A workflow validation/provisioning task is already running.');workflowValidationBusy=true;try{return await operation();}finally{workflowValidationBusy=false;}};
   const withProjectSwitchLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{assertProjectSwitchAllowed();projectSwitchBusy=true;try{return await operation();}finally{projectSwitchBusy=false;}};
 
@@ -136,9 +137,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const safe=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),path,'workflow path'),'workflow path');
     try{return await inspectWorkflow(safe);}catch{return inspectWanGpSettings(safe);}
   });
-  handle(IPC.workflowValidate, (profileId:string) => {assertProjectStable();return withWorkflowValidationLock(()=>validateAndRecordProfile(projects, settings.get(), profileId));});
+  handle(IPC.workflowValidate, (profileId:string) => {assertWorkflowMaintenanceAvailable();return withWorkflowValidationLock(()=>validateAndRecordProfile(projects, settings.get(), profileId));});
   handle(IPC.workflowWanGpCatalog, () => listWanGpCatalog(settings.get()));
-  handle(IPC.workflowProvisionWanGp, () => {assertProjectStable();return withWorkflowValidationLock(()=>provisionRecommendedWanGpProfiles(projects,settings));});
+  handle(IPC.workflowProvisionWanGp, () => {assertWorkflowMaintenanceAvailable();return withWorkflowValidationLock(()=>provisionRecommendedWanGpProfiles(projects,settings));});
 
   handle(IPC.systemProbe, async()=>{
     const project=projects.getCurrent()??undefined,machine=settings.get(),probe=await probeSystem(project,machine);
@@ -156,9 +157,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     shell.showItemInFolder(safe);
   });
 
-  handle(IPC.renderEnqueue,(request:RenderRequest)=>{assertProjectStable();if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before queueing a video render.');return queue.enqueue(request);});
-  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{assertProjectStable();if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before queueing video renders.');return queue.enqueueBatch(request);});
-  handle(IPC.renderRetry,(jobId:string)=>{assertProjectStable();if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before retrying a render.');return queue.retry(jobId);});
+  handle(IPC.renderEnqueue,(request:RenderRequest)=>{assertProjectStable();if(workflowValidationBusy||keyframeBusy||directorBusy)throw new Error('Wait for active workflow validation, keyframe, or Director work to finish before queueing a video render.');return queue.enqueue(request);});
+  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{assertProjectStable();if(workflowValidationBusy||keyframeBusy||directorBusy)throw new Error('Wait for active workflow validation, keyframe, or Director work to finish before queueing video renders.');return queue.enqueueBatch(request);});
+  handle(IPC.renderRetry,(jobId:string)=>{assertProjectStable();if(workflowValidationBusy||keyframeBusy||directorBusy)throw new Error('Wait for active workflow validation, keyframe, or Director work to finish before retrying a render.');return queue.retry(jobId);});
   handle(IPC.renderCancel,(jobId:string)=>queue.cancel(jobId));
   handle(IPC.renderSnapshot,()=>queue.snapshot());
   handle(IPC.renderOutputDelete,(outputId:string)=>{
