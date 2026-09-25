@@ -162,7 +162,6 @@ export class RenderQueueService extends EventEmitter {
     try{
       const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job?.spec)throw new Error('Recovered job has no immutable spec.');
       recoveredJob=job;
-      await this.verifyImmutableSpec(project,job);
       const runtime=job.spec.workflowProfile.runtime??(job.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
       await this.updateJob(jobId,{status:'recovering',message:`Recovering ${runtime} job after restart`},true,true);
       if(runtime==='wangp')await this.recoverWanGp(project,job);
@@ -324,6 +323,20 @@ export class RenderQueueService extends EventEmitter {
     return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildPrompt(project,shot)===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
   }
 
+  private async immutableFilesStillCurrent(project:FilmProject,job:RenderJob):Promise<boolean>{
+    const spec=job.spec;if(!spec)return false;
+    try{
+      const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),spec.workflowProfile.workflowPath,`workflow path for ${spec.workflowProfile.name}`);
+      if(await sha256File(workflowPath)!==spec.workflowSha256)return false;
+      for(const fingerprint of spec.assetFingerprints){
+        const asset=project.assets.find(item=>item.id===fingerprint.assetId);if(!asset||asset.projectPath!==fingerprint.projectPath)return false;
+        const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
+        if(await sha256File(path)!==fingerprint.sha256)return false;
+      }
+      return true;
+    }catch{return false;}
+  }
+
   private baseValues(job:RenderJob):WorkflowValues{
     const shot=job.spec!.shot;return{prompt:job.spec!.effectivePrompt,negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:shot.generation.frames,fps:shot.generation.fps,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed,filenamePrefix:`cineforge/${shot.id}/${job.id}`};
   }
@@ -452,13 +465,14 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async commitOutputs(job:RenderJob,outputs:RenderOutput[]):Promise<void>{
+    const externalSpecCurrent=await this.immutableFilesStillCurrent(this.requireProject(),job);
     const videos=outputs.filter(o=>o.mediaType==='video'),passing=videos.find(o=>o.technicalQc?.passed);
     const expectsVideo=(job.spec?.workflowProfile.purpose??'video')==='video';
     const qcFailed=expectsVideo&&(!videos.length||!passing);const now=new Date().toISOString();
     await this.projects.mutate(p=>{
       for(const output of outputs)if(!p.renderOutputs.some(existing=>existing.id===output.id))p.renderOutputs.push(output);
       const target=p.renderJobs.find(j=>j.id===job.id);const shot=p.shots.find(s=>s.id===job.shotId);
-      const currentSpec=Boolean(shot&&this.isCurrentJobSpec(p,job,shot));
+      const currentSpec=Boolean(shot&&externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot));
       if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message=currentSpec?'Rendered but failed technical QC':'Historical snapshot rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message=currentSpec?'Done':'Done · shot changed after queue; take kept as historical output';target.error=undefined;}}
       if(shot){if(!currentSpec){shot.latestRenderId=undefined;if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(profile&&!qcFailed){profile.validation={...(profile.validation??{structuralStatus:'valid'}),structuralStatus:'valid',sourceSha256:job.spec?.workflowSha256,lastSuccessfulRenderAt:now};}
