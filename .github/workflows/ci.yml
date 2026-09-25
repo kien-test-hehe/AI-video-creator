@@ -17,7 +17,7 @@ jobs:
   validate:
     name: Validate source
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,7 +43,42 @@ jobs:
         run: npm run lint
       - name: Unit tests
         run: npm test
+      - name: WanGP bridge tests
+        run: python3 tests/wangp_bridge_test.py
       - name: Core smoke
         run: npm run test:smoke
       - name: Build
         run: npm run build
+      - name: Package Linux directory
+        run: npx electron-builder --dir --linux x64
+
+  package-windows:
+    name: Package Windows
+    needs: validate
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Pin npm
+        run: npm install --global npm@10.9.9
+      - name: Install dependencies
+        run: npm ci
+      - name: Parse bootstrap scripts
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw scripts/setup-windows.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw scripts/run-windows.ps1)) | Out-Null
+      - name: Build renderer/main/preload
+        run: npm run build
+      - name: Build NSIS installer
+        run: npm run dist:win
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: cineforge-windows
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 7
