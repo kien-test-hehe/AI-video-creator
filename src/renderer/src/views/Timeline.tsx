@@ -6,7 +6,7 @@ import { projectMediaUrl } from '../media';
 import { insertTimelineOutput, reorderTimeline } from '../studio-logic';
 
 export function Timeline(){
-  const{project,updateProject,setError,setNotice}=useAppStore();
+  const{project,updateProject,setError,setNotice,setBusy}=useAppStore();
   const[exporting,setExporting]=useState(false);
   if(!project)return <Page title="Timeline"><Empty>Open a project first.</Empty></Page>;
 
@@ -50,12 +50,12 @@ export function Timeline(){
 
   const exportFilm=async()=>{
     try{
-      setExporting(true);await useAppStore.getState().persist();
+      setExporting(true);setBusy(true);await useAppStore.getState().persist();
       const result=await window.cineforge.timeline.export();if(result)setNotice(`Exported: ${result.outputPath}`);
     }catch(error){
       const message=error instanceof Error?error.message:String(error);
       if(!/cancelled/i.test(message))setError(message);else setNotice('Timeline export cancelled.');
-    }finally{setExporting(false);}
+}finally{setExporting(false);setBusy(false);}
   };
   const cancelExport=async()=>{try{await window.cineforge.timeline.cancelExport();}catch(error){setError(error instanceof Error?error.message:String(error));}};
 
