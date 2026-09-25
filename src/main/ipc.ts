@@ -26,6 +26,7 @@ type Handler = (...args: any[]) => any;
 
 export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
   let exportAbortController: AbortController | null = null;
+  let keyframeBusy = false;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
       assertTrustedIpcSender(event,trustedRendererUrl);
@@ -33,14 +34,17 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     });
   };
 
+  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||exportAbortController)throw new Error('Finish or cancel active renders, keyframe generation, or timeline export before switching projects.');};
+  const assertGpuGenerationAvailable=()=>{if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
+
   handle(IPC.projectCreate, async (name?: string) => {
-    if (queue.isBusy()) throw new Error('Finish or cancel the active render queue before switching projects.');
+    assertProjectSwitchAllowed();
     const created=await projects.createWithDialog(name);
     if(created)await autoProvisionWanGpIfNeeded(projects,settings);
     return projects.getCurrent();
   });
   handle(IPC.projectOpen, async () => {
-    if (queue.isBusy()) throw new Error('Finish or cancel the active render queue before switching projects.');
+    assertProjectSwitchAllowed();
     const opened = await projects.openWithDialog();
     if (opened) {
       await autoProvisionWanGpIfNeeded(projects,settings);
@@ -59,7 +63,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
 
   handle(IPC.settingsGet, () => settings.get());
   handle(IPC.settingsSave, async (next: AppMachineSettings) => {
-    if (queue.isBusy()) throw new Error('Machine runtime settings cannot change while render jobs are active.');
+    if (queue.isBusy()||keyframeBusy) throw new Error('Machine runtime settings cannot change while render jobs or keyframe generation are active.');
     return settings.save(next);
   });
 
@@ -120,9 +124,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     shell.showItemInFolder(safe);
   });
 
-  handle(IPC.renderEnqueue,(request:RenderRequest)=>queue.enqueue(request));
-  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>queue.enqueueBatch(request));
-  handle(IPC.renderRetry,(jobId:string)=>queue.retry(jobId));
+  handle(IPC.renderEnqueue,(request:RenderRequest)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before queueing a video render.');return queue.enqueue(request);});
+  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before queueing video renders.');return queue.enqueueBatch(request);});
+  handle(IPC.renderRetry,(jobId:string)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before retrying a render.');return queue.retry(jobId);});
   handle(IPC.renderCancel,(jobId:string)=>queue.cancel(jobId));
   handle(IPC.renderSnapshot,()=>queue.snapshot());
 
@@ -138,9 +142,14 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     if(!shot)throw new Error('Shot not found.');
     return reviewShotWithLocalDirector(project,shot,settings.get());
   });
-  handle(IPC.keyframeGenerate,(request:KeyframeRequest)=>generateKeyframe(projects,settings.get(),request));
+  handle(IPC.keyframeGenerate,async(request:KeyframeRequest)=>{
+    assertGpuGenerationAvailable();keyframeBusy=true;
+    try{return await generateKeyframe(projects,settings.get(),request);}
+    finally{keyframeBusy=false;}
+  });
   handle(IPC.timelineExport,async()=>{
     if(exportAbortController)throw new Error('A timeline export is already running.');
+    if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before exporting the timeline.');
     exportAbortController=new AbortController();
     try{return{outputPath:await exportTimeline(requireProject(projects),settings.get(),exportAbortController.signal)};}
     finally{exportAbortController=null;}
