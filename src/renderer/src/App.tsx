@@ -20,6 +20,23 @@ export default function App(){
       .catch(e=>setError(e instanceof Error?e.message:String(e)));
     return window.cineforge.render.onQueueEvent(snapshot=>{setQueue(snapshot);void window.cineforge.project.get().then(project=>project&&syncRuntime(project));});
   },[setError,setMachine,setProject,setQueue,syncRuntime]);
+  useEffect(()=>{
+    let allowClose=false,flushing=false;
+    const beforeUnload=(event:BeforeUnloadEvent)=>{
+      const state=useAppStore.getState();
+      if(allowClose||(!state.projectDirty&&!state.machineDirty))return;
+      event.preventDefault();event.returnValue='';
+      if(flushing)return;
+      flushing=true;
+      void Promise.all([state.persist(),state.persistMachine()]).then(()=>{
+        const latest=useAppStore.getState();
+        if(!latest.projectDirty&&!latest.machineDirty){allowClose=true;window.close();}
+        else{flushing=false;latest.setError('CineForge could not save all pending edits, so closing was cancelled. Resolve the save error and try again.');}
+      });
+    };
+    window.addEventListener('beforeunload',beforeUnload);
+    return()=>window.removeEventListener('beforeunload',beforeUnload);
+  },[]);
   const views={studio:<Studio key={project?.id||'no-project'}/>,dashboard:<Dashboard/>,story:<Story/>,assets:<Assets/>,storyboard:<Storyboard/>,shots:<Shots/>,queue:<Queue/>,timeline:<Timeline/>,finishing:<Finishing/>,settings:<Settings/>};
   return <Shell>{views[activeView]}</Shell>;
 }
