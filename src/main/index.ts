@@ -1,9 +1,9 @@
 import { app, BrowserWindow, net, protocol, session } from 'electron';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { registerIpc, shutdownForegroundOperations } from './ipc';
 import { AppSettingsService } from './services/app-settings-service';
-import { assertExistingPathInside } from './services/path-safety';
+import { assertExistingProjectMediaPath } from './services/path-safety';
 import { ProjectService } from './services/project-service';
 import { RenderQueueService } from './services/render-queue';
 import { lockDownWebContents } from './services/ipc-security';
@@ -52,7 +52,7 @@ function registerMediaProtocol(): void {
     if (url.hostname !== 'project') return new Response('Unknown media host', { status: 404 });
     try {
       const relative = decodeURIComponent(url.pathname).replace(/^\/+/, '');
-      const realFile = await assertExistingPathInside(resolve(project.rootPath), resolve(project.rootPath, relative), 'media path');
+      const realFile = await assertExistingProjectMediaPath(project.rootPath,relative);
       return await net.fetch(pathToFileURL(realFile).toString());
     } catch {
       return new Response('Media not found or blocked', { status: 404 });
