@@ -19,6 +19,7 @@ const MODES:GenerationMode[]=['t2v','i2v','flf2v','ia2v','v2v'];
 const QUALITIES:QualityIntent[]=['preview','balanced','hero'];
 const ASSET_KINDS:AssetKind[]=['character','location','prop','wardrobe','reference','keyframe','image','video','audio'];
 const ACTIVE_JOB_STATUSES=new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
+const MIN_ZOOM=.03,MAX_ZOOM=1.5;
 
 export function Studio(){
   const{project,probe,queue,selectedShotId,selectShot,updateProject,setProject,setQueue,setView,setError,setNotice,setProbe}=useAppStore();
@@ -71,19 +72,26 @@ export function Studio(){
     nodes.push({id:'story',kind:'story',x:40,y:70,width:230,height:132,title:project.story.title||project.name,subtitle:project.story.logline||'Script / story bible'});
     nodes.push({id:'assets',kind:'assets',x:40,y:280,width:230,height:132,title:'Asset Library',subtitle:`${project.assets.length} continuity / media assets`});
 
-    project.scenes.forEach((scene,index)=>{
-      const id=`scene:${scene.id}`,y=60+index*155;
-      nodes.push({id,kind:'scene',x:330,y,width:245,height:122,title:`Scene ${scene.index} · ${scene.heading}`,subtitle:compact(scene.body,92),sceneId:scene.id});
+    let sceneShotCursor=42;
+    for(const scene of project.scenes){
+      const sceneShots=sortedShots.filter(shot=>shot.sceneId===scene.id);
+      const firstShotY=sceneShotCursor;
+      if(sceneShots.length){
+        sceneShots.forEach((shot,index)=>{
+          const y=sceneShotCursor+index*158,id=`shot:${shot.id}`;
+          nodes.push({id,kind:'shot',x:670,y,width:280,height:142,title:shot.title,subtitle:compact(shot.prompt||shot.action||'No visual prompt yet.',88),shotId:shot.id});
+          edges.push({id:`scene-${shot.id}`,source:`scene:${shot.sceneId}`,target:id,kind:'primary'});
+          const route=resolveStudioWorkflow(project.settings.workflowProfiles,shot);
+          if(route)edges.push({id:`route-${shot.id}`,source:id,target:`workflow:${route.id}`,kind:route.validation?.structuralStatus==='valid'?'primary':'warning'});
+        });
+        sceneShotCursor+=sceneShots.length*158;
+      }else sceneShotCursor+=155;
+      const lastShotY=sceneShots.length?firstShotY+(sceneShots.length-1)*158:firstShotY;
+      const sceneY=Math.max(24,(firstShotY+lastShotY)/2-61);
+      const id=`scene:${scene.id}`;
+      nodes.push({id,kind:'scene',x:330,y:sceneY,width:245,height:122,title:`Scene ${scene.index} · ${scene.heading}`,subtitle:compact(scene.body,92),sceneId:scene.id});
       edges.push({id:`story-${id}`,source:'story',target:id,kind:'primary'});
-    });
-
-    sortedShots.forEach((shot,index)=>{
-      const id=`shot:${shot.id}`,y=42+index*158;
-      nodes.push({id,kind:'shot',x:670,y,width:280,height:142,title:shot.title,subtitle:compact(shot.prompt||shot.action||'No visual prompt yet.',88),shotId:shot.id});
-      edges.push({id:`scene-${shot.id}`,source:`scene:${shot.sceneId}`,target:id,kind:'primary'});
-      const route=resolveStudioWorkflow(project.settings.workflowProfiles,shot);
-      if(route)edges.push({id:`route-${shot.id}`,source:id,target:`workflow:${route.id}`,kind:route.validation?.structuralStatus==='valid'?'primary':'warning'});
-    });
+    }
 
     const profiles=project.settings.workflowProfiles;
     profiles.forEach((profile,index)=>{
@@ -107,7 +115,7 @@ export function Studio(){
     if(selectedShot)edges.push({id:'assets-selected',source:'assets',target:`shot:${selectedShot.id}`,kind:'asset'});
 
     const workflowRows=profiles.length+(unbound.length?1:0);
-    const height=Math.max(900,180+Math.max(project.scenes.length*155,sortedShots.length*158,workflowRows*142));
+    const height=Math.max(900,180+Math.max(sceneShotCursor,42+workflowRows*142));
     return{nodes,edges,width:2070,height};
   },[project,queue.jobs,selectedShot,sortedShots]);
 
@@ -129,12 +137,18 @@ export function Studio(){
   useEffect(()=>{updateViewRect();},[graph.height,graph.width,updateViewRect]);
 
   const resetLayout=()=>setPositions({});
+  const applyZoom=(nextValue:number,clientX?:number,clientY?:number)=>{
+    const el=viewportRef.current,next=Math.max(MIN_ZOOM,Math.min(MAX_ZOOM,Math.round(nextValue*1000)/1000));if(!el){setZoom(next);return;}
+    const rect=el.getBoundingClientRect(),anchorX=(clientX??(rect.left+el.clientWidth/2))-rect.left,anchorY=(clientY??(rect.top+el.clientHeight/2))-rect.top;
+    const worldX=(el.scrollLeft+anchorX)/zoom,worldY=(el.scrollTop+anchorY)/zoom;
+    setZoom(next);requestAnimationFrame(()=>{el.scrollLeft=Math.max(0,worldX*next-anchorX);el.scrollTop=Math.max(0,worldY*next-anchorY);updateViewRect();});
+  };
   const fitAll=()=>{
     const el=viewportRef.current;if(!el)return;
-    const next=Math.max(.2,Math.min(1,Math.min((el.clientWidth-30)/graph.width,(el.clientHeight-30)/graph.height)));
-    setZoom(next);requestAnimationFrame(()=>{el.scrollTo({left:0,top:0,behavior:'smooth'});});
+    const next=Math.max(MIN_ZOOM,Math.min(1,Math.min((el.clientWidth-30)/graph.width,(el.clientHeight-30)/graph.height)));
+    setZoom(next);requestAnimationFrame(()=>{el.scrollTo({left:0,top:0,behavior:'smooth'});updateViewRect();});
   };
-  const changeZoom=(delta:number)=>setZoom(value=>Math.max(.2,Math.min(1.25,Math.round((value+delta)*100)/100)));
+  const changeZoom=(delta:number)=>applyZoom(zoom+delta);
 
   const beginNodeDrag=(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>{
     if(locked||event.button!==0)return;
@@ -156,7 +170,7 @@ export function Studio(){
   };
   const movePan=(event:ReactPointerEvent<HTMLDivElement>)=>{const pan=panState.current,viewport=viewportRef.current;if(!pan||pan.pointerId!==event.pointerId||!viewport)return;viewport.scrollLeft=pan.scrollLeft-(event.clientX-pan.startClient.x);viewport.scrollTop=pan.scrollTop-(event.clientY-pan.startClient.y);};
   const endPan=(event:ReactPointerEvent<HTMLDivElement>)=>{if(panState.current?.pointerId===event.pointerId)panState.current=null;};
-  const zoomWheel=(event:ReactWheelEvent<HTMLDivElement>)=>{if(!event.ctrlKey&&!event.metaKey)return;event.preventDefault();changeZoom(event.deltaY>0?-.06:.06);};
+  const zoomWheel=(event:ReactWheelEvent<HTMLDivElement>)=>{if(!event.ctrlKey&&!event.metaKey)return;event.preventDefault();applyZoom(zoom+(event.deltaY>0?-.06:.06),event.clientX,event.clientY);};
 
   const importAsset=async()=>{
     if(!project)return;
@@ -222,7 +236,7 @@ export function Studio(){
       </div>
       <div className="studio-command-actions">
         <button className="ghost" onClick={()=>changeZoom(-.1)}>−</button><span className="studio-zoom">{Math.round(zoom*100)}%</span><button className="ghost" onClick={()=>changeZoom(.1)}>+</button>
-        <button className="ghost" onClick={fitAll}>Fit all</button>
+        <button className="ghost" onClick={fitAll}>Fit all</button><button className="ghost" disabled={!focusedNode} onClick={()=>focusedNode&&scrollToNode(focusedNode.id,nodeMap,viewportRef.current,zoom)}>Focus</button>
         <button className={locked?'ghost active-toggle':'ghost'} onClick={()=>setLocked(value=>!value)}>{locked?'Unlock nodes':'Lock nodes'}</button>
         <button className="ghost" onClick={resetLayout}>Auto layout</button>
         <button className={showLibrary?'ghost active-toggle':'ghost'} onClick={()=>setShowLibrary(value=>!value)}>Library</button>
@@ -230,7 +244,7 @@ export function Studio(){
         <button className={showDock?'ghost active-toggle':'ghost'} onClick={()=>setShowDock(value=>!value)}>Dock</button>
         <button className="ghost" disabled={preflightBusy||sortedShots.length===0} onClick={runPreflight}>{preflightBusy?'Checking…':`Preflight · ${preflightSummary}`}</button>
         <button className="ghost" disabled={sortedShots.length===0||preflightBusy} onClick={renderAll}>Render all</button>
-        <button className="primary" title={!selectedRouteReady?'Select or validate a usable video workflow before rendering.':undefined} disabled={!selectedShot||!selectedRouteReady} onClick={queueSelected}>Render selected</button>
+        <button className="primary" title={!selectedRouteReady?'Select or validate a usable video workflow before rendering.':undefined} disabled={!selectedShot||focusedNode?.kind!=='shot'||focusedNode.shotId!==selectedShot.id||!selectedRouteReady} onClick={queueSelected}>Render selected</button>
       </div>
     </header>
 
