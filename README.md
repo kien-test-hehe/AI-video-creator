@@ -1,200 +1,182 @@
-# CineForge Local 0.2
+# CineForge Local 0.3
 
 **Codex orchestrates. Local AI renders. CapCut finishes.**
 
-CineForge is a local-first AI video production OS designed around one budget rule: the only intended recurring paid services are **Codex/ChatGPT + CapCut**. Heavy media generation stays on the workstation.
+CineForge is a local-first desktop production orchestrator for AI video. Its budget rule is explicit: the only intended recurring paid services are **Codex/ChatGPT + CapCut**. Heavy ASR/TTS/image/video/upscale/QC work is local.
+
+## Architecture
 
 ```text
                          CODEX
-                producer / orchestrator
-                           │
-          ┌────────────────┼────────────────┐
-          │                │                │
-          ▼                ▼                ▼
-     PROJECT STATE      LOCAL AI         LOCAL MEDIA
-     story / shots      WanGP main       FFmpeg
-     continuity         ComfyUI lab      optional ASR/TTS
-     timeline / QC      local LLM        upscale/interp
-          │                │                │
-          └────────── generated assets ─────┘
+                  producer / orchestrator
                            │
                            ▼
-                   CINEFORGE TIMELINE
+                   CINEFORGE CORE
+        project graph / policy / durable jobs
                            │
-                   CapCut handoff
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+           WanGP        ComfyUI      Local tools
+        production       lab        ASR/TTS/etc.
+              └────────────┼────────────┘
+                           ▼
+                      media + QC
                            │
                            ▼
-                     CAPCUT × CODEX
+                 canonical CineForge cut
                            │
-                  editable final polish
+              ┌────────────┴────────────┐
+              ▼                         ▼
+        local master export       CapCut handoff
+                                        │
+                                        ▼
+                                  CapCut × Codex
+                                        │
+                                        ▼
+                                  human final QC
 ```
 
-## What changed in 0.2
+CapCut is deliberately **not** the canonical project database. A CineForge project remains reconstructable without a CapCut project file.
 
-- **WanGP-first production runtime** with a version-safe exported-settings adapter.
-- ComfyUI retained as **lab/fallback**, not the canonical generation backend.
-- Explicit `codex-capcut-only` cost policy.
-- CapCut AI credits default to **disabled**.
-- CapCut × Codex handoff manifest + generated task instructions.
-- Codex producer and CapCut-finishing skills checked into the repo.
-- Immutable render snapshots and workflow/settings SHA-256 remain enforced.
-- Local-only network guard remains the default.
+## Security model
 
-## Core production flow
+Portable projects are treated as untrusted input.
+
+- Project schema v2 is runtime-validated and bounded.
+- Legacy v1 projects are migrated, but executable paths and AI endpoint URLs are discarded.
+- FFmpeg, FFprobe, Python, WanGP, Docker, ComfyUI and local-LLM settings live only in Electron `userData`.
+- AI service URLs are loopback-only.
+- Every IPC handler validates its sender.
+- renderer navigation, popup windows, webviews and permission requests are locked down.
+- project reads resolve canonical real paths to block symlink escape.
+- writes are restricted to known project roots.
+- active render recovery trusts only installation-signed job journals.
+
+Opening a project never executes a path or contacts an endpoint supplied by that project.
+
+## Render reliability
+
+Each queued render freezes:
+
+- the shot, prompt, generation settings and seed;
+- workflow/settings SHA-256;
+- SHA-256 of every referenced project asset;
+- local runtime fingerprint;
+- optional model/checkpoint fingerprint.
+
+Retry refuses to claim exactness when those inputs changed.
+
+Runtime progress is journaled separately from canonical project JSON, so verbose model logs do not rewrite the whole project. After restart, signed queued jobs are re-queued, ComfyUI jobs reconcile by prompt ID, and WanGP jobs reconcile by PID. Unsigned active state from a foreign project becomes `orphaned` and never auto-runs.
+
+## Production backends
+
+### WanGP
+
+WanGP is the primary production runtime. CineForge supports:
+
+- native process execution;
+- optional isolated Docker execution;
+- exported settings JSON;
+- explicit JSON-path bindings;
+- ambiguity-safe binding inference;
+- dry-run validation;
+- host→container path mapping limited to explicit mounts.
+
+### ComfyUI
+
+ComfyUI is a lab/fallback runtime. Production routes require:
+
+- API-format workflows;
+- validated bindings;
+- a dedicated CineForge ComfyUI instance.
+
+Connected unknown/subgraph UI nodes are never silently flattened.
+
+## Technical QC
+
+Generated video is inspected before it can become the preferred take:
+
+- video/audio stream presence;
+- expected duration;
+- expected resolution/FPS;
+- requested audio presence;
+- black-segment detection;
+- frozen-segment detection;
+- clipping-risk audio peak detection.
+
+A video route that produces no video or fails technical QC becomes a failed job, while the output remains available for diagnosis.
+
+## CapCut
+
+**Finishing → Prepare CapCut handoff** validates the current canonical timeline and writes:
 
 ```text
-Story
-→ Assets / continuity references
-→ Director / storyboard
-→ Shot graph
-→ WanGP or ComfyUI route
-→ immutable render queue
-→ takes
-→ CineForge timeline
-→ FFmpeg export and/or CapCut handoff
-→ CapCut × Codex finishing
-→ final human verification
+handoff/capcut/<timestamp>/
+  manifest.json
+  CODEX_CAPCUT_TASK.md
 ```
 
-The CapCut project is deliberately **not** the canonical project representation. CineForge keeps enough structured state to reconstruct the edit if the external integration changes.
+The task asks the official CapCut × Codex workflow to preserve media/order/trims/dialogue while using CapCut for captions, typography, transitions, tracking/reframe, effects and final polish. CapCut AI-credit generation is prohibited unless the project explicitly enables it.
 
-## Workstation target
+This is a handoff contract, not brittle coordinate-click GUI automation.
 
-The defaults are intended for a machine in the class of:
+## Target workstation
 
-- RTX 5060 Ti 16 GB VRAM
-- 40+ GB system RAM; 64 GB is more comfortable for offload/model switching
-- i5-14400F-class CPU or better
-- NVMe storage with substantial free space
+Primary target:
 
-Generate candidates at practical local resolutions, select/repair shots, then upscale/finish rather than brute-forcing many native-1080p candidates.
+- RTX 5060 Ti 16 GB
+- i5-14400F class CPU
+- 40+ GB RAM; 64 GB preferred
+- NVMe with meaningful free space
+- Windows 11 for CapCut finishing
 
-## Runtime roles
+See [docs/RUNTIME_REQUIREMENTS.md](docs/RUNTIME_REQUIREMENTS.md) and [MODEL_SETUP.md](MODEL_SETUP.md).
 
-### WanGP — production
-
-CineForge does **not** hard-code one WanGP model schema. Instead:
-
-1. Configure a preset in your installed WanGP version.
-2. Export its working settings JSON.
-3. Import that JSON in **Settings → Import WanGP settings**.
-4. Review inferred JSON-path bindings.
-5. Enable the profile.
-
-At render time CineForge freezes the shot + profile, patches a project-local settings copy, then launches WanGP headlessly. Model-specific parameters that CineForge does not own remain untouched.
-
-Recommended routing intent:
-
-- LTX 2.5 Fast: general I2V/AV, dialogue/audio-aware shots.
-- HunyuanVideo 1.5: hero/quality-biased shots.
-- Wan 2.2 5B/variants: motion/action/general local generation.
-- long-video route: optional specialized profile rather than forcing one giant diffusion shot.
-
-### ComfyUI — lab/fallback
-
-ComfyUI API-format workflows remain supported. UI graph conversion is fail-safe: if CineForge sees connected subgraphs or unknown nodes that cannot be flattened safely, it refuses to create a partial graph and asks for an API-format export.
-
-### CapCut — finishing
-
-After building a CineForge timeline, open **CapCut** in the sidebar and choose **Prepare CapCut handoff**. CineForge creates:
-
-```text
-handoff/capcut/<timestamp>/manifest.json
-handoff/capcut/<timestamp>/CODEX_CAPCUT_TASK.md
-```
-
-The handoff asks the official CapCut × Codex workflow to preserve the edit while using CapCut for:
-
-- caption styling,
-- typography,
-- trim/order refinement,
-- transitions,
-- tracking/reframe,
-- effects/templates available in the plan,
-- final polish and editable export.
-
-When `allowCapcutAiCredits = false`, the task explicitly prohibits paid replacement generation.
-
-## Cost wall
-
-Defaults:
-
-```json
-{
-  "mode": "codex-capcut-only",
-  "allowCapcutAiCredits": false,
-  "localOnly": true
-}
-```
-
-No Gemini/Groq/OpenRouter dependency exists in the core path. Optional local ASR/TTS/upscale/separation tools can be invoked by Codex or added as local adapters without changing the canonical project model.
-
-“Local / no per-call bill” still means you pay electricity, storage and hardware costs and must respect each model/tool license.
-
-See [docs/COST_POLICY.md](docs/COST_POLICY.md).
-
-## Install
-
-Prerequisites:
-
-- Node.js `22.16.x`
-- npm `10.x`
-- NVIDIA driver/CUDA stack appropriate for your local AI runtime
-- FFmpeg
-- WanGP for the production route
-- optional ComfyUI for experimental workflows
-- optional local OpenAI-compatible LLM server for Director/continuity review
+## Development
 
 ```bash
-npm install
+npm ci
 npm run typecheck
+npm run lint
 npm test
+npm run test:smoke
+npm run build
 npm run dev
 ```
 
-Environment variables are optional; all can be configured per project:
+Machine defaults can be seeded from:
 
 ```bash
 cp .env.example .env
 ```
 
-Important variables:
+The supported Node/npm baseline is declared in `package.json`.
 
-```text
-CINEFORGE_WANGP_ROOT=/path/to/Wan2GP
-CINEFORGE_PYTHON=python
-CINEFORGE_FFMPEG=ffmpeg
-CINEFORGE_COMFY_URL=http://127.0.0.1:8188
-CINEFORGE_COMFY_INPUT=/path/to/ComfyUI/input
+## Packaging
+
+```bash
+npm run pack
+npm run dist:win
+npm run dist:linux
+npm run dist:mac
 ```
 
-## First-run checklist
+Production packages use ASAR plus Electron fuses that disable Run-As-Node, Node CLI inspection/options and file-protocol privilege expansion while enabling ASAR integrity validation.
 
-1. Open Settings.
-2. Point **WanGP root** to the installed WanGP directory.
-3. Verify Python and FFmpeg paths.
-4. Leave **CapCut AI credits disabled** unless you intentionally want metered CapCut generation.
-5. Export/import one working WanGP settings JSON for each model route you want.
-6. Map/review prompt, seed, dimensions, frames and reference JSON paths.
-7. Enable only validated profiles.
-8. Import character/location/prop/reference assets.
-9. Plan shots and attach continuity assets/keyframes.
-10. Run Preflight before batch rendering.
-11. Build the latest cut in Timeline.
-12. Prepare a CapCut handoff for finishing.
+Code signing credentials are intentionally not stored in this repository.
 
-## Reliability and safety properties
+## CI
 
-- renderer process has no unrestricted filesystem access;
-- project media uses a sandboxed media protocol;
-- path containment blocks traversal and symlink escape;
-- project writes keep a known-good backup;
-- render runtime state is owned by the main process so renderer autosave cannot clobber a live queue;
-- one-GPU serialized scheduling avoids accidental concurrent diffusion renders;
-- retry uses the exact queued snapshot;
-- workflow/settings SHA mismatch blocks non-reproducible retry;
-- local-only host checking prevents accidental cloud AI calls in the core path;
-- preflight checks missing/stale assets, runtime availability, bindings and shot validity.
+`.github/workflows/ci.yml` gates:
+
+1. dependency lock/install;
+2. TypeScript;
+3. ESLint;
+4. unit/security tests;
+5. core smoke tests;
+6. Electron/Vite build.
+
+A model route is **not** considered hardware-validated merely because source CI is green. The exact runtime/model must also complete a real render on the target GPU.
 
 ## Repository map
 
@@ -202,30 +184,35 @@ CINEFORGE_COMFY_INPUT=/path/to/ComfyUI/input
 src/
   main/
     services/
-      wangp-engine.ts       exported-settings binding
-      wangp-runner.ts       headless WanGP process runner
-      render-queue.ts       immutable single-GPU queue
-      capcut-handoff.ts     CapCut × Codex manifest/task
-      preflight-service.ts  cost/runtime/workflow checks
-      workflow-engine.ts    ComfyUI adapter
-      director-service.ts   local LLM planning/review
-      ffmpeg-service.ts     deterministic master export
-  preload/                  typed IPC bridge
-  renderer/                 Electron/React production UI
-  shared/                   schema, routing, defaults, API
-skills/
-  video-producer/SKILL.md
-  capcut-finishing/SKILL.md
+      project-schema.ts
+      app-settings-service.ts
+      render-queue.ts
+      job-journal.ts
+      technical-qc.ts
+      wangp-runner.ts
+      workflow-engine.ts
+      capcut-handoff.ts
+  preload/
+  renderer/
+  shared/
+
+tests/
 docs/
-  ARCHITECTURE.md
-  COST_POLICY.md
-  CAPCUT_CODEX.md
+infra/docker/
+skills/
 ```
 
-## Current validation status
+## Cost wall
 
-The repository includes static/core smoke tests for screenplay parsing, ComfyUI workflow binding/conversion safety, path containment, local-only networking, model routing, continuity references and WanGP JSON-path inference.
+Default policy:
 
-Full diffusion integration requires the target machine to have the selected model weights and a working WanGP/ComfyUI installation. A successful TypeScript/build test does not substitute for validating a specific exported model preset on the actual RTX workstation.
+```json
+{
+  "mode": "codex-capcut-only",
+  "allowCapcutAiCredits": false
+}
+```
 
-See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and [MODEL_SETUP.md](MODEL_SETUP.md).
+There is no required Gemini, Groq, OpenRouter, hosted ASR, hosted TTS or hosted image/video generation dependency in the core path. “Local” means no per-call cloud inference bill; hardware, electricity, storage and model/tool licences still matter.
+
+See [docs/COST_POLICY.md](docs/COST_POLICY.md).
