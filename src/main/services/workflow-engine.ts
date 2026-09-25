@@ -113,8 +113,8 @@ const INPUT_NAME_HINTS: Record<WorkflowBindingKey, string[]> = {
   referenceImage2: ['reference_image_2', 'reference2', 'ref_image_2'],
   referenceImage3: ['reference_image_3', 'reference3', 'ref_image_3'],
   referenceImage4: ['reference_image_4', 'reference4', 'ref_image_4'],
-  inputAudio: ['audio', 'input_audio'],
-  inputVideo: ['video', 'input_video'],
+  inputAudio: ['audio', 'input_audio', 'audio_guide'],
+  inputVideo: ['video', 'input_video', 'video_guide'],
   filenamePrefix: ['filename_prefix', 'filename', 'prefix']
 };
 
