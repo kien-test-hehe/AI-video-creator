@@ -24,9 +24,17 @@ function Ensure-Node {
   if (Test-Path (Join-Path $NodeRoot 'node.exe')) { return }
   Step "Installing portable Node.js $NodeVersion into .runtime"
   New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
-  $zip = Join-Path $RuntimeRoot "node-v$NodeVersion-win-x64.zip"
-  $url = "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-x64.zip"
+  $fileName = "node-v$NodeVersion-win-x64.zip"
+  $zip = Join-Path $RuntimeRoot $fileName
+  $url = "https://nodejs.org/dist/v$NodeVersion/$fileName"
+  $sumsUrl = "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt"
   Invoke-WebRequest -Uri $url -OutFile $zip
+  $sums = (Invoke-WebRequest -Uri $sumsUrl).Content
+  $expectedLine = ($sums -split "`n" | Where-Object { $_ -match ("\s+" + [regex]::Escape($fileName) + "$") } | Select-Object -First 1)
+  if (-not $expectedLine) { throw "Node.js checksum entry not found for $fileName" }
+  $expectedHash = ($expectedLine.Trim() -split "\s+")[0].ToLowerInvariant()
+  $actualHash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+  if ($actualHash -ne $expectedHash) { Remove-Item $zip -Force; throw 'Node.js archive checksum verification failed.' }
   Expand-Archive -Path $zip -DestinationPath $RuntimeRoot -Force
   Remove-Item $zip -Force
 }
@@ -103,6 +111,182 @@ function Ensure-WanGP([string]$BootstrapPython) {
   if (-not (Test-Path (Join-Path $WanRoot '.git'))) {
     & $git clone https://github.com/deepbeepmeep/Wan2GP.git $WanRoot
     if ($LASTEXITCODE -ne 0) { throw 'Failed to clone WanGP.' }
+  } else {
+    $origin = (& $git -C $WanRoot remote get-url origin).Trim()
+    if ($origin -notmatch '^(https://github\.com/|git@github\.com:)deepbeepmeep/Wan2GP(?:\.git)?
+  try {
+    & $git fetch --all --tags --prune
+    & $git checkout --detach $WanPin
+    if ($LASTEXITCODE -ne 0) { throw "Failed to checkout pinned WanGP commit $WanPin" }
+    & $BootstrapPython setup.py install --env venv --auto
+    if ($LASTEXITCODE -ne 0) { throw 'WanGP automatic installer failed.' }
+    $infoMatch = (& $BootstrapPython setup.py get_env_info 2>&1 | Select-String 'ENV_INFO\|' | Select-Object -Last 1)
+    if (-not $infoMatch) { throw 'WanGP installed but its active environment path could not be discovered.' }
+    $info = $infoMatch.ToString()
+    if ($info -notmatch 'ENV_INFO\|[^|]+\|(.+)
+    $envPath = $Matches[1].Trim()
+    $envPython = Join-Path $envPath 'Scripts\python.exe'
+    if (-not (Test-Path $envPython)) { throw "WanGP environment Python not found: $envPython" }
+    return $envPython
+  } finally { Pop-Location }
+}
+
+Step 'Creating CineForge machine runtime'
+New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+Ensure-Node
+Assert-Nvidia
+$python = Ensure-Python311
+$ff = Ensure-FFmpeg
+$wanPython = Ensure-WanGP $python
+$ffmpegPath = $ff[0]
+$ffprobePath = $ff[1]
+
+Step 'Writing machine-local CineForge environment'
+$escapedWan = $WanRoot.Replace("'", "''")
+$escapedPy = $wanPython.Replace("'", "''")
+$escapedFfmpeg = $ffmpegPath.Replace("'", "''")
+$escapedFfprobe = $ffprobePath.Replace("'", "''")
+@(
+  "`$env:CINEFORGE_WANGP_ROOT = '$escapedWan'",
+  "`$env:CINEFORGE_PYTHON = '$escapedPy'",
+  "`$env:CINEFORGE_FFMPEG = '$escapedFfmpeg'",
+  "`$env:CINEFORGE_FFPROBE = '$escapedFfprobe'",
+  "`$env:CINEFORGE_COMFY_URL = 'http://127.0.0.1:8188'",
+  "`$env:CINEFORGE_DIRECTOR_URL = 'http://127.0.0.1:11434/v1'"
+) | Set-Content -Encoding UTF8 $EnvFile
+
+Step 'Installing CineForge dependencies'
+$npm = Join-Path $NodeRoot 'npm.cmd'
+if (Test-Path (Join-Path $RepoRoot 'package-lock.json')) { & $npm ci --prefix $RepoRoot } else { & $npm install --prefix $RepoRoot }
+if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation failed.' }
+
+if (-not $SkipBuild) {
+  Step 'Validating CineForge source'
+  & $npm run typecheck --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'TypeScript validation failed.' }
+  & $npm test --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed.' }
+  & $npm run build --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'Electron/Vite build failed.' }
+}
+
+Write-Host "`nCineForge workstation setup is ready." -ForegroundColor Green
+Write-Host 'Run: start.cmd'
+Write-Host 'CapCut Pro is NOT assumed. New projects default to CapCut Free / No Pro.'
+Write-Host 'WanGP model weights download on demand on the first generation for each chosen model.'
+) { throw "Refusing to update unexpected WanGP remote: $origin" }
+  }
+  Push-Location $WanRoot
+  try {
+    & $git fetch --all --tags --prune
+    & $git checkout --detach $WanPin
+    if ($LASTEXITCODE -ne 0) { throw "Failed to checkout pinned WanGP commit $WanPin" }
+    & $BootstrapPython setup.py install --env venv --auto
+    if ($LASTEXITCODE -ne 0) { throw 'WanGP automatic installer failed.' }
+    $info = (& $BootstrapPython setup.py get_env_info 2>&1 | Select-String 'ENV_INFO\|' | Select-Object -Last 1).ToString()
+    if ($info -notmatch 'ENV_INFO\|[^|]+\|(.+)$') { throw 'WanGP installed but its active environment path could not be discovered.' }
+    $envPath = $Matches[1].Trim()
+    $envPython = Join-Path $envPath 'Scripts\python.exe'
+    if (-not (Test-Path $envPython)) { throw "WanGP environment Python not found: $envPython" }
+    return $envPython
+  } finally { Pop-Location }
+}
+
+Step 'Creating CineForge machine runtime'
+New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+Ensure-Node
+Assert-Nvidia
+$python = Ensure-Python311
+$ff = Ensure-FFmpeg
+$wanPython = Ensure-WanGP $python
+$ffmpegPath = $ff[0]
+$ffprobePath = $ff[1]
+
+Step 'Writing machine-local CineForge environment'
+$escapedWan = $WanRoot.Replace("'", "''")
+$escapedPy = $wanPython.Replace("'", "''")
+$escapedFfmpeg = $ffmpegPath.Replace("'", "''")
+$escapedFfprobe = $ffprobePath.Replace("'", "''")
+@(
+  "`$env:CINEFORGE_WANGP_ROOT = '$escapedWan'",
+  "`$env:CINEFORGE_PYTHON = '$escapedPy'",
+  "`$env:CINEFORGE_FFMPEG = '$escapedFfmpeg'",
+  "`$env:CINEFORGE_FFPROBE = '$escapedFfprobe'",
+  "`$env:CINEFORGE_COMFY_URL = 'http://127.0.0.1:8188'",
+  "`$env:CINEFORGE_DIRECTOR_URL = 'http://127.0.0.1:11434/v1'"
+) | Set-Content -Encoding UTF8 $EnvFile
+
+Step 'Installing CineForge dependencies'
+$npm = Join-Path $NodeRoot 'npm.cmd'
+if (Test-Path (Join-Path $RepoRoot 'package-lock.json')) { & $npm ci --prefix $RepoRoot } else { & $npm install --prefix $RepoRoot }
+if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation failed.' }
+
+if (-not $SkipBuild) {
+  Step 'Validating CineForge source'
+  & $npm run typecheck --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'TypeScript validation failed.' }
+  & $npm test --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed.' }
+  & $npm run build --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'Electron/Vite build failed.' }
+}
+
+Write-Host "`nCineForge workstation setup is ready." -ForegroundColor Green
+Write-Host 'Run: start.cmd'
+Write-Host 'CapCut Pro is NOT assumed. New projects default to CapCut Free / No Pro.'
+Write-Host 'WanGP model weights download on demand on the first generation for each chosen model.'
+) { throw 'WanGP installed but its active environment path could not be parsed.' }
+    $envPath = $Matches[1].Trim()
+    $envPython = Join-Path $envPath 'Scripts\python.exe'
+    if (-not (Test-Path $envPython)) { throw "WanGP environment Python not found: $envPython" }
+    return $envPython
+  } finally { Pop-Location }
+}
+
+Step 'Creating CineForge machine runtime'
+New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+Ensure-Node
+Assert-Nvidia
+$python = Ensure-Python311
+$ff = Ensure-FFmpeg
+$wanPython = Ensure-WanGP $python
+$ffmpegPath = $ff[0]
+$ffprobePath = $ff[1]
+
+Step 'Writing machine-local CineForge environment'
+$escapedWan = $WanRoot.Replace("'", "''")
+$escapedPy = $wanPython.Replace("'", "''")
+$escapedFfmpeg = $ffmpegPath.Replace("'", "''")
+$escapedFfprobe = $ffprobePath.Replace("'", "''")
+@(
+  "`$env:CINEFORGE_WANGP_ROOT = '$escapedWan'",
+  "`$env:CINEFORGE_PYTHON = '$escapedPy'",
+  "`$env:CINEFORGE_FFMPEG = '$escapedFfmpeg'",
+  "`$env:CINEFORGE_FFPROBE = '$escapedFfprobe'",
+  "`$env:CINEFORGE_COMFY_URL = 'http://127.0.0.1:8188'",
+  "`$env:CINEFORGE_DIRECTOR_URL = 'http://127.0.0.1:11434/v1'"
+) | Set-Content -Encoding UTF8 $EnvFile
+
+Step 'Installing CineForge dependencies'
+$npm = Join-Path $NodeRoot 'npm.cmd'
+if (Test-Path (Join-Path $RepoRoot 'package-lock.json')) { & $npm ci --prefix $RepoRoot } else { & $npm install --prefix $RepoRoot }
+if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation failed.' }
+
+if (-not $SkipBuild) {
+  Step 'Validating CineForge source'
+  & $npm run typecheck --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'TypeScript validation failed.' }
+  & $npm test --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed.' }
+  & $npm run build --prefix $RepoRoot
+  if ($LASTEXITCODE -ne 0) { throw 'Electron/Vite build failed.' }
+}
+
+Write-Host "`nCineForge workstation setup is ready." -ForegroundColor Green
+Write-Host 'Run: start.cmd'
+Write-Host 'CapCut Pro is NOT assumed. New projects default to CapCut Free / No Pro.'
+Write-Host 'WanGP model weights download on demand on the first generation for each chosen model.'
+) { throw "Refusing to update unexpected WanGP remote: $origin" }
   }
   Push-Location $WanRoot
   try {
