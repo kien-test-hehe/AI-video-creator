@@ -15,7 +15,7 @@ export interface CineforgeApi {
     get(): Promise<AppMachineSettings>;
     save(settings: AppMachineSettings): Promise<AppMachineSettings>;
   };
-  asset: { import(kind: AssetKind): Promise<FilmProject | null>; };
+  asset: { import(kind: AssetKind): Promise<FilmProject | null>; delete(assetId: string): Promise<FilmProject>; };
   workflow: {
     importComfy(): Promise<{ path: string; format: 'api' | 'ui'; suggestedBindings: WorkflowProfile['bindings']; warnings?: string[] } | null>;
     importWanGp(): Promise<{ path: string; format: 'wangp-settings'; suggestedBindings: WorkflowProfile['bindings']; warnings?: string[] } | null>;
