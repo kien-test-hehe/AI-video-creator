@@ -114,7 +114,8 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
       if(!targetShot||!targetProfile||keyframeProjectInputKey(p,targetShot,request.role,targetProfile)!==inputSignature)throw new Error('The shot or keyframe workflow changed before the generated frame could be attached.');
       p.assets.push(asset);
       if(request.role==='start')targetShot.startFrameAssetId=asset.id;else targetShot.endFrameAssetId=asset.id;
-      if(targetShot.status==='draft')targetShot.status='ready';
+      targetShot.latestRenderId=undefined;
+      if(['draft','rendered','failed'].includes(targetShot.status))targetShot.status='ready';
     });
   }catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
 }
