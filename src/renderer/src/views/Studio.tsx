@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from 'react';
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
 import { chooseModelForShot } from '../../../shared/routing';
-import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, Shot, WorkflowProfile } from '../../../shared/types';
+import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, WorkflowProfile } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { reorderTimeline, routeShotToWorkflow } from '../studio-logic';
@@ -279,21 +279,24 @@ export function Studio(){
   </section>;
 }
 
-function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onSelectShot,onOpen,onDropToShot,onStartWorkflowDrag}:{node:StudioNode;project:FilmProject;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onSelectShot:(id?:string)=>void;onOpen:(view:ViewId)=>void;onDropToShot:(event:DragEvent<HTMLElement>,shotId:string)=>void;onStartWorkflowDrag:(event:DragEvent<HTMLElement>,profileId:string)=>void}){
+function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onActivate,onOpen,onDropToShot,onStartWorkflowDrag}:{node:StudioNode;project:FilmProject;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onActivate:(node:StudioNode)=>void;onOpen:(view:ViewId)=>void;onDropToShot:(event:DragEvent<HTMLElement>,shotId:string)=>void;onStartWorkflowDrag:(event:DragEvent<HTMLElement>,profileId:string)=>void}){
   const shot=node.shotId?project.shots.find(item=>item.id===node.shotId):undefined;
   const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
   const route=shot?resolveWorkflow(project.settings.workflowProfiles,shot):undefined;
+  const routeableProfile=Boolean(profile?.enabled&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&(profile.purpose??'video')==='video');
+  const visual=shot?shotPreviewAsset(project,shot):undefined;
   const className=['studio-node',`node-${node.kind}`,selected?'selected':'',active?'on-path':'',locked?'locked':''].filter(Boolean).join(' ');
   const openView:Partial<Record<StudioNodeKind,ViewId>>={story:'story',assets:'assets',scene:'storyboard',shot:'shots',workflow:'settings',queue:'queue',timeline:'timeline',capcut:'finishing'};
   return <article className={className} style={{left:node.x,top:node.y,width:node.width,minHeight:node.height}} onDragOver={shot?event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';}:undefined} onDrop={shot?event=>onDropToShot(event,shot.id):undefined}>
     <header className="studio-node-drag" onPointerDown={event=>onPointerDown(event,node)} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
       <span className="studio-node-kind">{node.kind}</span><span>{locked?'●':'⠿'}</span>
     </header>
-    <button className="studio-node-body" draggable={Boolean(profile)} title={profile?'Drag this workflow onto a shot to route it.':shot?'Drop assets or workflows here.':undefined} onDragStart={profile?event=>{event.stopPropagation();onStartWorkflowDrag(event,profile.id);}:undefined} onClick={()=>{if(shot)onSelectShot(shot.id);else if(openView[node.kind])onOpen(openView[node.kind]!);}}>
+    <button className="studio-node-body" draggable={routeableProfile} title={profile?(routeableProfile?'Drag onto a shot to route it. Single-click inspects; double-click opens Settings.':'Inspect here. Validate and enable this workflow before drag-routing.'):shot?'Drop assets or validated workflows here. Single-click inspects; double-click opens the full workshop.':'Single-click inspects; double-click opens the detailed workspace.'} onDragStart={routeableProfile&&profile?event=>{event.stopPropagation();onStartWorkflowDrag(event,profile.id);}:undefined} onClick={()=>onActivate(node)} onDoubleClick={()=>{const view=openView[node.kind];if(view)onOpen(view);}}>
+      {visual&&<img className="studio-node-thumb" src={projectMediaUrl(visual.projectPath)} alt=""/>}
       <strong>{node.title}</strong><small>{node.subtitle}</small>
-      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{!route?<Pill>no route</Pill>:route.validation?.structuralStatus!=='valid'?<Pill>route {route.validation?.structuralStatus||'unvalidated'}</Pill>:null}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
+      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{!route?<Pill>no route</Pill>:route.validation?.structuralStatus!=='valid'?<Pill>route {route.validation?.structuralStatus||'unvalidated'}</Pill>:<Pill>route ready</Pill>}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
       {shot&&<div className="studio-ref-meter"><span>C{shot.characterAssetIds.length}</span><span>{shot.locationAssetId?'LOC':'NO LOC'}</span><span>R{shot.propAssetIds.length}</span><span>{shot.startFrameAssetId?'START':'—'}</span><span>{shot.endFrameAssetId?'END':'—'}</span></div>}
-      {profile&&<div className="studio-node-meta"><Pill>{profile.enabled?'enabled':'off'}</Pill><span>{profile.validation?.structuralStatus||'unvalidated'}</span></div>}
+      {profile&&<div className="studio-node-meta"><Pill>{profile.enabled?'enabled':'off'}</Pill><span>{profile.validation?.structuralStatus||'unvalidated'}</span>{routeableProfile&&<span>drag-route</span>}</div>}
       {node.kind==='queue'&&<div className="studio-node-meta"><span>{project.renderJobs.filter(job=>job.status==='done').length} completed</span><span>{project.renderOutputs.length} outputs</span></div>}
       {node.kind==='timeline'&&<div className="studio-node-meta"><span>{project.timeline.length} clips</span><span>{project.renderOutputs.filter(output=>output.mediaType==='video').length} takes</span></div>}
     </button>
@@ -306,6 +309,43 @@ function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioN
   const bend=Math.max(54,(tx-sx)*.45);
   return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`}/>;
 }
+
+function StudioInspector({node,project,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;project:FilmProject;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
+  if(!node)return <div className="studio-mini-empty">Select any pipeline node to inspect it here.</div>;
+  if(node.kind==='shot'&&shot)return <ShotInspector project={project} shot={shot} latestPath={latestPath} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>;
+  if(node.kind==='workflow'){
+    const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
+    if(!profile)return <InspectorFrame kicker="WORKFLOW" title="Unbound shots" action={()=>setView('settings')} actionLabel="Open Settings ↗"><p className="muted">One or more shots do not currently resolve to an enabled matching workflow. Validate/provision a profile, or drag a validated workflow node onto the shot.</p></InspectorFrame>;
+    return <InspectorFrame kicker="WORKFLOW" title={profile.name} action={()=>setView('settings')} actionLabel="Open Settings ↗">
+      <InspectorRows rows={[['Runtime',profile.runtime||'comfyui'],['Purpose',profile.purpose],['Model',profile.modelFamily],['Mode',profile.mode],['Enabled',profile.enabled?'yes':'no'],['Validation',profile.validation?.structuralStatus||'unvalidated'],['Bindings',String(profile.bindings.length)]]}/>
+      <div className="studio-inspector-section"><span className="eyebrow">BINDINGS</span>{profile.bindings.length===0?<p className="muted">No bindings configured.</p>:<div className="studio-binding-summary">{profile.bindings.map(binding=><div key={binding.key}><strong>{binding.key}</strong><code>{binding.jsonPath||binding.input||binding.selector?.nodeId||binding.selector?.classType||'unmapped'}</code><span>{binding.required?'required':'optional'}</span></div>)}</div>}</div>
+      <p className="muted">Validated workflows can be dragged from the canvas onto a shot node to change its production route.</p>
+    </InspectorFrame>;
+  }
+  if(node.kind==='scene'){
+    const scene=node.sceneId?project.scenes.find(item=>item.id===node.sceneId):undefined;
+    return <InspectorFrame kicker="SCENE" title={scene?.heading||node.title} action={()=>setView('storyboard')} actionLabel="Open Storyboard ↗"><p className="studio-inspector-copy">{scene?.body||'No scene body.'}</p><InspectorRows rows={[['Shots',String(project.shots.filter(item=>item.sceneId===scene?.id).length)],['Location',scene?.location||'—'],['Time',scene?.timeOfDay||'—']]}/></InspectorFrame>;
+  }
+  if(node.kind==='story')return <InspectorFrame kicker="STORY" title={project.story.title||project.name} action={()=>setView('story')} actionLabel="Open Story ↗"><p className="studio-inspector-copy">{project.story.logline||'No logline yet.'}</p><InspectorRows rows={[['Scenes',String(project.scenes.length)],['Shots',String(project.shots.length)],['Script chars',String(project.story.script.length)]]}/></InspectorFrame>;
+  if(node.kind==='assets'){
+    const rows=ASSET_KINDS.map(kind=>[kind,String(project.assets.filter(asset=>asset.kind===kind).length)] as [string,string]);
+    return <InspectorFrame kicker="ASSET LIBRARY" title={`${project.assets.length} assets`} action={()=>setView('assets')} actionLabel="Open Assets ↗"><InspectorRows rows={rows}/><p className="muted">Drag assets from the left library onto shot nodes or precise continuity slots.</p></InspectorFrame>;
+  }
+  if(node.kind==='queue'){
+    return <InspectorFrame kicker="RENDER QUEUE" title={`${queue.jobs.filter(job=>ACTIVE_JOB_STATUSES.has(job.status)).length} active · ${queue.jobs.length} total`} action={()=>setView('queue')} actionLabel="Open Queue ↗"><div className="studio-inspector-jobs">{queue.jobs.length===0?<p className="muted">No jobs yet.</p>:queue.jobs.map(job=>{const target=project.shots.find(item=>item.id===job.shotId);return <div key={job.id}><span className={`job-dot ${job.status}`}/><div><strong>{target?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}% · {job.message}</small></div></div>;})}</div></InspectorFrame>;
+  }
+  if(node.kind==='timeline'){
+    const ordered=[...project.timeline].sort((a,b)=>a.order-b.order);
+    return <InspectorFrame kicker="TIMELINE" title={`${ordered.length} clips`} action={()=>setView('timeline')} actionLabel="Open Timeline ↗"><div className="studio-inspector-clips">{ordered.length===0?<p className="muted">No canonical cut yet.</p>:ordered.map((clip,index)=>{const target=project.shots.find(item=>item.id===clip.shotId);return <div key={clip.id}><span>{index+1}</span><strong>{target?.title||clip.shotId}</strong><small>In {clip.trimInSec.toFixed(1)}s · Out {clip.trimOutSec?.toFixed(1)??'end'} · Vol {clip.volume.toFixed(2)}</small></div>;})}</div></InspectorFrame>;
+  }
+  if(node.kind==='capcut')return <InspectorFrame kicker="FINISHING" title="CapCut handoff" action={()=>setView('finishing')} actionLabel="Open CapCut ↗"><InspectorRows rows={[['Project tier policy',project.settings.capcut.pro?'Pro':'Free / No Pro'],['AI credits',project.settings.costPolicy.allowCapcutAiCredits?'allowed':'disabled'],['Timeline clips',String(project.timeline.length)]]}/><p className="muted">CineForge remains canonical; CapCut is the editable finishing layer.</p></InspectorFrame>;
+  return <div className="studio-mini-empty">No inspector is available for this node.</div>;
+}
+
+function InspectorFrame({kicker,title,action,actionLabel,children}:{kicker:string;title:string;action?:()=>void;actionLabel?:string;children:ReactNode}){
+  return <div className="studio-inspector-scroll"><div className="studio-inspector-head"><div><span className="eyebrow">{kicker}</span><strong>{title}</strong></div>{action&&<button className="ghost" onClick={action}>{actionLabel||'Open ↗'}</button>}</div>{children}</div>;
+}
+function InspectorRows({rows}:{rows:Array<[string,string]>}){return <div className="studio-inspector-rows">{rows.map(([label,value])=><div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>;}
 
 function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelected,setError}:{project:FilmProject;shot:Shot;latestPath?:string;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
   const{setProject,setNotice}=useAppStore();
@@ -393,7 +433,12 @@ function relativeOutput(root:string,path:string):string{const base=root.replace(
 function resolveWorkflow(profiles:WorkflowProfile[],shot:Shot):WorkflowProfile|undefined{
   const usable=(profile:WorkflowProfile)=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode;
   const explicit=shot.generation.workflowProfileId?profiles.find(profile=>profile.id===shot.generation.workflowProfileId&&usable(profile)):undefined;
-  return explicit||profiles.find(usable);
+  if(explicit)return explicit;
+  const candidates=profiles.filter(usable);return candidates.find(profile=>profile.validation?.structuralStatus==='valid')||candidates[0];
+}
+function shotPreviewAsset(project:FilmProject,shot:Shot):Asset|undefined{
+  const ids=[shot.startFrameAssetId,shot.endFrameAssetId,shot.characterAssetIds[0],shot.locationAssetId,shot.propAssetIds[0]].filter((id):id is string=>Boolean(id));
+  return ids.map(id=>project.assets.find(asset=>asset.id===id)).find((asset):asset is Asset=>Boolean(asset&&isVisual(asset)));
 }
 function scrollToNode(id:string,nodes:Map<string,StudioNode>,viewport:HTMLDivElement|null,zoom:number):void{
   const node=nodes.get(id);if(!node||!viewport)return;
