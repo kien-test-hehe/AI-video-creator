@@ -55,27 +55,31 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
   const entrypoint = resolve(machine.wangp.rootPath, machine.wangp.entrypoint);
   let runtimeSha256: string | undefined;
   try { runtimeSha256 = await sha256File(entrypoint); } catch {}
-  const [gitCommit, pythonVersion] = await Promise.all([
+  const [gitCommit, pythonVersion, torchInfo, packages] = await Promise.all([
     commandText('git',['-C',machine.wangp.rootPath,'rev-parse','HEAD']),
-    commandText(machine.wangp.pythonPath,['--version'])
+    commandText(machine.wangp.pythonPath,['--version']),
+    commandText(machine.wangp.pythonPath,['-c',"import json,torch; print(json.dumps({'torch':torch.__version__,'cuda':torch.version.cuda,'cuda_available':torch.cuda.is_available(),'device':torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}))"]),
+    commandText(machine.wangp.pythonPath,['-m','pip','freeze','--disable-pip-version-check'],20_000,true)
   ]);
-  const runtimeVersion = [gitCommit && `git:${gitCommit}`, pythonVersion].filter(Boolean).join(' · ') || 'native:unknown';
+  const packagesSha256=packages?createHash('sha256').update(packages.split(/\r?\n/).filter(Boolean).sort().join('\n')).digest('hex'):undefined;
+  const runtimeVersion = [gitCommit && `git:${gitCommit}`, pythonVersion, torchInfo].filter(Boolean).join(' · ') || 'native:unknown';
   return {
     backend,
     executionMode: 'native',
     runtimeVersion,
     runtimeSha256,
     environmentSha256: sha256Json({
-      backend, executionMode:'native', runtimeVersion, runtimeSha256,
+      backend, executionMode:'native', runtimeVersion, runtimeSha256, packagesSha256,
       profile:machine.wangp.profile, attention:machine.wangp.attention
     })
   };
 }
 
-async function commandText(command:string,args:string[]):Promise<string>{
+async function commandText(command:string,args:string[],timeout=10_000,full=false):Promise<string>{
   try {
-    const { stdout, stderr } = await execFileAsync(command,args,{timeout:10_000});
-    return `${stdout}\n${stderr}`.trim().split(/\r?\n/).filter(Boolean)[0] || '';
+    const { stdout, stderr } = await execFileAsync(command,args,{timeout,maxBuffer:8*1024*1024});
+    const text=`${stdout}\n${stderr}`.trim();
+    return full?text:(text.split(/\r?\n/).filter(Boolean)[0] || '');
   } catch { return ''; }
 }
 
