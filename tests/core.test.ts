@@ -16,6 +16,7 @@ import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob } from '../src/shared/recovery-policy';
+import { duplicateTimelineOrderKey, timelineOutputIssue } from '../src/shared/timeline-policy';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -183,6 +184,19 @@ describe('signed journal recovery policy',()=>{
   it('persists a newer signed terminal state over a stale active project summary',()=>{
     const selected=selectRecoveryJob(job('running','2026-01-01T00:00:01.000Z'),job('cancelled','2026-01-01T00:00:02.000Z'));
     expect(selected.job.status).toBe('cancelled');expect(selected.signed).toBe(true);expect(selected.persistTerminal).toBe(true);
+  });
+});
+describe('canonical timeline integrity',()=>{
+  const output=(id:string,shotId:string,mediaType:'video'|'image'='video')=>({id,jobId:'j',shotId,path:`/tmp/${id}`,filename:id,mediaType,createdAt:'2026-01-01T00:00:00.000Z'}) as any;
+  it('rejects cross-shot and non-video output references',()=>{
+    const clip={id:'c',shotId:'s1',renderOutputId:'o1'};
+    expect(timelineOutputIssue(clip,output('o1','s1'))).toBeUndefined();
+    expect(timelineOutputIssue(clip,output('o1','s2'))).toMatch(/belongs to shot s2/);
+    expect(timelineOutputIssue(clip,output('o1','s1','image'))).toMatch(/non-video/);
+  });
+  it('detects duplicate track/order slots',()=>{
+    expect(duplicateTimelineOrderKey([{track:0,order:0},{track:0,order:1}])).toBeUndefined();
+    expect(duplicateTimelineOrderKey([{track:0,order:0},{track:0,order:0}])).toBe('0:0');
   });
 });
 describe('rendered take QC policy',()=>{
