@@ -23,6 +23,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
   }
 
   const first=await probeVideo(machine.ffmpeg.ffprobePath,sources[0].path,signal);
+  const master={...first,fps:Math.max(1,project.settings.defaultFps||first.fps)};
   const h264Encoder=await chooseH264Encoder(machine,signal);
   const cacheDir=join(project.rootPath,'cache',`export-${randomUUID()}`);
   const exportDir=join(project.rootPath,'exports');
@@ -33,7 +34,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
       const target=await assertSafeWritePath(cacheDir,join(cacheDir,`${String(i).padStart(4,'0')}.mp4`),'normalized export clip');
       throwIfAborted(signal);
       const info=await probeVideo(machine.ffmpeg.ffprobePath,sources[i].path,signal);
-      await normalizeClip(machine,sources[i].path,target,sources[i].clip,info,first,h264Encoder,signal);
+      await normalizeClip(machine,sources[i].path,target,sources[i].clip,info,master,h264Encoder,signal);
       normalized.push(target);
     }
     const listPath=join(cacheDir,'concat.txt');
