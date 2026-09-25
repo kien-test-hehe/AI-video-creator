@@ -14,7 +14,7 @@ import { compileProfile, type WorkflowValues } from './workflow-engine';
 import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, isWanGpDockerRunning, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
 import { routeWorkflow } from './model-router';
-import { collectComfyFileRefs, inferMediaType, uniqueComfyFileRefs } from './comfy-output';
+import { collectComfyHistoryOutputRefs, inferMediaType } from './comfy-output';
 import { waitForComfyCompletion } from './comfy-runner';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
@@ -546,7 +546,7 @@ export class RenderQueueService extends EventEmitter {
   private async finalizeComfyHistory(project:FilmProject,job:RenderJob,client:ComfyClient,history:any):Promise<void>{
     const machine=this.settings.get(),shot=job.spec!.shot;
     await this.updateJob(job.id,{status:'downloading',progress:.92,message:'Saving and QC-checking ComfyUI outputs'},true,true);
-    const refs=uniqueComfyFileRefs(collectComfyFileRefs(history?.outputs||history));if(!refs.length)throw new Error('ComfyUI finished but no downloadable output files were found in history.');
+    const refs=collectComfyHistoryOutputRefs(history);if(!refs.length)throw new Error('ComfyUI finished but no downloadable output files were found in history.outputs.');
     const outputDir=join(project.rootPath,'renders',shot.id,job.id);await mkdir(outputDir,{recursive:true});const outputs:RenderOutput[]=[];
     for(const ref of refs){
       const safeLeaf=ref.filename.replace(/[\\/]/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');const safeSub=(ref.subfolder||'').replace(/[\\/]+/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');
