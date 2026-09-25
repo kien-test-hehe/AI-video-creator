@@ -27,7 +27,7 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
     if(machine.wangp.executionMode==='docker'&&probe.docker?.gpuAccessible!==true)environmentErrors.push('WanGP Docker validation requires a working NVIDIA GPU runtime.');
   }else{
     if(!probe.comfy.reachable)environmentErrors.push(`ComfyUI is offline: ${probe.comfy.error||machine.comfy.url}`);
-    if(!machine.comfy.dedicatedInstance)environmentErrors.push('ComfyUI profiles require a dedicated CineForge instance for safe cancellation/recovery.');
+    if(!machine.comfy.dedicatedInstance)environmentErrors.push('ComfyUI production profiles require a dedicated CineForge instance for workload isolation, deterministic recovery, and safe legacy cancellation fallback.');
   }
   const errors=[...modeErrors,...runtimeErrors,...environmentErrors];
   const fingerprint = await fingerprintRuntime(machine, profile);
