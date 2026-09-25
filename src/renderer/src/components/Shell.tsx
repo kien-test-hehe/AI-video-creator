@@ -1,4 +1,4 @@
-import type { PropsWithChildren } from 'react';
+import { useState, type PropsWithChildren } from 'react';
 import { useAppStore, type ViewId } from '../store';
 
 const NAV: Array<[ViewId, string, string]> = [
@@ -9,10 +9,11 @@ const NAV: Array<[ViewId, string, string]> = [
 
 export function Shell({ children }: PropsWithChildren) {
   const { project, activeView, setView, error, notice, setError, setNotice, queue, busy } = useAppStore();
+  const[switchBusy,setSwitchBusy]=useState(false);
   const studioMode=activeView==='studio';
-  const switchingBlocked = Boolean(busy || queue.runningJobId || queue.jobs.some(j => ['queued','preparing','uploading','submitted','running','recovering','stalled','downloading'].includes(j.status)));
-  const openProject = async () => { try { await Promise.all([useAppStore.getState().persist(),useAppStore.getState().persistMachine()]); const opened = await window.cineforge.project.open(); if (opened) useAppStore.getState().setProject(opened); } catch(e) { setError(e instanceof Error ? e.message : String(e)); } };
-  const newProject = async () => { try { await Promise.all([useAppStore.getState().persist(),useAppStore.getState().persistMachine()]); const created = await window.cineforge.project.create('Untitled Film'); if (created) useAppStore.getState().setProject(created); } catch(e) { setError(e instanceof Error ? e.message : String(e)); } };
+  const switchingBlocked = Boolean(switchBusy || busy || queue.runningJobId || queue.jobs.some(j => ['queued','preparing','uploading','submitted','running','recovering','stalled','downloading'].includes(j.status)));
+  const openProject = async () => { try { setSwitchBusy(true);await Promise.all([useAppStore.getState().persist(),useAppStore.getState().persistMachine()]); const opened = await window.cineforge.project.open(); if (opened) useAppStore.getState().setProject(opened); } catch(e) { setError(e instanceof Error ? e.message : String(e)); } finally{setSwitchBusy(false);} };
+  const newProject = async () => { try { setSwitchBusy(true);await Promise.all([useAppStore.getState().persist(),useAppStore.getState().persistMachine()]); const created = await window.cineforge.project.create('Untitled Film'); if (created) useAppStore.getState().setProject(created); } catch(e) { setError(e instanceof Error ? e.message : String(e)); } finally{setSwitchBusy(false);} };
   return <div className={`app-shell ${studioMode?'studio-shell':''}`}>
     <aside className={`sidebar ${studioMode?'compact':''}`}>
       <div className="brand"><div className="brand-mark">CF</div><div><strong>CineForge</strong><span>LOCAL + CAPCUT FILM OS</span></div></div>
