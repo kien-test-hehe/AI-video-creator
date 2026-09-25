@@ -27,6 +27,24 @@ NVIDIA display/compute drivers are intentionally **not** silently upgraded by th
 
 The first project defaults to **CapCut Free / No Pro** and **CapCut AI credits disabled**. CineForge detects whether a CapCut executable is present, but it does **not** claim to verify the signed-in CapCut account's subscription tier; Pro/No Pro is an explicit project policy setting. If the machine-local WanGP runtime is ready, CineForge automatically reads its model catalog and provisions recommended local profiles. Model weights remain on-demand because shipping tens of gigabytes inside Git would be impractical.
 
+## Unified Studio UX
+
+CineForge opens into **Studio**, a filmmaking control surface inspired by the useful interaction model of node-based tools without exposing users to raw diffusion graph complexity.
+
+Studio keeps the production state visible at once:
+
+- left asset library with search/filter/import and drag sources;
+- center pan/zoom pipeline graph: Story → Scenes → Shots → Workflow Profiles → Queue → Timeline → CapCut;
+- draggable visual node layout with lock, fit, auto-layout and minimap; node position is presentation only and never changes film order;
+- shot nodes that expose status, model/mode, continuity coverage, missing routes and workflow validation state;
+- right shot inspector for prompt, camera, model/mode, workflow, W/H/frames/FPS/steps/CFG/seed, negative prompt, audio policy, continuity review, keyframe generation and role-specific drag/drop;
+- bottom Queue dock with every job plus cancel/retry controls;
+- bottom Timeline dock with every canonical clip and drag-to-reorder;
+- GPU/VRAM/WanGP/ComfyUI/CapCut/Queue HUD;
+- one-click Preflight, Render selected and Render all.
+
+The detailed Story, Assets, Storyboard, Shot Workshop, Queue, Timeline, CapCut and Settings views remain available from the icon rail. The graph is therefore an **overview/control workspace**, not a second hidden project model.
+
 ## Architecture
 
 ```text
@@ -221,6 +239,8 @@ src/
       capcut-handoff.ts
   preload/
   renderer/
+    src/views/Studio.tsx
+    src/asset-assignment.ts
   shared/
 
 tests/
