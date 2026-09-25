@@ -7,7 +7,7 @@ import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
 import { isStudioWorkflowReady, resolveStudioWorkflow, studioWorkflowIssue } from '../studio-logic';
-import { takeUseConfirmationMessage } from '../take-policy';
+import { takeUseConfirmationMessage } from '../../../shared/take-policy';
 
 const MODELS: ModelFamily[] = ['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom'];
 const MODES: GenerationMode[] = ['t2v','i2v','flf2v','ia2v','v2v'];
