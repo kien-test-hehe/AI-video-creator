@@ -33,10 +33,11 @@ def as_list(value):
 
 
 def compact(entry):
-    metadata = entry.get("metadata") or {}
+    nested = entry.get("metadata")
+    metadata = nested if isinstance(nested, dict) else entry
     return {
         "modelType": entry.get("model_type") or metadata.get("model_type"),
-        "name": entry.get("name") or metadata.get("name") or entry.get("model_type"),
+        "name": entry.get("name") or metadata.get("name") or entry.get("model_type") or metadata.get("model_type"),
         "family": metadata.get("family"),
         "familyLabel": metadata.get("family_label"),
         "mainOutput": as_list(metadata.get("main_output")),
