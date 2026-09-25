@@ -28,11 +28,12 @@ let activeExportAbortController:AbortController|null=null;
 let activeKeyframeAbortController:AbortController|null=null;
 let activeExportPromise:Promise<unknown>|null=null;
 let activeKeyframePromise:Promise<unknown>|null=null;
+let activeHandoffPromise:Promise<unknown>|null=null;
 
 export async function shutdownForegroundOperations():Promise<void>{
   activeExportAbortController?.abort();
   activeKeyframeAbortController?.abort();
-  const pending=[activeExportPromise,activeKeyframePromise].filter((value):value is Promise<unknown>=>Boolean(value));
+  const pending=[activeExportPromise,activeKeyframePromise,activeHandoffPromise].filter((value):value is Promise<unknown>=>Boolean(value));
   if(pending.length)await Promise.allSettled(pending);
 }
 
@@ -45,7 +46,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     });
   };
 
-  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||activeExportAbortController)throw new Error('Finish or cancel active renders, keyframe generation, or timeline export before switching projects.');};
+  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active renders, keyframe generation, timeline export, or CapCut handoff before switching projects.');};
   const assertGpuGenerationAvailable=()=>{if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
 
   handle(IPC.projectCreate, async (name?: string) => {
@@ -72,7 +73,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
   handle(IPC.assetImport, (kind: AssetKind) => projects.importAsset(kind));
   handle(IPC.assetDelete, (assetId:string) => {
-    if(queue.isBusy()||keyframeBusy)throw new Error('Finish or cancel active generation before deleting project assets.');
+    if(queue.isBusy()||keyframeBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active generation/export/handoff before deleting project assets.');
     return projects.deleteAsset(assetId);
   });
 
@@ -144,7 +145,10 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.renderRetry,(jobId:string)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before retrying a render.');return queue.retry(jobId);});
   handle(IPC.renderCancel,(jobId:string)=>queue.cancel(jobId));
   handle(IPC.renderSnapshot,()=>queue.snapshot());
-  handle(IPC.renderOutputDelete,(outputId:string)=>projects.deleteRenderOutput(outputId));
+  handle(IPC.renderOutputDelete,(outputId:string)=>{
+    if(activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel the active timeline export / CapCut handoff before deleting rendered takes.');
+    return projects.deleteRenderOutput(outputId);
+  });
 
   handle(IPC.directorPlanScene,async(sceneId:string)=>{
     const project=requireProject(projects);
@@ -178,7 +182,12 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     finally{activeExportAbortController=null;activeExportPromise=null;}
   });
   handle(IPC.timelineCancelExport,async()=>{activeExportAbortController?.abort();});
-  handle(IPC.capcutPrepareHandoff,async()=>prepareCapCutHandoff(requireProject(projects)));
+  handle(IPC.capcutPrepareHandoff,async()=>{
+    if(activeHandoffPromise)throw new Error('A CapCut handoff is already being prepared.');
+    if(activeExportAbortController)throw new Error('Wait for the active timeline export to finish before preparing a CapCut handoff.');
+    const task=prepareCapCutHandoff(requireProject(projects));activeHandoffPromise=task;
+    try{return await task;}finally{activeHandoffPromise=null;}
+  });
 
   queue.on('snapshot',snapshot=>{for(const window of BrowserWindow.getAllWindows())if(!window.isDestroyed())window.webContents.send(IPC.queueEvent,snapshot);});
 }
