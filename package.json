@@ -1,10 +1,10 @@
 {
   "name": "cineforge-local",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Codex + CapCut film OS with WanGP-first local AI generation and deterministic project state",
+  "description": "Local-first Codex + CapCut AI film production orchestrator",
   "main": "out/main/index.js",
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -12,9 +12,14 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:smoke": "node --experimental-strip-types scripts/core-smoke.ts",
-    "lint": "eslint .",
-    "workflows:fetch": "node scripts/fetch-reference-workflows.mjs"
+    "test:smoke": "tsx scripts/core-smoke.mts",
+    "lint": "eslint . --max-warnings=0",
+    "workflows:fetch": "node scripts/fetch-reference-workflows.mjs",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win nsis --x64",
+    "dist:linux": "npm run build && electron-builder --linux AppImage --x64",
+    "dist:mac": "npm run build && electron-builder --mac dmg"
   },
   "dependencies": {
     "react": "19.3.0",
@@ -29,17 +34,91 @@
     "@typescript-eslint/parser": "8.70.1",
     "@vitejs/plugin-react": "5.1.4",
     "electron": "44.4.5",
+    "electron-builder": "26.15.3",
     "electron-vite": "5.0.0",
     "eslint": "10.10.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "vite": "7.3.6",
-    "vitest": "4.1.11"
+    "vitest": "5.0.1"
   },
   "engines": {
     "node": ">=22.16 <23",
-    "npm": ">=10 <11"
+    "npm": ">=10.9.9 <11"
   },
-  "packageManager": "npm@10.9.2"
+  "packageManager": "npm@10.9.9",
+  "build": {
+    "appId": "com.kientesthehe.cineforge",
+    "productName": "CineForge",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "loadBrowserProcessSpecificV8Snapshot": false,
+      "grantFileProtocolExtraPrivileges": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "CineForge-${version}-Setup-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.video",
+      "hardenedRuntime": true
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "AudioVideo"
+    },
+    "extraResources": [
+      {
+        "from": "scripts/wangp_bridge.py",
+        "to": "scripts/wangp_bridge.py"
+      },
+      {
+        "from": "runtime/WANGP_PIN.txt",
+        "to": "runtime/WANGP_PIN.txt"
+      }
+    ]
+  }
 }

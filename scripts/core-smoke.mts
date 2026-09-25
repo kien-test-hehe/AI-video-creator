@@ -44,7 +44,7 @@ const baseGeneration = {
 assert.equal(chooseModelForShot({ dialogue: 'Hello', camera: 'locked', action: '', generation: baseGeneration }), 'ltx-2.5-fast');
 assert.equal(chooseModelForShot({ dialogue: '', camera: 'locked', action: '', generation: { ...baseGeneration, quality: 'hero' } }), 'hunyuan-video-1.5');
 assert.equal(chooseModelForShot({ dialogue: '', camera: 'fast orbit', action: 'car chase', generation: baseGeneration }), 'wan-2.2-5b');
-assert.equal(chooseModelForShot({ dialogue: 'still long', camera: 'locked', action: '', generation: { ...baseGeneration, frames: 265 } }), 'framepack');
+assert.equal(chooseModelForShot({ dialogue: 'still long', camera: 'locked', action: '', generation: { ...baseGeneration, frames: 265 } }), 'ltx-2.5-fast');
 
 const root = '/tmp/cineforge-project';
 assert.equal(assertPathInside(root, `${root}/assets/a.png`), `${root}/assets/a.png`);

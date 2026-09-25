@@ -11,17 +11,14 @@ import { Timeline } from './views/Timeline';
 import { Settings } from './views/Settings';
 import { Finishing } from './views/Finishing';
 
-export default function App() {
-  const { activeView, setProject, syncRuntime, setQueue, setError } = useAppStore();
-  useEffect(() => {
-    void Promise.all([window.cineforge.project.get(), window.cineforge.render.snapshot()])
-      .then(([project, queue]) => { if (project) setProject(project); setQueue(queue); })
-      .catch(e => setError(e instanceof Error ? e.message : String(e)));
-    return window.cineforge.render.onQueueEvent(snapshot => {
-      setQueue(snapshot);
-      void window.cineforge.project.get().then(project => project && syncRuntime(project));
-    });
-  }, []);
-  const views = { dashboard: <Dashboard />, story: <Story />, assets: <Assets />, storyboard: <Storyboard />, shots: <Shots />, queue: <Queue />, timeline: <Timeline />, finishing: <Finishing />, settings: <Settings /> };
+export default function App(){
+  const{activeView,setProject,setMachine,syncRuntime,setQueue,setError}=useAppStore();
+  useEffect(()=>{
+    void Promise.all([window.cineforge.project.get(),window.cineforge.render.snapshot(),window.cineforge.settings.get()])
+      .then(([project,queue,machine])=>{if(project)setProject(project);setQueue(queue);setMachine(machine);})
+      .catch(e=>setError(e instanceof Error?e.message:String(e)));
+    return window.cineforge.render.onQueueEvent(snapshot=>{setQueue(snapshot);void window.cineforge.project.get().then(project=>project&&syncRuntime(project));});
+  },[setError,setMachine,setProject,setQueue,syncRuntime]);
+  const views={dashboard:<Dashboard/>,story:<Story/>,assets:<Assets/>,storyboard:<Storyboard/>,shots:<Shots/>,queue:<Queue/>,timeline:<Timeline/>,finishing:<Finishing/>,settings:<Settings/>};
   return <Shell>{views[activeView]}</Shell>;
 }

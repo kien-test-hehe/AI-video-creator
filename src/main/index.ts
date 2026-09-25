@@ -1,19 +1,23 @@
-import { app, BrowserWindow, net, protocol, shell } from 'electron';
-import { realpath } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { app, BrowserWindow, net, protocol, session } from 'electron';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { registerIpc } from './ipc';
+import { AppSettingsService } from './services/app-settings-service';
+import { assertExistingPathInside } from './services/path-safety';
 import { ProjectService } from './services/project-service';
 import { RenderQueueService } from './services/render-queue';
+import { lockDownWebContents } from './services/ipc-security';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'cineforge-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
 ]);
 
-const projects = new ProjectService();
-const queue = new RenderQueueService(projects);
+let projects: ProjectService;
+let queue: RenderQueueService;
+let machineSettings: AppSettingsService;
 let mainWindow: BrowserWindow | null = null;
 let ipcRegistered = false;
+let trustedRendererUrl = '';
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -28,17 +32,15 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      webSecurity: true
+      webSecurity: true,
+      webviewTag: false
     }
   });
+  lockDownWebContents(mainWindow.webContents,trustedRendererUrl);
+  mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
-    return { action: 'deny' };
-  });
-
-  if (process.env.ELECTRON_RENDERER_URL) void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+  if(process.env.ELECTRON_RENDERER_URL)void mainWindow.loadURL(trustedRendererUrl);
+  else void mainWindow.loadFile(join(__dirname,'../renderer/index.html'));
 }
 
 function registerMediaProtocol(): void {
@@ -47,34 +49,33 @@ function registerMediaProtocol(): void {
     if (!project) return new Response('No project open', { status: 404 });
     const url = new URL(request.url);
     if (url.hostname !== 'project') return new Response('Unknown media host', { status: 404 });
-
-    const relative = decodeURIComponent(url.pathname).replace(/^\/+/, '');
-    const root = resolve(project.rootPath);
-    const absolute = resolve(root, relative);
-    const insideRoot = absolute === root || absolute.startsWith(`${root}${sep}`);
-    if (!insideRoot) return new Response('Blocked path', { status: 403 });
-
     try {
-      const [realRoot, realFile] = await Promise.all([realpath(root), realpath(absolute)]);
-      const realInsideRoot = realFile === realRoot || realFile.startsWith(`${realRoot}${sep}`);
-      if (!realInsideRoot) return new Response('Blocked symlink path', { status: 403 });
+      const relative = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+      const realFile = await assertExistingPathInside(resolve(project.rootPath), resolve(project.rootPath, relative), 'media path');
       return await net.fetch(pathToFileURL(realFile).toString());
-    } catch { return new Response('Media not found', { status: 404 }); }
+    } catch {
+      return new Response('Media not found or blocked', { status: 404 });
+    }
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  trustedRendererUrl=process.env.ELECTRON_RENDERER_URL||pathToFileURL(join(__dirname,'../renderer/index.html')).toString();
+  machineSettings = new AppSettingsService(app.getPath('userData'));
+  await machineSettings.load();
+  projects = new ProjectService();
+  queue = new RenderQueueService(projects, machineSettings);
+
   registerMediaProtocol();
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
+
   if (!ipcRegistered) {
-    registerIpc(projects, queue);
+    registerIpc(projects, queue, machineSettings,trustedRendererUrl);
     ipcRegistered = true;
   }
   createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

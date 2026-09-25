@@ -9,7 +9,7 @@ Everything else on the core media path is local. There is no Gemini, Groq, OpenR
 
 ## Default rules
 
-- `settings.localOnly = true`.
+- Machine AI endpoints are enforced as loopback-only in machine settings; portable projects cannot weaken that policy.
 - `settings.costPolicy.mode = "codex-capcut-only"`.
 - `settings.costPolicy.allowCapcutAiCredits = false`.
 - WanGP and ComfyUI run on the local workstation.
@@ -19,7 +19,9 @@ Everything else on the core media path is local. There is no Gemini, Groq, OpenR
 
 Local inference still has real costs: electricity, storage, hardware wear, and model/software licensing obligations. “$0/call” means no metered cloud API charge, not literally zero operating cost.
 
-## CapCut AI credits
+## CapCut Free / Pro / AI credits
+
+New projects start in **Free / No Pro** mode. Pro is explicit opt-in. CapCut's 2026 membership structure can vary by account/region and also includes a Standard tier; CineForge currently treats any non-Pro membership as the non-Pro finishing policy.
 
 CapCut Pro and CapCut AI credits are treated as different budget categories. The handoff manifest contains `capcutAiCreditsAllowed`. When it is `false`, the generated Codex task explicitly tells the CapCut workflow not to generate replacement media with paid AI operations.
 
