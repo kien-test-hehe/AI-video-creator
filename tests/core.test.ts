@@ -11,8 +11,9 @@ import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveSt
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { historyWasInterrupted } from '../src/main/services/comfy-client';
-import { shotKeyframeInputKey, shotRenderInputKey } from '../src/shared/shot-signature';
+import { shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey } from '../src/shared/director-signature';
+import { takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/renderer/src/take-policy';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -106,6 +107,14 @@ describe('stale creative result guards',()=>{
     expect(shotRenderInputKey(a)).toBe(shotRenderInputKey(b));
     b.prompt='changed';expect(shotRenderInputKey(a)).not.toBe(shotRenderInputKey(b));
   });
+  it('changes project render signatures when the effective workflow execution config changes',()=>{
+    const base=shot();base.generation.workflowProfileId='wf';
+    const profile={id:'wf',runtime:'wangp' as const,purpose:'video' as const,name:'Workflow',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,modelFingerprint:'model-a',validation:{structuralStatus:'valid' as const}};
+    const project={assets:[{id:'char',kind:'character',name:'Hero',sourcePath:'',projectPath:'assets/char.png',tags:[],notes:'',createdAt:'x'},{id:'loc',kind:'location',name:'Room',sourcePath:'',projectPath:'assets/loc.png',tags:[],notes:'',createdAt:'x'}],settings:{workflowProfiles:[profile]}} as unknown as FilmProject;
+    const before=shotProjectRenderInputKey(project,base);project.settings.workflowProfiles[0].bindings=[{key:'prompt',jsonPath:'generation.prompt'}];
+    expect(shotProjectRenderInputKey(project,base)).not.toBe(before);
+    expect(workflowExecutionKey(project.settings.workflowProfiles[0])).not.toBe(workflowExecutionKey(profile));
+  });
   it('changes end-keyframe signatures when the chained start frame changes',()=>{
     const a=shot(),b=structuredClone(a);a.startFrameAssetId='kf-a';b.startFrameAssetId='kf-b';
     expect(shotKeyframeInputKey(a,'start')).toBe(shotKeyframeInputKey(b,'start'));
@@ -119,6 +128,16 @@ describe('stale creative result guards',()=>{
     const before=sceneDirectorInputKey(project,project.scenes[0]);project.assets[0].notes='blue coat';expect(sceneDirectorInputKey(project,project.scenes[0])).not.toBe(before);
     expect(filterDirectorAssetIds(project,'character',['char','loc','missing'])).toEqual(['char']);
     const review=continuityReviewInputKey(project,project.shots[0]);project.shots[0].prompt='new';expect(continuityReviewInputKey(project,project.shots[0])).not.toBe(review);
+  });
+});
+describe('rendered take QC policy',()=>{
+  const output=(technicalQc?:any)=>({id:'o',jobId:'j',shotId:'s',path:'/tmp/o.mp4',filename:'o.mp4',mediaType:'video' as const,createdAt:'x',technicalQc});
+  it('requires confirmation for failed or unknown QC and not for passing takes',()=>{
+    expect(takeNeedsConfirmation(output())).toBe(true);
+    expect(takeUseConfirmationMessage(output(),'preferred')).toMatch(/no technical QC/i);
+    expect(takeUseConfirmationMessage(output({passed:false,issues:['bad duration']}),'timeline')).toMatch(/bad duration/i);
+    expect(takeNeedsConfirmation(output({passed:true,issues:[]}))).toBe(false);
+    expect(takeUseConfirmationMessage(output({passed:true,issues:[]}),'preferred')).toBeUndefined();
   });
 });
 describe('hardware advisor',()=>{
