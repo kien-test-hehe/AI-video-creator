@@ -18,7 +18,17 @@ if (Test-Path $wingetLinks) { $env:PATH = "$NodeRoot;$wingetLinks;$env:PATH" } e
 $npm = Join-Path $NodeRoot 'npm.cmd'
 Push-Location $RepoRoot
 try {
-  & $npm run dev
+  if (-not (Test-Path (Join-Path $RepoRoot 'node_modules\electron\package.json'))) {
+    Write-Host 'Dependencies are missing; restoring from package-lock.json...' -ForegroundColor Yellow
+    & $npm ci
+    if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
+  }
+  if (-not (Test-Path (Join-Path $RepoRoot 'out\main\index.js'))) {
+    Write-Host 'Built application output is missing; building CineForge...' -ForegroundColor Yellow
+    & $npm run build
+    if ($LASTEXITCODE -ne 0) { throw 'CineForge build failed.' }
+  }
+  & $npm run preview
   exit $LASTEXITCODE
 } finally {
   Pop-Location
