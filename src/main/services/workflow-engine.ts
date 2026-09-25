@@ -159,6 +159,10 @@ export async function validateProfileBindings(profile: WorkflowProfile): Promise
   if (detectWorkflowFormat(workflow) !== 'api') return ['Workflow is not in API format.'];
   const api = workflow as ApiWorkflow;
   const errors: string[] = [];
+  if((profile.purpose??'video')==='video'||profile.purpose==='image'){
+    if(!profile.bindings.some(binding=>binding.key==='prompt'))errors.push('prompt: no prompt binding configured.');
+    if(!profile.bindings.some(binding=>binding.key==='seed'))errors.push('seed: no seed binding configured; deterministic shot retries require a seed binding.');
+  }
   for (const binding of profile.bindings) {
     const count = Object.entries(api).filter(([id,node]) => matchesNode(id,node,binding)).length;
     if (count === 0) errors.push(`${binding.key}: selector matches no node.`);
