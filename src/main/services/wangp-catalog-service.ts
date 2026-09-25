@@ -34,7 +34,7 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
   for(const pick of picks){
     const template=await runBridge(machine,['template','--model-type',pick.entry.modelType]);
     if(!template||typeof template!=='object'||Array.isArray(template))throw new Error(`WanGP returned invalid defaults for ${pick.entry.modelType}.`);
-    const settingsJson={...(template as Record<string,unknown>),model_type:pick.entry.modelType};
+    const settingsJson:Record<string,unknown>={...(template as Record<string,unknown>),model_type:pick.entry.modelType};
     if(settingsJson.prompt==null)settingsJson.prompt='';
     if(settingsJson.seed==null)settingsJson.seed=1;
     if(pick.purpose==='video'){
