@@ -102,8 +102,32 @@ export class ComfyClient {
   }
 
   async cancelPrompt(promptId:string):Promise<void>{
-    await this.deleteQueued(promptId);
-    await this.interrupt(promptId);
+    const modern=await this.request(`/api/jobs/${encodeURIComponent(promptId)}/cancel`,{method:'POST'},10_000).catch(()=>undefined);
+    if(modern&&modern.status!==404&&modern.status!==405){
+      if(!modern.ok)throw new Error(`ComfyUI targeted cancel failed: ${modern.status} ${(await modern.text()).slice(0,1000)}`);
+      const payload=await modern.json().catch(()=>({})) as {cancelled?:boolean};
+      if(payload.cancelled===true)return;
+      if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} finished before cancellation could be applied.`);
+      throw new Error(`ComfyUI did not confirm targeted cancellation for ${promptId}.`);
+    }
+
+    const before=await this.queue();
+    const state=queueState(before,promptId);
+    if(state==='pending')await this.deleteQueued(promptId);
+    else if(state==='running')await this.interrupt(promptId);
+    else if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} already finished.`);
+    else throw new Error(`ComfyUI prompt ${promptId} is no longer present in queue or history.`);
+
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline){
+      const now=queueState(await this.queue(),promptId);
+      if(now==='absent'){
+        if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} reached history before cancellation was confirmed.`);
+        return;
+      }
+      await new Promise(resolve=>setTimeout(resolve,150));
+    }
+    throw new Error(`ComfyUI did not confirm removal of prompt ${promptId} after cancellation.`);
   }
 
   async download(ref: ComfyFileRef): Promise<Uint8Array> {
@@ -131,4 +155,12 @@ export class ComfyClient {
     if(!res.ok)throw new Error(`ComfyUI output download failed: ${res.status} ${(await res.text()).slice(0,1000)}`);
     return res;
   }
+}
+
+function queueState(queue:any,promptId:string):'running'|'pending'|'absent'{
+  const running=Array.isArray(queue?.queue_running)?queue.queue_running:[];
+  const pending=Array.isArray(queue?.queue_pending)?queue.queue_pending:[];
+  if(running.some((item:any)=>Array.isArray(item)&&item[1]===promptId))return'running';
+  if(pending.some((item:any)=>Array.isArray(item)&&item[1]===promptId))return'pending';
+  return'absent';
 }
