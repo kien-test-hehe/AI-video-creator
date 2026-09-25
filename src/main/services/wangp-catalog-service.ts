@@ -70,15 +70,17 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
   return projects.getCurrent()!;
 }
 
-function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'keyframe';purpose:'video'|'image';mode:'t2v'|'i2v'|'t2i'|'i2i'}>{
+function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:'t2v'|'i2v'|'t2i'|'i2i'}>{
   const video=catalog.filter(e=>e.mainOutput.includes('video')||e.outputs.includes('video'));
   const image=catalog.filter(e=>e.mainOutput.includes('image')||e.outputs.includes('image'));
   const general=maxBy(video,e=>score(e,[['ltx2_25_22B_distilled_nvfp4',100],['ltx2_25',70],['LTX-2.5',60],['LTX 2.5',60]]));
   const hero=maxBy(video,e=>score(e,[['hunyuan_1_5',90],['Hunyuan Video 1.5',80],['HunyuanVideo-1.5',80]]));
+  const motion=maxBy(video,e=>score(e,[['Wan2.2 TextImage2video 5B',100],['ti2v_2_2',95],['Wan2.2',50],['5B',20]]));
   const keyframe=maxBy(image,e=>score(e,[['Qwen Image 2.1',100],['qwen_image_2',95],['Qwen Image Edit Plus',90],['Krea 2 Identity',85],['Krea 2',70],['Z-Image',60]]));
-  const out:Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'keyframe';purpose:'video'|'image';mode:'t2v'|'i2v'|'t2i'|'i2i'}>=[];
+  const out:Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:'t2v'|'i2v'|'t2i'|'i2i'}>=[];
   if(general)out.push({entry:general,role:'general',purpose:'video',mode:general.inputs.includes('image')?'i2v':'t2v'});
   if(hero&&hero.modelType!==general?.modelType)out.push({entry:hero,role:'hero',purpose:'video',mode:hero.inputs.includes('image')?'i2v':'t2v'});
+  if(motion&&motion.modelType!==general?.modelType&&motion.modelType!==hero?.modelType)out.push({entry:motion,role:'motion',purpose:'video',mode:motion.inputs.includes('image')?'i2v':'t2v'});
   if(keyframe)out.push({entry:keyframe,role:'keyframe',purpose:'image',mode:keyframe.inputs.includes('image')?'i2i':'t2i'});
   return out;
 }
