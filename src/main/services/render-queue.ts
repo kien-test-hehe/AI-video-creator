@@ -83,15 +83,15 @@ export class RenderQueueService extends EventEmitter {
 
   async cancel(jobId:string):Promise<QueueSnapshot>{
     const project=this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
-    this.cancelled.add(jobId);this.pending=this.pending.filter(id=>id!==jobId);
     const wasRunning=this.runningJobId===jobId;
+    const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+    if(wasRunning&&runtime==='comfyui'&&!this.settings.get().comfy.dedicatedInstance)throw new Error('Safe cancellation is disabled for a shared ComfyUI instance. Configure a dedicated CineForge ComfyUI instance first.');
+    this.cancelled.add(jobId);this.pending=this.pending.filter(id=>id!==jobId);
     if(wasRunning){
-      const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
       if(runtime==='wangp'){
         const child=this.wanGpProcesses.get(jobId);if(child?.pid)await killProcessTree(child.pid);else if(job.backendPid)await killProcessTree(job.backendPid);
       }else{
         const machine=this.settings.get();
-        if(!machine.comfy.dedicatedInstance)throw new Error('Safe cancellation is disabled for a shared ComfyUI instance. Mark it dedicated in Machine Settings or let the current prompt finish.');
         await new ComfyClient(machine.comfy.url,true).interrupt().catch(()=>undefined);
       }
     }
@@ -146,10 +146,11 @@ export class RenderQueueService extends EventEmitter {
     const outputDir=join(project.rootPath,'renders',job.shotId,job.id);
     if(job.backendPid&&isProcessAlive(job.backendPid)){
       const started=Date.now();
+      let stalled=false;
       while(isProcessAlive(job.backendPid)){
         if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
-        if(Date.now()-started>12*60*60_000){await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP process is still alive after 12 hours.'},true,true);return;}
-        await this.updateJob(job.id,{status:'recovering',progress:Math.max(job.progress,0.35),message:'WanGP process is still running · recovered by PID',lastHeartbeatAt:new Date().toISOString()},false);
+        if(Date.now()-started>12*60*60_000&&!stalled){stalled=true;await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP process has exceeded 12 hours; GPU slot remains reserved until it ends or is cancelled.'},true,true);}
+        if(!stalled)await this.updateJob(job.id,{status:'recovering',progress:Math.max(job.progress,0.35),message:'WanGP process is still running · recovered by PID',lastHeartbeatAt:new Date().toISOString()},false);
         await sleep(5000);
       }
     }
@@ -179,6 +180,8 @@ export class RenderQueueService extends EventEmitter {
     const workflowSha256=await sha256File(workflowPath);
     if(profile.validation.sourceSha256!==workflowSha256)throw new Error(`Profile “${profile.name}” changed after validation. Revalidate it before rendering.`);
     const machine=this.settings.get();
+    const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+    if(runtime==='comfyui'&&!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance because cancellation/recovery uses server-wide queue controls.');
     const assetFingerprints=await this.fingerprintAssets(project,shot);
     const runtimeFingerprint=await fingerprintRuntime(machine,profile);
     const now=new Date().toISOString();
@@ -316,7 +319,9 @@ export class RenderQueueService extends EventEmitter {
 
     const prompt=await compileProfile(profile,values);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
     await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to ComfyUI',comfyPromptId:queued.prompt_id,lastHeartbeatAt:new Date().toISOString()},true,true);
-    const history=await waitForComfyCompletion(client,queued.prompt_id,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:'running',progress:.35,message:`ComfyUI · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});
+    let history:any;
+    try{history=await waitForComfyCompletion(client,queued.prompt_id,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:'running',progress:.35,message:`ComfyUI · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});}
+    catch(error){if(error instanceof Error&&/timed out/i.test(error.message))await client.interrupt().catch(()=>undefined);throw error;}
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
     await this.finalizeComfyHistory(project,this.snapshot().jobs.find(j=>j.id===job.id)??job,client,history);
   }
