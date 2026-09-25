@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { CapCutHandoffResult } from '../../../shared/api';
 import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
-export function Finishing(){const{project,setError,setNotice,setBusy}=useAppStore();const[result,setResult]=useState<CapCutHandoffResult>();const[busy,setBusy]=useState(false);if(!project)return <Page title="CapCut finishing"><Empty>Open a project first.</Empty></Page>;
+export function Finishing(){const{project,setError,setNotice}=useAppStore();const[result,setResult]=useState<CapCutHandoffResult>();const[busy,setBusy]=useState(false);if(!project)return <Page title="CapCut finishing"><Empty>Open a project first.</Empty></Page>;
 const prepare=async()=>{try{setBusy(true);useAppStore.getState().setBusy(true);await useAppStore.getState().persist();const handoff=await window.cineforge.capcut.prepareHandoff();setResult(handoff);setNotice('CapCut × Codex handoff prepared. The canonical CineForge project remains unchanged.');}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);useAppStore.getState().setBusy(false);}};
 const copyPrompt=async()=>{if(!result)return;try{await navigator.clipboard.writeText(result.prompt);setNotice('CapCut × Codex instruction copied.');}catch(e){setError(`Clipboard copy failed: ${e instanceof Error?e.message:String(e)}`);}};
 return <Page title="CapCut finishing" subtitle="Generate a deterministic handoff for the official CapCut × Codex workflow while keeping CineForge as the canonical project state." actions={<button className="primary" onClick={prepare} disabled={busy||project.timeline.length===0}>{busy?'Preparing…':'Prepare CapCut handoff'}</button>}>
