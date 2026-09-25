@@ -41,6 +41,7 @@ export async function shutdownForegroundOperations():Promise<void>{
 export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
   let keyframeBusy = false;
   let directorBusy = false;
+  let workflowValidationBusy = false;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
       assertTrustedIpcSender(event,trustedRendererUrl);
@@ -48,21 +49,22 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     });
   };
 
-  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||directorBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active renders, local Director work, keyframe generation, timeline export, or CapCut handoff before switching projects.');};
+  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active renders, local Director work, keyframe generation, workflow validation/provisioning, timeline export, or CapCut handoff before switching projects.');};
   const assertGpuGenerationAvailable=()=>{if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
   const assertDirectorAvailable=()=>{if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
+  const withWorkflowValidationLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{if(workflowValidationBusy)throw new Error('A workflow validation/provisioning task is already running.');workflowValidationBusy=true;try{return await operation();}finally{workflowValidationBusy=false;}};
 
   handle(IPC.projectCreate, async (name?: string) => {
     assertProjectSwitchAllowed();
     const created=await projects.createWithDialog(name);
-    if(created)await autoProvisionWanGpIfNeeded(projects,settings);
+    if(created)await withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings));
     return projects.getCurrent();
   });
   handle(IPC.projectOpen, async () => {
     assertProjectSwitchAllowed();
     const opened = await projects.openWithDialog();
     if (opened) {
-      await autoProvisionWanGpIfNeeded(projects,settings);
+      await withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings));
       await queue.reconcileAfterProjectOpen();
     }
     return projects.getCurrent();
@@ -86,7 +88,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
 
   handle(IPC.settingsGet, () => settings.get());
   handle(IPC.settingsSave, async (next: AppMachineSettings) => {
-    if (queue.isBusy()||keyframeBusy||directorBusy) throw new Error('Machine runtime settings cannot change while render jobs, keyframe generation, or local Director work are active.');
+    if (queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy) throw new Error('Machine runtime settings cannot change while render jobs, keyframe generation, local Director work, or workflow validation/provisioning are active.');
     return settings.save(next);
   });
 
@@ -127,9 +129,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const safe=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),path,'workflow path'),'workflow path');
     try{return await inspectWorkflow(safe);}catch{return inspectWanGpSettings(safe);}
   });
-  handle(IPC.workflowValidate, (profileId:string) => validateAndRecordProfile(projects, settings.get(), profileId));
+  handle(IPC.workflowValidate, (profileId:string) => withWorkflowValidationLock(()=>validateAndRecordProfile(projects, settings.get(), profileId)));
   handle(IPC.workflowWanGpCatalog, () => listWanGpCatalog(settings.get()));
-  handle(IPC.workflowProvisionWanGp, () => provisionRecommendedWanGpProfiles(projects,settings));
+  handle(IPC.workflowProvisionWanGp, () => withWorkflowValidationLock(()=>provisionRecommendedWanGpProfiles(projects,settings)));
 
   handle(IPC.systemProbe, async()=>{
     const project=projects.getCurrent()??undefined,machine=settings.get(),probe=await probeSystem(project,machine);
