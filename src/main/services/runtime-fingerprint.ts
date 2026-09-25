@@ -102,7 +102,7 @@ function objectKeySorter(_key: string, value: unknown): unknown {
 
 export function comfyNodeCatalogFingerprint(objectInfo:unknown):string{
   if(!objectInfo||typeof objectInfo!=='object'||Array.isArray(objectInfo))return'unavailable';
-  return sha256Json(Object.keys(objectInfo as Record<string,unknown>).sort());
+  return sha256Json(objectInfo);
 }
 
 function stableComfySystem(stats:unknown):unknown{
