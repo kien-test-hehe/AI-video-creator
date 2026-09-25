@@ -6,6 +6,7 @@ import { loadPortableProject } from '../src/main/services/project-schema';
 import { assertExistingPathInside } from '../src/main/services/path-safety';
 import { analyzeWanGpBindings } from '../src/main/services/wangp-engine';
 import { profileCompatibilityErrors } from '../src/main/services/profile-validation';
+import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
 import type { WorkflowProfile } from '../src/shared/types';
 
 describe('portable project trust boundary',()=>{
@@ -47,6 +48,23 @@ describe('canonical filesystem containment',()=>{
     const secret=join(outside,'secret.txt');await writeFile(secret,'secret');
     const link=join(inside,'linked.txt');await symlink(secret,link);
     await expect(assertExistingPathInside(inside,link,'asset')).rejects.toThrow(/symlink escape/i);
+  });
+});
+
+
+describe('renderer navigation trust',()=>{
+  it('accepts only the exact packaged renderer file in production mode',()=>{
+    const expected='file:///C:/Program%20Files/CineForge/resources/app.asar/out/renderer/index.html';
+    expect(isTrustedRendererNavigation(expected,expected)).toBe(true);
+    expect(isTrustedRendererNavigation('file:///C:/Users/Public/out/renderer/index.html',expected)).toBe(false);
+    expect(isTrustedRendererNavigation('https://example.com/',expected)).toBe(false);
+  });
+
+  it('allows only the configured dev-server origin in development mode',()=>{
+    const expected='http://127.0.0.1:5173/';
+    expect(isTrustedRendererNavigation('http://127.0.0.1:5173/src',expected)).toBe(true);
+    expect(isTrustedRendererNavigation('http://localhost:5173/',expected)).toBe(false);
+    expect(isTrustedRendererNavigation('http://127.0.0.1:9999/',expected)).toBe(false);
   });
 });
 
