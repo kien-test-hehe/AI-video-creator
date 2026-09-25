@@ -99,25 +99,27 @@ async function probeVideo(ffprobe:string,input:string,signal?:AbortSignal):Promi
 function run(command:string,args:string[],timeoutMs=60*60_000,signal?:AbortSignal):Promise<void>{
   return new Promise((resolve,reject)=>{
     const child=spawn(command,args,{windowsHide:true,stdio:['ignore','ignore','pipe'],detached:process.platform!=='win32'});
-    let stderr='',settled=false;
+    let stderr='',settled=false,stopping=false,stopReason:Error|undefined;
     child.stderr?.on('data',d=>stderr+=d.toString());
     const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',onAbort);error?reject(error):resolve();};
-    const onAbort=()=>{if(child.pid)void killProcessTree(child.pid);finish(new Error('Timeline export cancelled.'));};
-    const timer=setTimeout(()=>{if(child.pid)void killProcessTree(child.pid);finish(new Error('FFmpeg timed out.'));},timeoutMs);timer.unref();
-    signal?.addEventListener('abort',onAbort,{once:true});if(signal?.aborted)return onAbort();
-    child.on('error',error=>finish(error));child.on('close',code=>code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-3000)}`)));
+    const stop=async(reason:Error)=>{if(stopping||settled)return;stopping=true;stopReason=reason;if(!child.pid)return finish(reason);try{await killProcessTree(child.pid);finish(reason);}catch(error){stderr+=`\nProcess stop confirmation failed: ${error instanceof Error?error.message:String(error)}`;stopping=false;}};
+    const onAbort=()=>{void stop(new Error('Timeline export cancelled.'));};
+    const timer=setTimeout(()=>{void stop(new Error('FFmpeg timed out.'));},timeoutMs);timer.unref();
+    signal?.addEventListener('abort',onAbort,{once:true});if(signal?.aborted){onAbort();return;}
+    child.on('error',error=>finish(error));child.on('close',code=>stopping?finish(stopReason??new Error('FFmpeg stopped.')):code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-3000)}`)));
   });
 }
 function runCapture(command:string,args:string[],timeoutMs:number,signal?:AbortSignal):Promise<string>{
   return new Promise((resolve,reject)=>{
     const child=spawn(command,args,{windowsHide:true,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
-    let stdout='',stderr='',settled=false;
+    let stdout='',stderr='',settled=false,stopping=false,stopReason:Error|undefined;
     child.stdout?.on('data',d=>stdout+=d.toString());child.stderr?.on('data',d=>stderr+=d.toString());
     const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',onAbort);error?reject(error):resolve(stdout);};
-    const onAbort=()=>{if(child.pid)void killProcessTree(child.pid);finish(new Error('Timeline export cancelled.'));};
-    const timer=setTimeout(()=>{if(child.pid)void killProcessTree(child.pid);finish(new Error('FFprobe timed out.'));},timeoutMs);timer.unref();
-    signal?.addEventListener('abort',onAbort,{once:true});if(signal?.aborted)return onAbort();
-    child.on('error',error=>finish(error));child.on('close',code=>code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-2000)}`)));
+    const stop=async(reason:Error)=>{if(stopping||settled)return;stopping=true;stopReason=reason;if(!child.pid)return finish(reason);try{await killProcessTree(child.pid);finish(reason);}catch(error){stderr+=`\nProcess stop confirmation failed: ${error instanceof Error?error.message:String(error)}`;stopping=false;}};
+    const onAbort=()=>{void stop(new Error('Timeline export cancelled.'));};
+    const timer=setTimeout(()=>{void stop(new Error('FFprobe timed out.'));},timeoutMs);timer.unref();
+    signal?.addEventListener('abort',onAbort,{once:true});if(signal?.aborted){onAbort();return;}
+    child.on('error',error=>finish(error));child.on('close',code=>stopping?finish(stopReason??new Error('FFprobe stopped.')):code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-2000)}`)));
   });
 }
 function throwIfAborted(signal?:AbortSignal):void{if(signal?.aborted)throw new Error('Timeline export cancelled.');}
