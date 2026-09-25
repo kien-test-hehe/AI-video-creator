@@ -164,11 +164,12 @@ Assert-Nvidia
 $python = Ensure-Python311
 $ff = Ensure-FFmpeg
 $wanPython = Ensure-WanGP $python
+$effectiveWanRoot = if (Test-Path (Join-Path $WanRoot 'wgp.py')) { $WanRoot } else { '' }
 $ffmpegPath = $ff[0]
 $ffprobePath = $ff[1]
 
 Step 'Writing machine-local CineForge environment'
-$escapedWan = $WanRoot.Replace("'", "''")
+$escapedWan = $effectiveWanRoot.Replace("'", "''")
 $escapedPy = $wanPython.Replace("'", "''")
 $escapedFfmpeg = $ffmpegPath.Replace("'", "''")
 $escapedFfprobe = $ffprobePath.Replace("'", "''")
@@ -192,7 +193,7 @@ $bootstrapSettings = @{
   }
   wangp = @{
     executionMode = 'native'
-    rootPath = $WanRoot
+    rootPath = $effectiveWanRoot
     pythonPath = $wanPython
     entrypoint = 'wgp.py'
     profile = 4
