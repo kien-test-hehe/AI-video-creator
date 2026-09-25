@@ -105,16 +105,17 @@ export class RenderQueueService extends EventEmitter {
     this.pending=this.pending.filter(id=>id!==jobId);
     if(wasRunning){
       if(runtime==='wangp'){
-        this.cancelled.add(jobId);
         const machine=this.settings.get(),child=this.wanGpProcesses.get(jobId);
         if(machine.wangp.executionMode==='docker'){
+          if(!await isWanGpDockerRunning(machine,job.id))throw new Error('WanGP container is no longer running; wait for output finalization instead of marking the job cancelled.');
           await stopWanGpDocker(machine,job.id);
-          if(child?.pid)await killProcessTree(child.pid);
-        }else if(child?.pid)await killProcessTree(child.pid);
-        else if(job.backendPid){
-          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py'])){this.cancelled.delete(jobId);throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');}
+          if(child?.pid&&isProcessAlive(child.pid))await killProcessTree(child.pid);
+        }else if(child?.pid&&isProcessAlive(child.pid))await killProcessTree(child.pid);
+        else if(job.backendPid&&isProcessAlive(job.backendPid)){
+          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');
           await killProcessTree(job.backendPid);
-        }
+        }else throw new Error('WanGP process is no longer running; wait for output finalization instead of marking the job cancelled.');
+        this.cancelled.add(jobId);
       }else{
         if(job.comfyPromptId){
           const machine=this.settings.get(),client=new ComfyClient(machine.comfy.url,true);
