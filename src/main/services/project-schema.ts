@@ -66,6 +66,13 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const jobIds=new Set(renderJobs.map(job=>job.id));
   const timeline = array(source.timeline).slice(0,100_000).map(value => sanitizeTimelineClip(value, shotIds, outputIds));
 
+  assertUniqueIds('scene',scenes);
+  assertUniqueIds('asset',assets);
+  assertUniqueIds('shot',shots);
+  assertUniqueIds('render output',renderOutputs);
+  assertUniqueIds('render job',renderJobs);
+  assertUniqueIds('timeline clip',timeline);
+
   for (const scene of scenes) scene.shotIds = scene.shotIds.filter(shotId => shotIds.has(shotId));
   for(const shot of shots){
     if(shot.latestRenderId&&!renderOutputs.some(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video'))shot.latestRenderId=undefined;
@@ -93,6 +100,7 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
   const source = asObject(value ?? {}, 'settings');
   const profiles = array(source.workflowProfiles).slice(0,512).map(sanitizeWorkflowProfile);
   for (const builtin of BUILTIN_WORKFLOW_PROFILES) if (!profiles.some(p=>p.id===builtin.id)) profiles.push(structuredClone(builtin));
+  assertUniqueIds('workflow profile',profiles);
   return {
     costPolicy: {
       mode: 'codex-capcut-only',
@@ -338,6 +346,10 @@ function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
 }
 function finiteOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):undefined;}
 function intOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isInteger(n)?Math.min(max,Math.max(min,n)):undefined;}
+
+function assertUniqueIds(label:string,items:Array<{id:string}>):void{
+  const seen=new Set<string>();for(const item of items){if(seen.has(item.id))throw new Error(`Duplicate ${label} id: ${item.id}`);seen.add(item.id);}
+}
 
 function asObject(value: unknown, label: string): Record<string, any> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label}: expected an object.`);
