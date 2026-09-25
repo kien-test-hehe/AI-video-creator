@@ -24,11 +24,11 @@ import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/
 
 type Handler = (...args: any[]) => any;
 
-export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService): void {
+export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
   let exportAbortController: AbortController | null = null;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
-      assertTrustedIpcSender(event);
+      assertTrustedIpcSender(event,trustedRendererUrl);
       return handler(...args);
     });
   };
