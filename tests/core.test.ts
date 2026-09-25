@@ -21,6 +21,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
+import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { tmpdir } from 'node:os';
 
 const api: ApiWorkflow = {
@@ -275,6 +276,17 @@ describe('Comfy queue identity',()=>{
     expect(promptQueueState(queue,'running-id')).toBe('running');
     expect(promptQueueState(queue,'pending-id')).toBe('pending');
     expect(promptQueueState(queue,'target-id')).toBe('absent');
+  });
+});
+describe('Comfy prompt release safety',()=>{
+  it('does not release the GPU lock on a transient state error and waits for exact queue absence',async()=>{
+    let historyCalls=0,queueCalls=0;
+    const client={
+      history:async()=>{historyCalls+=1;if(historyCalls===1)throw new Error('temporary network error');return null;},
+      queue:async()=>{queueCalls+=1;return queueCalls===1?{queue_running:[[1,'p',{}]],queue_pending:[]}:{queue_running:[],queue_pending:[]};}
+    } as any;
+    await waitForComfyPromptRelease(client,'p',{intervalMs:1});
+    expect(historyCalls).toBeGreaterThanOrEqual(2);expect(queueCalls).toBeGreaterThanOrEqual(2);
   });
 });
 describe('Comfy cancellation history',()=>{
