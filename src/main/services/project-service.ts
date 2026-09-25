@@ -36,7 +36,7 @@ export class ProjectService {
       scenes: [], assets: [], shots: [], renderJobs: [], renderOutputs: [], timeline: [],
       settings: {
         costPolicy: { mode: 'codex-capcut-only', allowCapcutAiCredits: false },
-        capcut: { enabled: true, pro: true },
+        capcut: { enabled: true, pro: false },
         defaultFps: 24,
         outputContainer: 'mp4',
         workflowProfiles: structuredClone(BUILTIN_WORKFLOW_PROFILES)
