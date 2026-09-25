@@ -4,7 +4,7 @@ import { chooseModelForShot } from '../../../shared/routing';
 import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
-import { insertTimelineOutput, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow } from '../studio-logic';
+import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioWorkflowIssue } from '../studio-logic';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
 
@@ -85,7 +85,7 @@ export function Studio(){
           nodes.push({id,kind:'shot',x:670,y,width:280,height:142,title:shot.title,subtitle:compact(shot.prompt||shot.action||'No visual prompt yet.',88),shotId:shot.id});
           edges.push({id:`scene-${shot.id}`,source:`scene:${shot.sceneId}`,target:id,kind:'primary'});
           const route=resolveStudioWorkflow(project.settings.workflowProfiles,shot);
-          if(route)edges.push({id:`route-${shot.id}`,source:id,target:`workflow:${route.id}`,kind:route.validation?.structuralStatus==='valid'?'primary':'warning'});
+          if(route)edges.push({id:`route-${shot.id}`,source:id,target:`workflow:${route.id}`,kind:isStudioWorkflowReady(route,shot)?'primary':'warning'});
         });
         sceneShotCursor+=sceneShots.length*158;
       }else sceneShotCursor+=155;
@@ -129,7 +129,7 @@ export function Studio(){
   const focusedNode=nodeMap.get(focusedNodeId||fallbackFocusId)||nodeMap.get(fallbackFocusId);
   const focusedAsset=project?.assets.find(asset=>asset.id===focusedAssetId);
   const selectedRoute=selectedShot&&project?resolveStudioWorkflow(project.settings.workflowProfiles,selectedShot):undefined;
-  const selectedRouteReady=selectedRoute?.validation?.structuralStatus==='valid';
+  const selectedRouteReady=Boolean(selectedShot&&isStudioWorkflowReady(selectedRoute,selectedShot));
   const activeNodeIds=useMemo(()=>{
     const ids=new Set<string>();if(selectedShot){ids.add(`shot:${selectedShot.id}`);ids.add(`scene:${selectedShot.sceneId}`);const route=project?resolveStudioWorkflow(project.settings.workflowProfiles,selectedShot):undefined;if(route)ids.add(`workflow:${route.id}`);}return ids;
   },[project,selectedShot]);
@@ -303,6 +303,7 @@ function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerM
   const shot=node.shotId?project.shots.find(item=>item.id===node.shotId):undefined;
   const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
   const route=shot?resolveStudioWorkflow(project.settings.workflowProfiles,shot):undefined;
+  const routeReady=Boolean(shot&&isStudioWorkflowReady(route,shot));
   const routeableProfile=Boolean(profile?.enabled&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&(profile.purpose??'video')==='video');
   const visual=shot?shotPreviewAsset(project,shot):undefined;
   const className=['studio-node',`node-${node.kind}`,selected?'selected':'',active?'on-path':'',locked?'locked':''].filter(Boolean).join(' ');
@@ -314,7 +315,7 @@ function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerM
     <button className="studio-node-body" draggable={routeableProfile} title={profile?(routeableProfile?'Drag onto a shot to route it. Single-click inspects; double-click opens Settings.':'Inspect here. Validate and enable this workflow before drag-routing.'):shot?'Drop assets or validated workflows here. Single-click inspects; double-click opens the full workshop.':'Single-click inspects; double-click opens the detailed workspace.'} onDragStart={routeableProfile&&profile?event=>{event.stopPropagation();onStartWorkflowDrag(event,profile.id);}:undefined} onClick={()=>onActivate(node)} onDoubleClick={()=>{const view=openView[node.kind];if(view)onOpen(view);}}>
       {visual&&<img className="studio-node-thumb" src={projectMediaUrl(visual.projectPath)} alt=""/>}
       <strong>{node.title}</strong><small>{node.subtitle}</small>
-      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{!route?<Pill>no route</Pill>:route.validation?.structuralStatus!=='valid'?<Pill>route {route.validation?.structuralStatus||'unvalidated'}</Pill>:<Pill>route ready</Pill>}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
+      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{!route?<Pill>no route</Pill>:routeReady?<Pill>route ready</Pill>:<Pill>route blocked</Pill>}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
       {shot&&<div className="studio-ref-meter"><span>C{shot.characterAssetIds.length}</span><span>{shot.locationAssetId?'LOC':'NO LOC'}</span><span>REF{shot.referenceAssetIds?.length??0}</span><span>P{shot.propAssetIds.length}</span><span>{shot.startFrameAssetId?'START':'—'}</span><span>{shot.endFrameAssetId?'END':'—'}</span></div>}
       {profile&&<div className="studio-node-meta"><Pill>{profile.enabled?'enabled':'off'}</Pill><span>{profile.validation?.structuralStatus||'unvalidated'}</span>{routeableProfile&&<span>drag-route</span>}</div>}
       {node.kind==='queue'&&<div className="studio-node-meta"><span>{project.renderJobs.filter(job=>job.status==='done').length} completed</span><span>{project.renderOutputs.length} outputs</span></div>}
@@ -404,7 +405,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
   const mutate=(fn:(shot:Shot)=>void)=>updateProject(next=>{const target=next.shots.find(item=>item.id===shot.id);if(target)fn(target);});
   const matching=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&profile.workflowPath);
   const route=resolveStudioWorkflow(project.settings.workflowProfiles,shot);
-  const routeReady=route?.validation?.structuralStatus==='valid';
+  const routeIssue=studioWorkflowIssue(route,shot),routeReady=!routeIssue;
   const imageProfiles=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='image'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   const activeKeyframeProfileId=imageProfiles.some(profile=>profile.id===keyframeProfileId)?keyframeProfileId:(imageProfiles[0]?.id||'');
   const takes=[...project.renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
@@ -434,7 +435,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
     <div className="studio-inspector-head"><div><span className="eyebrow">SHOT INSPECTOR</span><strong>{shot.title}</strong></div><button className="ghost" onClick={()=>setView('shots')}>Full workshop ↗</button></div>
     {latestPath&&<video className="studio-latest-video" src={projectMediaUrl(relativeOutput(project.rootPath,latestPath))} controls preload="metadata"/>}
     <div className="studio-inspector-actions"><button className="ghost" onClick={()=>changeModel(chooseModelForShot(shot))}>Auto route</button><button className="ghost" disabled={continuityBusy} onClick={reviewContinuity}>{continuityBusy?'Reviewing…':'Continuity review'}</button></div>
-    <div className={`studio-route-status ${route?.validation?.structuralStatus==='valid'?'ready':route?'warn':'bad'}`}><span>VIDEO ROUTE</span><strong>{route?.name||'No enabled matching workflow'}</strong><small>{route?route.validation?.structuralStatus||'unvalidated':'Open Settings or use Auto-setup WanGP profiles'}</small></div>
+    <div className={`studio-route-status ${routeReady?'ready':route?'warn':'bad'}`}><span>VIDEO ROUTE</span><strong>{route?.name||'No matching workflow'}</strong><small>{routeIssue||'validated / production-ready'}</small></div>
     {takes.length>0&&<div className="studio-takes"><div className="studio-panel-head compact"><div><span className="eyebrow">TAKES</span><strong>{takes.length} rendered</strong></div></div>{takes.map(take=><div className="studio-take-row" key={take.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-render-output',take.id);}} title="Drag this take to the Timeline dock"><div><strong>{take.filename}</strong><small>{new Date(take.createdAt).toLocaleString()} · {take.technicalQc?(take.technicalQc.passed?'QC pass':'QC fail'):'QC unknown'}</small></div><div className="row">{shot.latestRenderId===take.id?<Pill>preferred</Pill>:<button className="ghost" onClick={()=>mutate(target=>{target.latestRenderId=take.id;target.status='rendered';})}>Use</button>}<button className="mini" onClick={()=>void window.cineforge.system.reveal(take.path)}>↗</button></div></div>)}</div>}
     {continuityReview&&<div className="studio-continuity-result"><div className="studio-panel-head compact"><strong>Continuity review</strong><button className="mini" onClick={()=>setContinuityReview(undefined)}>×</button></div>{continuityReview.issues.length?<ul>{continuityReview.issues.map((issue,index)=><li key={index}>{issue}</li>)}</ul>:<p>No concrete continuity issue found.</p>}{continuityReview.promptAddendum&&<button className="ghost" onClick={()=>mutate(target=>target.prompt=[target.prompt,continuityReview.promptAddendum].filter(Boolean).join('\n'))}>Append prompt suggestion</button>}{continuityReview.suggestedContinuityNotes&&<button className="ghost" onClick={()=>mutate(target=>target.continuityNotes=[target.continuityNotes,continuityReview.suggestedContinuityNotes].filter(Boolean).join('\n'))}>Append continuity notes</button>}</div>}
     <label>Title<input value={shot.title} onChange={event=>mutate(target=>target.title=event.target.value)}/></label>
