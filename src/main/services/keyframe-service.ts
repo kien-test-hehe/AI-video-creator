@@ -168,16 +168,16 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
   throwIfAborted(signal);
   const client=new ComfyClient(machine.comfy.url,true);const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable: ${ping.error||machine.comfy.url}`);
   throwIfAborted(signal);
-  if(values.startImage){const uploaded=await client.uploadImage(values.startImage);values.startImage=uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;}
-  if(values.referenceImages?.length){
-    const staged:string[]=[];
-    for(const path of values.referenceImages){
-      throwIfAborted(signal);const uploaded=await client.uploadImage(path);
-      staged.push(uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename);
-    }
-    values.referenceImages=staged;
-    staged.slice(0,4).forEach((path,index)=>Object.assign(values,{[`referenceImage${index+1}`]:path}));
-  }
+  const stagedBySource=new Map<string,string>();
+  const stageImage=async(path:string)=>{
+    const cached=stagedBySource.get(path);if(cached)return cached;
+    throwIfAborted(signal);
+    const uploaded=await client.uploadImage(path),staged=uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;
+    stagedBySource.set(path,staged);return staged;
+  };
+  const scalarKeys=['startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const;
+  for(const key of scalarKeys){const value=values[key];if(typeof value==='string'&&value)(values as any)[key]=await stageImage(value);}
+  if(values.referenceImages?.length)values.referenceImages=await Promise.all(values.referenceImages.map(stageImage));
   throwIfAborted(signal);
   const workflow=await compileProfile(profile,values);await assertCurrent(true);const queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role}});
   let cancelPromise:Promise<void>|undefined;
