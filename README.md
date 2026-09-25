@@ -4,6 +4,30 @@
 
 CineForge is a local-first desktop production orchestrator for AI video. Its budget rule is explicit: the only intended recurring paid services are **Codex/ChatGPT + CapCut**. Heavy ASR/TTS/image/video/upscale/QC work is local.
 
+## RTX 5060 Ti Windows quick start
+
+For a fresh Windows workstation:
+
+```bat
+git clone https://github.com/kien-test-hehe/AI-video-creator.git
+cd AI-video-creator
+git switch hardening-production
+setup.cmd
+start.cmd
+```
+
+`setup.cmd` is idempotent and prepares a machine-local runtime under `.runtime/`:
+
+- portable Node.js 22.16;
+- FFmpeg + FFprobe when missing;
+- the pinned WanGP source/runtime and its automatic RTX-aware environment installer;
+- CineForge npm dependencies and source validation;
+- machine-local environment values for WanGP/Python/FFmpeg.
+
+NVIDIA display/compute drivers are intentionally **not** silently upgraded by the script; if `nvidia-smi` is missing, setup stops with a clear prerequisite error. CapCut is detected but is not forcibly installed or upgraded.
+
+The first project defaults to **CapCut Free / No Pro** and **CapCut AI credits disabled**. If the machine-local WanGP runtime is ready, CineForge automatically reads its model catalog and provisions recommended local profiles. Model weights remain on-demand because shipping tens of gigabytes inside Git would be impractical.
+
 ## Architecture
 
 ```text
@@ -116,7 +140,7 @@ handoff/capcut/<timestamp>/
   CODEX_CAPCUT_TASK.md
 ```
 
-The task asks the official CapCut × Codex workflow to preserve media/order/trims/dialogue while using CapCut for captions, typography, transitions, tracking/reframe, effects and final polish. CapCut AI-credit generation is prohibited unless the project explicitly enables it.
+The task asks the official CapCut × Codex workflow to preserve media/order/trims/dialogue while using CapCut for captions, typography, transitions, tracking/reframe, effects and final polish. New projects are **Free / No Pro by default**. Pro is an explicit project toggle, and CapCut AI-credit generation remains a separate opt-in.
 
 This is a handoff contract, not brittle coordinate-click GUI automation.
 
