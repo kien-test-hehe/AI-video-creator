@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { AppMachineSettings, FilmProject, QueueSnapshot, SystemProbe } from '../../shared/types';
 
-export type ViewId='dashboard'|'story'|'assets'|'storyboard'|'shots'|'queue'|'timeline'|'finishing'|'settings';
+export type ViewId='studio'|'dashboard'|'story'|'assets'|'storyboard'|'shots'|'queue'|'timeline'|'finishing'|'settings';
 interface AppState{
   project:FilmProject|null;machine:AppMachineSettings|null;activeView:ViewId;selectedShotId?:string;queue:QueueSnapshot;probe?:SystemProbe;busy:boolean;error?:string;notice?:string;
   setProject(project:FilmProject|null):void;syncRuntime(project:FilmProject):void;updateProject(mutator:(project:FilmProject)=>void):void;persist():Promise<void>;
@@ -11,7 +11,7 @@ interface AppState{
 let projectTimer:ReturnType<typeof setTimeout>|undefined,machineTimer:ReturnType<typeof setTimeout>|undefined;
 
 export const useAppStore=create<AppState>((set,get)=>({
-  project:null,machine:null,activeView:'dashboard',queue:{jobs:[]},busy:false,
+  project:null,machine:null,activeView:'studio',queue:{jobs:[]},busy:false,
   setProject:project=>{clearTimeout(projectTimer);projectTimer=undefined;set({project});},
   syncRuntime:mainProject=>set(state=>{const current=state.project;if(!current||current.id!==mainProject.id)return{project:mainProject};const next=structuredClone(current);next.renderJobs=structuredClone(mainProject.renderJobs);next.renderOutputs=structuredClone(mainProject.renderOutputs);next.settings.workflowProfiles=structuredClone(mainProject.settings.workflowProfiles);const runtime=new Map(mainProject.shots.map(shot=>[shot.id,{status:shot.status,latestRenderId:shot.latestRenderId}]));for(const shot of next.shots){const value=runtime.get(shot.id);if(value){shot.status=value.status;shot.latestRenderId=value.latestRenderId;}}return{project:next};}),
   updateProject:mutator=>{const current=get().project;if(!current)return;const next=structuredClone(current);mutator(next);next.updatedAt=new Date().toISOString();set({project:next});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist(),450);},
