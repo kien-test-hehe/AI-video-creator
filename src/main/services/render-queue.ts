@@ -4,7 +4,7 @@ import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type {
-  AppMachineSettings, Asset, AssetFingerprint, FilmProject, QueueSnapshot, RenderBatchRequest, RenderJob, RenderOutput,
+  AppMachineSettings, Asset, AssetFingerprint, FilmProject, QueueSnapshot, RenderBatchRequest, RenderJob, RenderOutput, RenderRuntimeFingerprint,
   RenderRequest, Shot, SystemProbe, WorkflowBindingKey, WorkflowProfile
 } from '../../shared/types';
 import { ProjectService } from './project-service';
@@ -67,14 +67,19 @@ export class RenderQueueService extends EventEmitter {
   async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{
     const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
     const jobs:RenderJob[]=[];
-    const machine=this.settings.get(),probe=await probeSystem(project,machine);
+    const machine=this.settings.get(),probe=await probeSystem(project,machine),runtimeFingerprints=new Map<string,Promise<RenderRuntimeFingerprint>>();
+    const fingerprintFor=(profile:WorkflowProfile)=>{
+      const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+      const key=runtime==='wangp'?`wangp:${machine.wangp.executionMode}`:'comfyui';
+      let pending=runtimeFingerprints.get(key);if(!pending){pending=fingerprintRuntime(machine,profile);runtimeFingerprints.set(key,pending);}return pending;
+    };
     for(const id of [...new Set(request.shotIds)]){
       const shot=project.shots.find(s=>s.id===id);if(!shot)throw new Error(`Shot not found: ${id}`);
       if(request.skipIfRendered&&shot.latestRenderId)continue;
       if(this.hasActiveJobForShot(shot.id))continue;
       const profile=routeWorkflow(project,shot);
       this.assertExecutionEnvironment(machine,profile,probe);
-      jobs.push(await this.createJob(project,shot,profile,machine));
+      jobs.push(await this.createJob(project,shot,profile,machine,await fingerprintFor(profile)));
     }
     if(jobs.length)await this.commitQueuedJobs(jobs);return this.snapshot();
   }
@@ -211,7 +216,7 @@ export class RenderQueueService extends EventEmitter {
 
   private hasActiveJobForShot(shotId:string):boolean{return this.snapshot().jobs.some(j=>j.shotId===shotId&&ACTIVE.has(j.status));}
 
-  private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile,machine:AppMachineSettings):Promise<RenderJob>{
+  private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile,machine:AppMachineSettings,knownRuntimeFingerprint?:RenderRuntimeFingerprint):Promise<RenderJob>{
     if(profile.validation?.structuralStatus!=='valid')throw new Error(`Profile “${profile.name}” must be validated in Settings before rendering.`);
     const bindingKeys=new Set(profile.bindings.map(binding=>binding.key));
     const requiredInputs:Array<[boolean,WorkflowBindingKey,string]>=[
@@ -227,7 +232,9 @@ export class RenderQueueService extends EventEmitter {
     const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(runtime==='comfyui'&&!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance because cancellation/recovery uses server-wide queue controls.');
     const assetFingerprints=await this.fingerprintAssets(project,shot);
-    const runtimeFingerprint=await fingerprintRuntime(machine,profile);
+    const runtimeFingerprint=knownRuntimeFingerprint??await fingerprintRuntime(machine,profile);
+    if(!profile.validation?.runtimeFingerprint)throw new Error(`Profile “${profile.name}” has no validated runtime fingerprint. Revalidate it on this workstation before rendering.`);
+    if(profile.validation.runtimeFingerprint!==runtimeFingerprint.environmentSha256)throw new Error(`Profile “${profile.name}” was validated against a different local AI runtime. Revalidate it before rendering.`);
     const now=new Date().toISOString();
     return{id:randomUUID(),shotId:shot.id,createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(profile),effectivePrompt:buildPrompt(project,shot),queuedProjectUpdatedAt:project.updatedAt,workflowSha256,assetFingerprints,runtimeFingerprint,modelFingerprint:profile.modelFingerprint}};
   }
