@@ -168,6 +168,7 @@ export interface WanGpCatalogEntry {
   mainOutput:string[];
   outputs:string[];
   inputs:string[];
+  capabilities?:Record<string,boolean>;
   description?:string;
 }
 export type ValidationLevel='error'|'warning'|'info';
