@@ -33,7 +33,7 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
 
   if(needsWanGp&&!probe.wangp.available)issues.push({level:'error',code:'WANGP_UNAVAILABLE',message:probe.wangp.configured?`WanGP unavailable: ${probe.wangp.error||'unknown error'}`:'Configure WanGP in Machine Settings before rendering WanGP-routed shots.'});
   if(needsComfy&&!probe.comfy.reachable)issues.push({level:'error',code:'COMFY_OFFLINE',message:`A routed shot requires ComfyUI, but ${machine.comfy.url} is offline: ${probe.comfy.error||'unknown error'}`});
-  if(needsComfy&&!machine.comfy.dedicatedInstance)issues.push({level:'warning',code:'COMFY_SHARED_INSTANCE',message:'ComfyUI is marked as shared. CineForge cancellation uses the server interrupt endpoint, which can affect unrelated work; a dedicated local ComfyUI instance is strongly recommended.'});
+  if(needsComfy&&!machine.comfy.dedicatedInstance)issues.push({level:'error',code:'COMFY_SHARED_INSTANCE',message:'Production ComfyUI routing requires a dedicated CineForge instance because cancellation and recovery use server-wide queue controls.'});
   if(needsWanGp&&machine.wangp.executionMode==='docker'){
     if(!probe.docker?.available)issues.push({level:'error',code:'DOCKER_UNAVAILABLE',message:`WanGP Docker mode is selected but Docker is unavailable: ${probe.docker?.error||'unknown error'}`});
     if(!machine.wangp.docker.image.trim())issues.push({level:'error',code:'WANGP_DOCKER_IMAGE',message:'WanGP Docker mode requires a configured image tag/digest.'});
