@@ -6,3 +6,7 @@ dist/
 *.tmp
 coverage/
 projects/
+
+.runtime/
+.env
+.env.local
