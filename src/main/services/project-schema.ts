@@ -61,7 +61,7 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const shotIds = new Set(shots.map(s=>s.id));
   const renderOutputs = array(source.renderOutputs).map(value => sanitizeRenderOutput(value, shotIds));
   const outputIds = new Set(renderOutputs.map(o=>o.id));
-  const renderJobs = array(source.renderJobs).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles));
+  const renderJobs = array(source.renderJobs).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds));
   const timeline = array(source.timeline).map(value => sanitizeTimelineClip(value, shotIds, outputIds));
 
   for (const scene of scenes) scene.shotIds = scene.shotIds.filter(shotId => shotIds.has(shotId));
@@ -243,11 +243,35 @@ function sanitizeRenderOutput(value: unknown, shotIds: Set<string>): RenderOutpu
   };
 }
 
-function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: WorkflowProfile[]): RenderJob {
+function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: WorkflowProfile[], sceneIds:Set<string>, assetIds:Set<string>): RenderJob {
   const source = asObject(value, 'render job');
   const shotId = safeId(source.shotId);
   if (!shotIds.has(shotId)) throw new Error(`Render job references unknown shot: ${shotId}`);
   const profileId = typeof source.workflowProfileId === 'string' ? source.workflowProfileId : undefined;
+  let spec: RenderJob['spec'];
+  if(source.spec&&typeof source.spec==='object'){
+    const rawSpec=asObject(source.spec,'render job spec');
+    const workflowProfile=sanitizeWorkflowProfile(rawSpec.workflowProfile);
+    const runtimeRaw=rawSpec.runtimeFingerprint&&typeof rawSpec.runtimeFingerprint==='object'?rawSpec.runtimeFingerprint:{};
+    spec={
+      shot:sanitizeShot(rawSpec.shot,sceneIds,assetIds),
+      workflowProfile,
+      effectivePrompt:str(rawSpec.effectivePrompt,'',300_000),
+      queuedProjectUpdatedAt:iso(rawSpec.queuedProjectUpdatedAt,new Date().toISOString()),
+      workflowSha256:sha(rawSpec.workflowSha256)??'0'.repeat(64),
+      assetFingerprints:array(rawSpec.assetFingerprints).slice(0,32).map(item=>{
+        const fp=asObject(item,'asset fingerprint');return{assetId:safeId(fp.assetId),projectPath:str(fp.projectPath,'',4096),sha256:sha(fp.sha256)??'0'.repeat(64)};
+      }),
+      runtimeFingerprint:{
+        backend:runtimeRaw.backend==='wangp'?'wangp':'comfyui',
+        executionMode:runtimeRaw.executionMode==='docker'?'docker':runtimeRaw.executionMode==='native'?'native':undefined,
+        runtimeVersion:str(runtimeRaw.runtimeVersion,'',2048)||undefined,
+        runtimeSha256:sha(runtimeRaw.runtimeSha256),
+        environmentSha256:sha(runtimeRaw.environmentSha256)??'0'.repeat(64)
+      },
+      modelFingerprint:str(rawSpec.modelFingerprint,'',512)||undefined
+    };
+  }
   return {
     id:safeId(source.id), shotId, createdAt:iso(source.createdAt,new Date().toISOString()), updatedAt:iso(source.updatedAt,new Date().toISOString()),
     status:JOB_STATUSES.has(source.status) ? source.status : 'failed', progress:clampNumber(source.progress,0,1,0),
@@ -257,8 +281,8 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
     backendPid:Number.isInteger(source.backendPid)&&source.backendPid>0?source.backendPid:undefined,
     lastHeartbeatAt:maybeIso(source.lastHeartbeatAt),
     error:str(source.error,'',50_000)||undefined,
-    outputs:array(source.outputs).filter(v=>v&&typeof v==='object').map(v=>structuredClone(v)) as RenderOutput[],
-    spec: source.spec && typeof source.spec === 'object' ? structuredClone(source.spec) : undefined
+    outputs:[],
+    spec
   };
 }
 
