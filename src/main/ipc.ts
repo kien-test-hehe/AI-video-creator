@@ -230,7 +230,7 @@ function requireProject(projects: ProjectService): FilmProject {
 async function autoProvisionWanGpIfNeeded(projects:ProjectService,settings:AppSettingsService):Promise<void>{
   const project=projects.getCurrent(),machine=settings.get();
   if(!project||machine.wangp.executionMode!=='native'||!machine.wangp.rootPath.trim())return;
-  const usable=project.settings.workflowProfiles.some(profile=>profile.enabled&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
+  const usable=project.settings.workflowProfiles.some(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   if(usable)return;
   try{await provisionRecommendedWanGpProfiles(projects,settings);}
   catch(error){console.warn('Automatic WanGP profile provisioning was skipped:',error);}
