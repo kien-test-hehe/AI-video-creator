@@ -63,7 +63,7 @@ export function Studio(){
   },[project]);
 
   const selectedShot=project?(project.shots.find(shot=>shot.id===selectedShotId)||sortedShots[0]):undefined;
-  const hardwareTier=probe?.hardwarePlan.tier,wanGpAvailable=probe?.wangp.available;
+  const hardwareTier=probe?.hardwarePlan.tier,wanGpAvailable=probe?.wangp.available,preflightReady=preflightReport?.ready;
   const selectedShotIsValid=Boolean(selectedShotId&&sortedShots.some(shot=>shot.id===selectedShotId));
   useEffect(()=>{if((!selectedShotId||!selectedShotIsValid)&&sortedShots[0])selectShot(sortedShots[0].id);},[selectShot,selectedShotId,selectedShotIsValid,sortedShots]);
 
@@ -73,7 +73,7 @@ export function Studio(){
     const edges:StudioEdge[]=[];
     nodes.push({id:'story',kind:'story',x:40,y:70,width:230,height:132,title:project.story.title||project.name,subtitle:project.story.logline||'Script / story bible'});
     nodes.push({id:'assets',kind:'assets',x:40,y:280,width:230,height:132,title:'Asset Library',subtitle:`${project.assets.length} continuity / media assets`});
-    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${hardwareTier||'hardware unknown'} · WanGP ${wanGpAvailable?'ready':'check'}`});
+    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${preflightReady===true?'ready':preflightReady===false?'blocked':'unchecked'} · ${hardwareTier||'hardware unknown'} · WanGP ${wanGpAvailable?'ready':'check'}`});
 
     let sceneShotCursor=42;
     for(const scene of project.scenes){
@@ -99,7 +99,7 @@ export function Studio(){
     const profiles=project.settings.workflowProfiles;
     profiles.forEach((profile,index)=>{
       const id=`workflow:${profile.id}`,y=42+index*142;
-      nodes.push({id,kind:'workflow',x:1080,y,width:285,height:124,title:profile.name,subtitle:`${profile.runtime||'comfyui'} · ${profile.modelFamily} · ${profile.mode}`,profileId:profile.id});
+      nodes.push({id,kind:'workflow',x:1080,y,width:285,height:124,title:profile.name,subtitle:`${profile.purpose||'video'} · ${profile.runtime||'comfyui'} · ${profile.modelFamily} · ${profile.mode}`,profileId:profile.id});
     });
     const unbound=sortedShots.filter(shot=>!resolveStudioWorkflow(profiles,shot));
     if(unbound.length){
@@ -112,7 +112,8 @@ export function Studio(){
     nodes.push({id:'timeline',kind:'timeline',x:1490,y:queueY+230,width:250,height:132,title:'Timeline',subtitle:`${project.timeline.length} clips in canonical cut`});
     nodes.push({id:'capcut',kind:'capcut',x:1810,y:queueY+230,width:220,height:132,title:'CapCut Finish',subtitle:project.settings.capcut.pro?'Project policy: Pro':'Project policy: Free / No Pro'});
 
-    profiles.filter(profile=>profile.enabled&&Boolean(profile.workflowPath)).forEach(profile=>edges.push({id:`profile-queue-${profile.id}`,source:`workflow:${profile.id}`,target:'queue',kind:profile.validation?.structuralStatus==='valid'?'primary':'warning'}));
+    profiles.filter(profile=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video').forEach(profile=>edges.push({id:`profile-queue-${profile.id}`,source:`workflow:${profile.id}`,target:'queue',kind:profile.validation?.structuralStatus==='valid'?'primary':'warning'}));
+    edges.push({id:'system-queue',source:'system',target:'queue',kind:preflightReady===true?'primary':'warning'});
     edges.push({id:'queue-timeline',source:'queue',target:'timeline',kind:'primary'});
     edges.push({id:'timeline-capcut',source:'timeline',target:'capcut',kind:'primary'});
     if(selectedShot)edges.push({id:'assets-selected',source:'assets',target:`shot:${selectedShot.id}`,kind:'asset'});
@@ -120,7 +121,7 @@ export function Studio(){
     const workflowRows=profiles.length+(unbound.length?1:0);
     const height=Math.max(900,180+Math.max(sceneShotCursor,42+workflowRows*142));
     return{nodes,edges,width:2070,height};
-  },[hardwareTier,project,queue.jobs,selectedShot,sortedShots,wanGpAvailable]);
+  },[hardwareTier,preflightReady,project,queue.jobs,selectedShot,sortedShots,wanGpAvailable]);
 
   const nodes=useMemo(()=>graph.nodes.map(node=>{const saved=positions[node.id],x=saved?.x??node.x,y=saved?.y??node.y;return{...node,x:Math.min(Math.max(0,graph.width-node.width),Math.max(0,x)),y:Math.min(Math.max(0,graph.height-node.height),Math.max(0,y))};}),[graph.height,graph.nodes,graph.width,positions]);
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
