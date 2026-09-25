@@ -33,15 +33,19 @@ CineForge opens into **Studio**, a filmmaking control surface inspired by the us
 
 Studio keeps the production state visible at once:
 
-- left asset library with search/filter/import and drag sources;
-- center pan/zoom pipeline graph: Story → Scenes → Shots → Workflow Profiles → Queue → Timeline → CapCut;
-- draggable visual node layout with lock, fit, auto-layout and minimap; node position is presentation only and never changes film order;
-- shot nodes that expose status, model/mode, continuity coverage, missing routes and workflow validation state;
+- left asset library with search/filter/import, in-place metadata/continuity editing and drag sources;
+- center pan/zoom pipeline graph: Story / Assets / System → Scenes → Shots → Workflow Profiles → Queue → Timeline → CapCut;
+- draggable visual node layout with lock, cursor-anchored zoom, fit, focus, auto-layout and minimap; node position is presentation only and never changes film order;
+- single-click inspect-in-place for story, assets, system/preflight, scenes, shots, workflows, queue, timeline and CapCut; double-click opens the detailed workspace;
+- shot nodes that expose status, model/mode, dedicated character/location/generic-reference/prop coverage, keyframes and truthful workflow-route readiness;
+- validated video workflows can be dragged onto shot nodes; invalid/disabled/mismatched explicit routes remain visible as blocked instead of silently falling back;
 - right shot inspector for prompt, camera, model/mode, workflow, W/H/frames/FPS/steps/CFG/seed, negative prompt, audio policy, continuity review, keyframe generation and role-specific drag/drop;
-- bottom Queue dock with every job plus cancel/retry controls;
-- bottom Timeline dock with every canonical clip and drag-to-reorder;
-- GPU/VRAM/WanGP/ComfyUI/CapCut/Queue HUD;
+- bottom Queue dock with every job plus cancel/retry controls and shot focus;
+- bottom Timeline dock with every canonical clip, drag-to-reorder and rendered-take → timeline insertion;
+- System / Preflight node plus GPU/VRAM/WanGP/ComfyUI/CapCut/Queue HUD;
 - one-click Preflight, Render selected and Render all.
+
+Generic visual references are stored separately from props/wardrobe. The project schema enforces asset-kind roles and migrates older projects where generic references were previously carried in the prop slot.
 
 The detailed Story, Assets, Storyboard, Shot Workshop, Queue, Timeline, CapCut and Settings views remain available from the icon rail. The graph is therefore an **overview/control workspace**, not a second hidden project model.
 
