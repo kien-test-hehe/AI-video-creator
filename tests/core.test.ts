@@ -11,6 +11,8 @@ import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveSt
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { historyWasInterrupted } from '../src/main/services/comfy-client';
+import { shotKeyframeInputKey, shotRenderInputKey } from '../src/shared/shot-signature';
+import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey } from '../src/shared/director-signature';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -96,6 +98,28 @@ describe('Studio workflow routing and timeline drag',()=>{
    const project={timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},{id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},{id:'c',shotId:'s3',renderOutputId:'o3',track:0,order:2,trimInSec:0,volume:1}]} as unknown as FilmProject;
    expect(reorderTimeline(project,'c','a')).toBe(true);expect(project.timeline.map(clip=>clip.id)).toEqual(['c','a','b']);expect(project.timeline.map(clip=>clip.order)).toEqual([0,1,2]);
  });
+});
+describe('stale creative result guards',()=>{
+  const shot=():Shot=>({id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'p',camera:'locked',action:'walk',dialogue:'',continuityNotes:'keep coat',characterAssetIds:['char'],locationAssetId:'loc',propAssetIds:[],referenceAssetIds:[],status:'rendered',latestRenderId:'old',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}});
+  it('changes render signatures for prompt/reference/generation edits but not runtime status',()=>{
+    const a=shot(),b=structuredClone(a);b.status='failed';b.latestRenderId='different';
+    expect(shotRenderInputKey(a)).toBe(shotRenderInputKey(b));
+    b.prompt='changed';expect(shotRenderInputKey(a)).not.toBe(shotRenderInputKey(b));
+  });
+  it('changes end-keyframe signatures when the chained start frame changes',()=>{
+    const a=shot(),b=structuredClone(a);a.startFrameAssetId='kf-a';b.startFrameAssetId='kf-b';
+    expect(shotKeyframeInputKey(a,'start')).toBe(shotKeyframeInputKey(b,'start'));
+    expect(shotKeyframeInputKey(a,'end')).not.toBe(shotKeyframeInputKey(b,'end'));
+  });
+  it('makes Director signatures sensitive to scene/asset metadata and filters deleted/wrong-kind ids',()=>{
+    const project={id:'p',story:{title:'Film',logline:'L',notes:'N'},scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'Body',location:'ROOM',timeOfDay:'DAY',shotIds:['s']}],shots:[shot()],assets:[
+      {id:'char',kind:'character',name:'Hero',sourcePath:'',projectPath:'assets/char.png',tags:['lead'],notes:'red coat',createdAt:'x'},
+      {id:'loc',kind:'location',name:'Room',sourcePath:'',projectPath:'assets/loc.png',tags:[],notes:'',createdAt:'x'}
+    ],settings:{workflowProfiles:[{id:'v',runtime:'wangp',purpose:'video',name:'v',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'workflows/v.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid'}}]}} as unknown as FilmProject;
+    const before=sceneDirectorInputKey(project,project.scenes[0]);project.assets[0].notes='blue coat';expect(sceneDirectorInputKey(project,project.scenes[0])).not.toBe(before);
+    expect(filterDirectorAssetIds(project,'character',['char','loc','missing'])).toEqual(['char']);
+    const review=continuityReviewInputKey(project,project.shots[0]);project.shots[0].prompt='new';expect(continuityReviewInputKey(project,project.shots[0])).not.toBe(review);
+  });
 });
 describe('hardware advisor',()=>{
  it('recognizes a 16 GB RTX 50-series workstation and chooses the managed low-VRAM profile',()=>{
