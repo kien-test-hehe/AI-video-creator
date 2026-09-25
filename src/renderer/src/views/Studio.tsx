@@ -4,7 +4,7 @@ import { chooseModelForShot } from '../../../shared/routing';
 import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
-import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioWorkflowIssue } from '../studio-logic';
+import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue } from '../studio-logic';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
 
@@ -63,10 +63,11 @@ export function Studio(){
   },[project]);
 
   const selectedShot=project?(project.shots.find(shot=>shot.id===selectedShotId)||sortedShots[0]):undefined;
-  const preflightFresh=Boolean(project&&preflightReport&&preflightRevision===project.updatedAt);
-  const preflightReady=preflightFresh?preflightReport?.ready:undefined;
+  const preflightState=studioPreflightState(preflightReport,preflightRevision,project?.updatedAt);
+  const preflightFresh=preflightState==='ready'||preflightState==='blocked';
+  const preflightReady=preflightState==='ready'?true:preflightState==='blocked'?false:undefined;
   const preflightBlockers=preflightFresh?preflightReport?.issues.filter(issue=>issue.level==='error').length??0:0;
-  const preflightSummary=!preflightReport?'unchecked':!preflightFresh?'stale':preflightReady?'ready':`${preflightBlockers} blocker${preflightBlockers===1?'':'s'}`;
+  const preflightSummary=preflightState==='blocked'?`${preflightBlockers} blocker${preflightBlockers===1?'':'s'}`:preflightState;
   const hardwareTier=probe?.hardwarePlan.tier,wanGpAvailable=probe?.wangp.available;
   const selectedShotIsValid=Boolean(selectedShotId&&sortedShots.some(shot=>shot.id===selectedShotId));
   useEffect(()=>{if((!selectedShotId||!selectedShotIsValid)&&sortedShots[0])selectShot(sortedShots[0].id);},[selectShot,selectedShotId,selectedShotIsValid,sortedShots]);
@@ -77,7 +78,7 @@ export function Studio(){
     const edges:StudioEdge[]=[];
     nodes.push({id:'story',kind:'story',x:40,y:70,width:230,height:132,title:project.story.title||project.name,subtitle:project.story.logline||'Script / story bible'});
     nodes.push({id:'assets',kind:'assets',x:40,y:280,width:230,height:132,title:'Asset Library',subtitle:`${project.assets.length} continuity / media assets`});
-    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${!preflightReport?'unchecked':!preflightFresh?'stale':preflightReady?'ready':'blocked'} · ${hardwareTier||'hardware unknown'} · WanGP ${wanGpAvailable?'ready':'check'}`});
+    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${preflightState} · ${hardwareTier||'hardware unknown'} · WanGP ${wanGpAvailable?'ready':'check'}`});
 
     let sceneShotCursor=42;
     for(const scene of project.scenes){
@@ -125,7 +126,7 @@ export function Studio(){
     const workflowRows=profiles.length+(unbound.length?1:0);
     const height=Math.max(900,180+Math.max(sceneShotCursor,42+workflowRows*142));
     return{nodes,edges,width:2070,height};
-  },[hardwareTier,preflightFresh,preflightReady,preflightReport,project,queue.jobs,selectedShot,sortedShots,wanGpAvailable]);
+  },[hardwareTier,preflightReady,preflightState,project,queue.jobs,selectedShot,sortedShots,wanGpAvailable]);
 
   const nodes=useMemo(()=>graph.nodes.map(node=>{const saved=positions[node.id],x=saved?.x??node.x,y=saved?.y??node.y;return{...node,x:Math.min(Math.max(0,graph.width-node.width),Math.max(0,x)),y:Math.min(Math.max(0,graph.height-node.height),Math.max(0,y))};}),[graph.height,graph.nodes,graph.width,positions]);
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
