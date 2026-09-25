@@ -40,7 +40,7 @@ function migrateV1ToV2(source: Record<string, any>, notes: string[]): Record<str
       costPolicy: old.costPolicy,
       capcut: {
         enabled: old.capcut?.enabled !== false,
-        pro: old.capcut?.pro !== false
+        pro: old.capcut?.pro === true
       },
       defaultFps: old.defaultFps,
       outputContainer: old.outputContainer,
@@ -93,7 +93,7 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
     },
     capcut: {
       enabled: source.capcut?.enabled !== false,
-      pro: source.capcut?.pro !== false
+      pro: source.capcut?.pro === true
     },
     defaultFps: clampInt(source.defaultFps, 1, 120, 24),
     outputContainer: ['mp4','mov','webm'].includes(source.outputContainer) ? source.outputContainer : 'mp4',
