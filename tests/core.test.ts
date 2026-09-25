@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
+import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
 import { tmpdir } from 'node:os';
 
 const api: ApiWorkflow = {
@@ -296,6 +297,14 @@ describe('Comfy runtime fingerprint inputs',()=>{
     expect(comfyNodeCatalogFingerprint({B:{input:{required:{x:['INT']}}},A:{}})).toBe(comfyNodeCatalogFingerprint({A:{},B:{input:{required:{x:['INT']}}}}));
     expect(comfyNodeCatalogFingerprint({A:{},B:{}})).not.toBe(comfyNodeCatalogFingerprint({A:{},C:{}}));
     expect(comfyNodeCatalogFingerprint({A:{input:{required:{x:['INT']}}}})).not.toBe(comfyNodeCatalogFingerprint({A:{input:{required:{x:['FLOAT']}}}}));
+  });
+});
+describe('Comfy output identity',()=>{
+  it('collects filenames only from history.outputs and never from prompt/input metadata',()=>{
+    const completedWithoutOutputs={status:{completed:true},prompt:{inputs:{filename:'uploaded-input.png',type:'input'}}};
+    expect(collectComfyHistoryOutputRefs(completedWithoutOutputs)).toEqual([]);
+    const withOutput={outputs:{'7':{images:[{filename:'result.png',subfolder:'cineforge',type:'output'}]}},prompt:{filename:'uploaded-input.png'}};
+    expect(collectComfyHistoryOutputRefs(withOutput)).toEqual([{filename:'result.png',subfolder:'cineforge',type:'output'}]);
   });
 });
 describe('Comfy queue identity',()=>{
