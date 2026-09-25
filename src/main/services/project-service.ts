@@ -159,7 +159,7 @@ export class ProjectService {
       const base = MODEL_DEFAULTS[PRIMARY_VIDEO_MODEL];
       const shot: Shot = {
         id, sceneId, index, title: `Shot ${scene.index}.${index}`, prompt: scene.body, camera: '', action: '', dialogue: '', continuityNotes: '',
-        characterAssetIds: [], propAssetIds: [], status: 'draft',
+        characterAssetIds: [], propAssetIds: [], referenceAssetIds: [], status: 'draft',
         generation: {
           modelFamily: PRIMARY_VIDEO_MODEL, mode: base.mode || 'i2v', quality: base.quality || 'balanced',
           width: base.width || 768, height: base.height || 432, frames: base.frames || 121, fps: base.fps || 24,
