@@ -32,7 +32,7 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
   if(profile.validation?.sourceSha256&&await sha256File(workflowPath)!==profile.validation.sourceSha256)throw new Error('Keyframe profile changed after validation. Revalidate it first.');
 
-  const values:WorkflowValues={prompt:keyframePrompt(shot,request.role),negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,frames:1,fps:1,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed+(request.role==='end'?1:0),filenamePrefix:`cineforge/keyframes/${shot.id}/${request.role}`};
+  const values:WorkflowValues={prompt:keyframePrompt(shot,request.role),negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:1,fps:1,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed+(request.role==='end'?1:0),filenamePrefix:`cineforge/keyframes/${shot.id}/${request.role}`};
   if(profile.mode==='i2i'&&request.role==='end'&&shot.startFrameAssetId){
     const start=project.assets.find(a=>a.id===shot.startFrameAssetId);if(start)values.startImage=await assertExistingRelativeProjectPath(project.rootPath,start.projectPath,'assets',`asset path for ${start.name}`);
   }
