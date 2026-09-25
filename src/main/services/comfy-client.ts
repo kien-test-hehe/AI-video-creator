@@ -1,4 +1,7 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { assertLocalUrl } from './local-url';
@@ -90,12 +93,28 @@ export class ComfyClient {
   }
 
   async download(ref: ComfyFileRef): Promise<Uint8Array> {
-    const url = this.url('/view');
-    url.searchParams.set('filename', ref.filename);
-    if (ref.subfolder) url.searchParams.set('subfolder', ref.subfolder);
-    if (ref.type) url.searchParams.set('type', ref.type);
-    const res = await fetch(url, { signal: AbortSignal.timeout(180_000) });
-    if (!res.ok) throw new Error(`ComfyUI output download failed: ${res.status}`);
+    const res=await this.outputResponse(ref);
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async downloadToFile(ref:ComfyFileRef,destination:string):Promise<void>{
+    const res=await this.outputResponse(ref,30*60_000);
+    if(!res.body)throw new Error('ComfyUI output download returned no response body.');
+    try{
+      await pipeline(Readable.fromWeb(res.body as any),createWriteStream(destination,{flags:'w'}));
+    }catch(error){
+      await rm(destination,{force:true}).catch(()=>undefined);
+      throw error;
+    }
+  }
+
+  private async outputResponse(ref:ComfyFileRef,timeoutMs=180_000):Promise<Response>{
+    const url=this.url('/view');
+    url.searchParams.set('filename',ref.filename);
+    if(ref.subfolder)url.searchParams.set('subfolder',ref.subfolder);
+    if(ref.type)url.searchParams.set('type',ref.type);
+    const res=await fetch(url,{signal:AbortSignal.timeout(timeoutMs)});
+    if(!res.ok)throw new Error(`ComfyUI output download failed: ${res.status} ${(await res.text()).slice(0,1000)}`);
+    return res;
   }
 }
