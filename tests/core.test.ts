@@ -226,6 +226,25 @@ describe('rendered take QC policy',()=>{
     expect(latestPassingVideoTake([failingNew])).toBeUndefined();
   });
 });
+describe('machine settings bootstrap import',()=>{
+  it('imports explicit bootstrap machine settings on first load and then persists them',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-bootstrap-settings-'));
+    const bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,JSON.stringify({schemaVersion:1,wangp:{rootPath:'C:/CineForge/Wan2GP',pythonPath:'C:/CineForge/Wan2GP/venv/python.exe'},ffmpeg:{path:'C:/ffmpeg.exe',ffprobePath:'C:/ffprobe.exe'}}),'utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      const service=new AppSettingsService(join(root,'userdata'));await service.load();
+      expect(service.get().wangp.rootPath).toBe('C:/CineForge/Wan2GP');
+      expect(service.get().ffmpeg.path).toBe('C:/ffmpeg.exe');
+      delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+      const reloaded=new AppSettingsService(join(root,'userdata'));await reloaded.load();
+      expect(reloaded.get().wangp.rootPath).toBe('C:/CineForge/Wan2GP');
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+});
 describe('machine settings persistence recovery',()=>{
   it('recovers the previous valid machine settings from backup after primary corruption',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-settings-'));
