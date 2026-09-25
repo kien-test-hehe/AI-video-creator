@@ -86,6 +86,12 @@ export function Studio(){
       const id=`workflow:${profile.id}`,y=42+index*142;
       nodes.push({id,kind:'workflow',x:1080,y,width:285,height:124,title:profile.name,subtitle:`${profile.runtime||'comfyui'} · ${profile.modelFamily} · ${profile.mode}`,profileId:profile.id});
     });
+    const unbound=sortedShots.filter(shot=>!resolveWorkflow(profiles,shot));
+    if(unbound.length){
+      const id='workflow:missing',y=42+profiles.length*142;
+      nodes.push({id,kind:'workflow',x:1080,y,width:285,height:124,title:'Unbound shots',subtitle:`${unbound.length} shot(s) have no enabled matching workflow profile`});
+      unbound.forEach(shot=>edges.push({id:`missing-${shot.id}`,source:`shot:${shot.id}`,target:id,kind:'warning'}));
+    }
     const queueY=Math.max(100,Math.min(520,120+profiles.length*50));
     nodes.push({id:'queue',kind:'queue',x:1490,y:queueY,width:250,height:132,title:'Render Queue',subtitle:`${queue.jobs.filter(job=>ACTIVE_JOB_STATUSES.has(job.status)).length} active · ${queue.jobs.length} total jobs`});
     nodes.push({id:'timeline',kind:'timeline',x:1490,y:queueY+230,width:250,height:132,title:'Timeline',subtitle:`${project.timeline.length} clips in canonical cut`});
@@ -232,6 +238,7 @@ export function Studio(){
 function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onSelectShot,onOpen,onDropAsset}:{node:StudioNode;project:FilmProject;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onSelectShot:(id?:string)=>void;onOpen:(view:ViewId)=>void;onDropAsset:(event:DragEvent<HTMLElement>,shotId:string)=>void}){
   const shot=node.shotId?project.shots.find(item=>item.id===node.shotId):undefined;
   const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
+  const route=shot?resolveWorkflow(project.settings.workflowProfiles,shot):undefined;
   const className=['studio-node',`node-${node.kind}`,selected?'selected':'',active?'on-path':'',locked?'locked':''].filter(Boolean).join(' ');
   const openView:Partial<Record<StudioNodeKind,ViewId>>={story:'story',assets:'assets',scene:'storyboard',shot:'shots',workflow:'settings',queue:'queue',timeline:'timeline',capcut:'finishing'};
   return <article className={className} style={{left:node.x,top:node.y,width:node.width,minHeight:node.height}} onDragOver={shot?event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';}:undefined} onDrop={shot?event=>onDropAsset(event,shot.id):undefined}>
@@ -240,7 +247,7 @@ function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerM
     </header>
     <button className="studio-node-body" onClick={()=>{if(shot)onSelectShot(shot.id);else if(openView[node.kind])onOpen(openView[node.kind]!);}}>
       <strong>{node.title}</strong><small>{node.subtitle}</small>
-      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill><span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
+      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{!route?<Pill>no route</Pill>:route.validation?.structuralStatus!=='valid'?<Pill>route {route.validation?.structuralStatus||'unvalidated'}</Pill>:null}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
       {shot&&<div className="studio-ref-meter"><span>C{shot.characterAssetIds.length}</span><span>{shot.locationAssetId?'LOC':'NO LOC'}</span><span>R{shot.propAssetIds.length}</span><span>{shot.startFrameAssetId?'START':'—'}</span><span>{shot.endFrameAssetId?'END':'—'}</span></div>}
       {profile&&<div className="studio-node-meta"><Pill>{profile.enabled?'enabled':'off'}</Pill><span>{profile.validation?.structuralStatus||'unvalidated'}</span></div>}
       {node.kind==='queue'&&<div className="studio-node-meta"><span>{project.renderJobs.filter(job=>job.status==='done').length} completed</span><span>{project.renderOutputs.length} outputs</span></div>}
