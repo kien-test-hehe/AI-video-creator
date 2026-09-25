@@ -425,7 +425,7 @@ export class RenderQueueService extends EventEmitter {
     await this.projects.mutate(p=>{
       for(const output of outputs)if(!p.renderOutputs.some(existing=>existing.id===output.id))p.renderOutputs.push(output);
       const target=p.renderJobs.find(j=>j.id===job.id);const shot=p.shots.find(s=>s.id===job.shotId);
-      const currentSpec=Boolean(shot&&job.spec&&shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot));
+      const currentSpec=Boolean(shot&&job.spec&&shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildPrompt(p,shot)===job.spec.effectivePrompt);
       if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message=currentSpec?'Rendered but failed technical QC':'Historical snapshot rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message=currentSpec?'Done':'Done · shot changed after queue; take kept as historical output';target.error=undefined;}}
       if(shot){if(!currentSpec){shot.latestRenderId=undefined;if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(profile&&!qcFailed){profile.validation={...(profile.validation??{structuralStatus:'valid'}),structuralStatus:'valid',sourceSha256:job.spec?.workflowSha256,lastSuccessfulRenderAt:now};}
