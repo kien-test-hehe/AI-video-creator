@@ -25,7 +25,7 @@ start.cmd
 
 NVIDIA display/compute drivers are intentionally **not** silently upgraded by the script; if `nvidia-smi` is missing, setup stops with a clear prerequisite error. CapCut is detected but is not forcibly installed or upgraded.
 
-The first project defaults to **CapCut Free / No Pro** and **CapCut AI credits disabled**. If the machine-local WanGP runtime is ready, CineForge automatically reads its model catalog and provisions recommended local profiles. Model weights remain on-demand because shipping tens of gigabytes inside Git would be impractical.
+The first project defaults to **CapCut Free / No Pro** and **CapCut AI credits disabled**. CineForge detects whether a CapCut executable is present, but it does **not** claim to verify the signed-in CapCut account's subscription tier; Pro/No Pro is an explicit project policy setting. If the machine-local WanGP runtime is ready, CineForge automatically reads its model catalog and provisions recommended local profiles. Model weights remain on-demand because shipping tens of gigabytes inside Git would be impractical.
 
 ## Architecture
 
