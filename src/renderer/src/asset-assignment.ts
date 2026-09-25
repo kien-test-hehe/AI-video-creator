@@ -11,10 +11,16 @@ export function autoAssignAssetToShot(shot:Shot,asset:Asset):AutoAssetAssignment
   if(asset.kind==='location'){
     shot.locationAssetId=asset.id;markReady(shot);return{ok:true,role:'location',message:'Assigned as the shot location.'};
   }
-  if(['prop','wardrobe','reference'].includes(asset.kind)){
-    if(shot.propAssetIds.includes(asset.id))return{ok:true,role:'continuity reference',message:'Reference is already assigned.'};
-    if(shot.propAssetIds.length>=2)return{ok:false,role:'continuity reference',message:'This shot already has the maximum of 2 prop / wardrobe / generic reference assets. Use a dedicated Start/End slot if this image is a keyframe.'};
-    shot.propAssetIds.push(asset.id);markReady(shot);return{ok:true,role:'continuity reference',message:'Assigned as a prop / wardrobe / generic continuity reference.'};
+  if(asset.kind==='reference'){
+    const refs=shot.referenceAssetIds??(shot.referenceAssetIds=[]);
+    if(refs.includes(asset.id))return{ok:true,role:'visual reference',message:'Visual reference is already assigned.'};
+    if(refs.length>=4)return{ok:false,role:'visual reference',message:'This shot already has the maximum of 4 generic visual references. Use Start/End for temporal keyframes or remove an existing reference.'};
+    refs.push(asset.id);markReady(shot);return{ok:true,role:'visual reference',message:'Assigned as a generic visual reference.'};
+  }
+  if(['prop','wardrobe'].includes(asset.kind)){
+    if(shot.propAssetIds.includes(asset.id))return{ok:true,role:'prop / wardrobe',message:'Prop / wardrobe reference is already assigned.'};
+    if(shot.propAssetIds.length>=2)return{ok:false,role:'prop / wardrobe',message:'This shot already has the maximum of 2 prop / wardrobe references.'};
+    shot.propAssetIds.push(asset.id);markReady(shot);return{ok:true,role:'prop / wardrobe',message:'Assigned as a prop / wardrobe continuity reference.'};
   }
   if(asset.kind==='image'||asset.kind==='keyframe'){
     if(!shot.startFrameAssetId){shot.startFrameAssetId=asset.id;markReady(shot);return{ok:true,role:'start frame',message:'Assigned as the start frame.'};}
