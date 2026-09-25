@@ -430,6 +430,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
       else if(role==='audio')target.audioAssetId=asset.id;
       if(target.status==='draft')target.status='ready';
     });
+    setNotice(`${asset.name} assigned to ${role} for ${shot.title}.`);
   };
   return <div className="studio-inspector-scroll">
     <div className="studio-inspector-head"><div><span className="eyebrow">SHOT INSPECTOR</span><strong>{shot.title}</strong></div><button className="ghost" onClick={()=>setView('shots')}>Full workshop ↗</button></div>
