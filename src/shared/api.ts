@@ -42,6 +42,6 @@ export interface CineforgeApi {
     planScene(sceneId: string): Promise<DirectorShotDraft[]>;
     reviewShot(shotId: string): Promise<ContinuityReview>;
   };
-  keyframe: { generate(request: KeyframeRequest): Promise<FilmProject>; };
+  keyframe: { generate(request: KeyframeRequest): Promise<FilmProject>; cancel(): Promise<boolean>; };
   capcut: { prepareHandoff(): Promise<CapCutHandoffResult>; };
 }
