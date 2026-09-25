@@ -3,6 +3,7 @@ import { copyFile, writeFile } from 'node:fs/promises';
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../shared/ipc';
 import type { AppMachineSettings, AssetKind, FilmProject, KeyframeRequest, RenderBatchRequest, RenderRequest } from '../shared/types';
+import { removedActiveRenderShotIds } from '../shared/project-guards';
 import { AppSettingsService } from './services/app-settings-service';
 import { ProjectService } from './services/project-service';
 import { parseScreenplay } from './services/script-parser';
@@ -66,7 +67,11 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     }
     return projects.getCurrent();
   });
-  handle(IPC.projectSave, (project: FilmProject) => projects.saveFromRenderer(project));
+  handle(IPC.projectSave, (project: FilmProject) => {
+    const removedActive=removedActiveRenderShotIds(project,queue.snapshot().jobs);
+    if(removedActive.length)throw new Error(`Cannot remove ${removedActive.length} shot(s) while their render jobs are active. Finish or cancel those renders before changing scene/shot structure.`);
+    return projects.saveFromRenderer(project);
+  });
   handle(IPC.projectGet, () => projects.getCurrent());
   handle(IPC.projectParseScript, (script: string) => parseScreenplay(script));
   handle(IPC.projectPreflight, async () => {
