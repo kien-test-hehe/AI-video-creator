@@ -141,13 +141,14 @@ async function stageWanGpKeyframeInputs(project:FilmProject,values:WorkflowValue
   if(values.referenceImages)values.referenceImages=await Promise.all(values.referenceImages.map(stage));
 }
 
-async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',signal?:AbortSignal):Promise<string>{
-  let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
+async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assetFingerprints:Map<string,KeyframeAssetFingerprint>,assertCurrent:(checkRuntime?:boolean)=>Promise<void>,signal?:AbortSignal):Promise<string>{
   const runId=`keyframe-${randomUUID()}`,cache=join(project.rootPath,'cache','keyframes',runId);await mkdir(cache,{recursive:true});
   try{
+    await stageWanGpKeyframeInputs(project,values,join(cache,'inputs'),assetFingerprints);
+    let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     const settingsPath=join(cache,'settings.json'),outputDir=join(cache,'output');await mkdir(outputDir,{recursive:true});await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
     const run=async(dryRun:boolean)=>{
-      throwIfAborted(signal);
+      throwIfAborted(signal);await assertCurrent(true);
       const child=startWanGp(project,machine,{settingsPath,outputDir,dryRun,runId});
       const onAbort=()=>{if(machine.wangp.executionMode==='docker')void stopWanGpDocker(machine,runId);else if(child.pid)void killProcessTree(child.pid);};
       signal?.addEventListener('abort',onAbort,{once:true});
@@ -162,7 +163,7 @@ async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,
   }finally{await rm(cache,{recursive:true,force:true}).catch(()=>undefined);}
 }
 
-async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',signal?:AbortSignal):Promise<string>{
+async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assertCurrent:(checkRuntime?:boolean)=>Promise<void>,signal?:AbortSignal):Promise<string>{
   if(!machine.comfy.dedicatedInstance)throw new Error('ComfyUI keyframe generation requires a dedicated CineForge instance so cancellation cannot interrupt unrelated work.');
   throwIfAborted(signal);
   const client=new ComfyClient(machine.comfy.url,true);const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable: ${ping.error||machine.comfy.url}`);
@@ -178,7 +179,7 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     staged.slice(0,4).forEach((path,index)=>Object.assign(values,{[`referenceImage${index+1}`]:path}));
   }
   throwIfAborted(signal);
-  const workflow=await compileProfile(profile,values);const queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role}});
+  const workflow=await compileProfile(profile,values);await assertCurrent(true);const queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role}});
   let cancelPromise:Promise<void>|undefined;
   const requestCancel=()=>cancelPromise??=client.cancelPrompt(queued.prompt_id);
   const onAbort=()=>{void requestCancel().catch(()=>undefined);};signal?.addEventListener('abort',onAbort,{once:true});
