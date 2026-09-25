@@ -22,6 +22,16 @@ def create_session(root: Path, profile: int, attention: str):
     return init(root=root, cli_args=cli_args)
 
 
+def as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [str(key) for key in value.keys()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
 def compact(entry):
     metadata = entry.get("metadata") or {}
     return {
@@ -29,9 +39,9 @@ def compact(entry):
         "name": entry.get("name") or metadata.get("name") or entry.get("model_type"),
         "family": metadata.get("family"),
         "familyLabel": metadata.get("family_label"),
-        "mainOutput": metadata.get("main_output") or [],
-        "outputs": metadata.get("outputs") or [],
-        "inputs": metadata.get("inputs") or [],
+        "mainOutput": as_list(metadata.get("main_output")),
+        "outputs": as_list(metadata.get("outputs")),
+        "inputs": as_list(metadata.get("inputs")),
         "description": entry.get("description") or metadata.get("description") or "",
     }
 
