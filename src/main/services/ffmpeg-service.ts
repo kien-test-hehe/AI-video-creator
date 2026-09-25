@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared/types';
 import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
 import { killProcessTree } from './process-utils';
+import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 
 interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean;durationSec?:number}
 
@@ -13,11 +14,12 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
   const clips=[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order);
   if(clips.length===0)throw new Error('Timeline is empty. Add rendered shots first.');
   if(new Set(clips.map(c=>c.track)).size>1)throw new Error('Multi-track compositing is not enabled in the local master exporter. Use the CapCut handoff for multi-track finishing.');
+  const duplicateOrder=duplicateTimelineOrderKey(clips);if(duplicateOrder)throw new Error(`Duplicate timeline order detected at ${duplicateOrder}.`);
 
   const sources=[];
   for(const clip of clips){
     const output=project.renderOutputs.find(o=>o.id===clip.renderOutputId);
-    if(!output||output.mediaType!=='video')throw new Error(`Timeline clip ${clip.id} does not reference a video output.`);
+    const issue=timelineOutputIssue(clip,output);if(issue)throw new Error(issue);
     const path=await assertExistingPathInside(join(project.rootPath,'renders'),output.path,`timeline source ${output.filename}`);
     sources.push({clip,path});
   }
