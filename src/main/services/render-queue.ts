@@ -91,7 +91,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   async cancel(jobId:string):Promise<QueueSnapshot>{
-    const project=this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
+    this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
     const wasRunning=this.runningJobId===jobId;
     const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(wasRunning&&runtime==='comfyui'&&!this.settings.get().comfy.dedicatedInstance)throw new Error('Safe cancellation is disabled for a shared ComfyUI instance. Configure a dedicated CineForge ComfyUI instance first.');
