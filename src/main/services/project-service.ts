@@ -6,6 +6,7 @@ import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '
 import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject } from './project-schema';
+import { shotRenderInputKey } from '../../shared/shot-signature';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -106,10 +107,16 @@ export class ProjectService {
         const edited = editedAssets.get(original.id);
         return edited ? { ...structuredClone(original), name: edited.name, tags: [...edited.tags], notes: edited.notes } : structuredClone(original);
       });
-      const runtime = new Map(this.current.shots.map(shot => [shot.id, { status: shot.status, latestRenderId: shot.latestRenderId }]));
+      const currentShots = new Map(this.current.shots.map(shot => [shot.id, shot]));
       for (const shot of incoming.shots) {
-        const state = runtime.get(shot.id);
-        if (state) { shot.status = state.status; shot.latestRenderId = state.latestRenderId; }
+        const currentShot=currentShots.get(shot.id);if(!currentShot)continue;
+        if(shotRenderInputKey(shot)!==shotRenderInputKey(currentShot)){
+          shot.latestRenderId=undefined;
+          shot.status=currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
+        }else{
+          shot.status=currentShot.status;
+          shot.latestRenderId=currentShot.latestRenderId;
+        }
       }
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
       incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>{
