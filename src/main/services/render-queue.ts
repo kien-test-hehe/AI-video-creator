@@ -21,7 +21,7 @@ import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { JobJournal } from './job-journal';
 import { technicalQcVideo } from './technical-qc';
-import { isProcessAlive, killProcessTree } from './process-utils';
+import { isExpectedProcess, isProcessAlive, killProcessTree } from './process-utils';
 import { probeSystem } from './system-probe';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
@@ -98,7 +98,12 @@ export class RenderQueueService extends EventEmitter {
     this.cancelled.add(jobId);this.pending=this.pending.filter(id=>id!==jobId);
     if(wasRunning){
       if(runtime==='wangp'){
-        const child=this.wanGpProcesses.get(jobId);if(child?.pid)await killProcessTree(child.pid);else if(job.backendPid)await killProcessTree(job.backendPid);
+        const child=this.wanGpProcesses.get(jobId);
+        if(child?.pid)await killProcessTree(child.pid);
+        else if(job.backendPid){
+          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');
+          await killProcessTree(job.backendPid);
+        }
       }else{
         const machine=this.settings.get();
         await new ComfyClient(machine.comfy.url,true).interrupt().catch(()=>undefined);
@@ -154,6 +159,7 @@ export class RenderQueueService extends EventEmitter {
   private async recoverWanGp(project:FilmProject,job:RenderJob):Promise<void>{
     const outputDir=join(project.rootPath,'renders',job.shotId,job.id);
     if(job.backendPid&&isProcessAlive(job.backendPid)){
+      if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Recovered PID exists but no longer matches this WanGP job command line.');
       const started=Date.now();
       let stalled=false;
       while(isProcessAlive(job.backendPid)){
