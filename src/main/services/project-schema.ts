@@ -4,7 +4,7 @@ import type {
   RenderJobStatus, RenderOutput, Scene, Shot, ShotStatus, TimelineClip, WorkflowBinding, WorkflowProfile, WorkflowPurpose
 } from '../../shared/types';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
-import { timelineOutputIssue } from '../../shared/timeline-policy';
+import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 const MODEL_FAMILIES = new Set<ModelFamily>(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom']);
@@ -73,6 +73,8 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   assertUniqueIds('render output',renderOutputs);
   assertUniqueIds('render job',renderJobs);
   assertUniqueIds('timeline clip',timeline);
+  const duplicateTimelineOrder=duplicateTimelineOrderKey(timeline);
+  if(duplicateTimelineOrder)throw new Error(`Duplicate timeline track/order slot: ${duplicateTimelineOrder}`);
 
   for (const scene of scenes) scene.shotIds = scene.shotIds.filter(shotId => shotIds.has(shotId));
   for(const shot of shots){
