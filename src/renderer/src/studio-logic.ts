@@ -6,6 +6,7 @@ export interface WorkflowRouteResult { ok:boolean;message:string; }
 export function routeShotToWorkflow(shot:Shot,profile:WorkflowProfile):WorkflowRouteResult{
   if(!profile.enabled)return{ok:false,message:`${profile.name} is disabled.`};
   if(!profile.workflowPath)return{ok:false,message:`${profile.name} has no workflow/settings file.`};
+  if(profile.validation?.structuralStatus!=='valid')return{ok:false,message:`${profile.name} is ${profile.validation?.structuralStatus||'unvalidated'}. Validate it before routing production shots.`};
   if((profile.purpose??'video')!=='video')return{ok:false,message:`${profile.name} is not a video workflow.`};
   const defaults=MODEL_DEFAULTS[profile.modelFamily];
   shot.generation={
