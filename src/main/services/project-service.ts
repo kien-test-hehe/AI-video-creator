@@ -6,7 +6,7 @@ import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '
 import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject } from './project-schema';
-import { shotRenderInputKey } from '../../shared/shot-signature';
+import { shotProjectRenderInputKey } from '../../shared/shot-signature';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -110,7 +110,7 @@ export class ProjectService {
       const currentShots = new Map(this.current.shots.map(shot => [shot.id, shot]));
       for (const shot of incoming.shots) {
         const currentShot=currentShots.get(shot.id);if(!currentShot)continue;
-        if(shotRenderInputKey(shot)!==shotRenderInputKey(currentShot)){
+        if(shotProjectRenderInputKey(incoming,shot)!==shotProjectRenderInputKey(this.current,currentShot)){
           shot.latestRenderId=undefined;
           shot.status=currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
         }else{
