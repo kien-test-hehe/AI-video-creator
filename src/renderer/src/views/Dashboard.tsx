@@ -33,7 +33,8 @@ export function Dashboard(){
       setQueue(snapshot);setNotice('Queued all unrendered shots with immutable render snapshots.');setView('queue');
     }catch(e){setError(e instanceof Error?e.message:String(e));}
   };
-  useEffect(()=>{if(project)void runProbe();},[project?.id]);
+  const projectId=project?.id;
+  useEffect(()=>{if(!projectId)return;void window.cineforge.system.probe().then(setProbe).catch(e=>setError(e instanceof Error?e.message:String(e)));},[projectId,setError,setProbe]);
 
   return <Page title="Production overview" subtitle="Codex reads the machine profile, local AI renders within the detected hardware budget, and CapCut finishes." actions={<div className="row"><button className="ghost" onClick={runProbe}>Probe system</button><button className="ghost" disabled={!project||checking||project.shots.length===0} onClick={preflight}>{checking?'Checking…':'Run preflight'}</button><button className="primary" disabled={!project||checking||project.shots.length===0} onClick={queueUnrendered}>Render unrendered</button></div>}>
     {!project?<Empty>Create or open a project to start.</Empty>:<>
