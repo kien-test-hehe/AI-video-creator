@@ -8,7 +8,7 @@ import { autoAssignAssetToShot } from '../asset-assignment';
 import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue } from '../studio-logic';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
-import { takeUseConfirmationMessage } from '../take-policy';
+import { takeUseConfirmationMessage } from '../../../shared/take-policy';
 
 type Point={x:number;y:number};
 type StudioNodeKind='story'|'assets'|'system'|'scene'|'shot'|'workflow'|'queue'|'timeline'|'capcut';
