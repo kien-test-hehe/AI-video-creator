@@ -44,6 +44,13 @@ export function shotKeyframeInputKey(shot:Shot,role:'start'|'end'):string{
 }
 
 
+export function keyframeProjectInputKey(project:FilmProject,shot:Shot,role:'start'|'end',profile:WorkflowProfile|undefined):string{
+  return JSON.stringify({
+    shot:shotKeyframeInputKey(shot,role),
+    workflow:workflowExecutionKey(profile)
+  });
+}
+
 export function workflowExecutionKey(profile:WorkflowProfile|undefined):string{
   if(!profile)return'none';
   return JSON.stringify({
