@@ -46,7 +46,11 @@ export function filterDirectorAssetIds(project:FilmProject,kind:'character'|'loc
   return [...new Set(ids)].filter(id=>{const asset=project.assets.find(item=>item.id===id);return Boolean(asset&&allowed.has(asset.kind));});
 }
 
+export function validatedVideoRouteForModel(project:FilmProject,model:ModelFamily|undefined){
+  if(!model)return undefined;
+  return project.settings.workflowProfiles.find(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&profile.modelFamily===model);
+}
+
 export function isValidatedVideoModel(project:FilmProject,model:ModelFamily|undefined):model is ModelFamily{
-  if(!model)return false;
-  return project.settings.workflowProfiles.some(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&profile.modelFamily===model);
+  return Boolean(validatedVideoRouteForModel(project,model));
 }
