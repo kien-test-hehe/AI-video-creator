@@ -54,7 +54,13 @@ export async function compileWanGpProfile(profile:WorkflowProfile,values:Workflo
     if(!hasPath(output,binding.jsonPath))throw new Error(`WanGP binding path no longer exists: ${binding.key} → ${binding.jsonPath}`);
     setPath(output,binding.jsonPath,transformValue(value,binding.transform));
   }
-  if(profile.modelFamily==='ltx-2.5-fast'&&values.referenceImages?.length&&Object.prototype.hasOwnProperty.call(output,'video_prompt_type')){
+  if(Object.prototype.hasOwnProperty.call(output,'image_prompt_type')){
+    let current=String((output as any).image_prompt_type||'');
+    if(values.startImage&&!current.includes('S'))current+= 'S';
+    if(values.endImage&&!current.includes('E'))current+= 'E';
+    (output as any).image_prompt_type=current;
+  }
+  if(values.referenceImages?.length&&Object.prototype.hasOwnProperty.call(output,'video_prompt_type')){
     const current=String((output as any).video_prompt_type||'');
     if(!current.includes('I'))(output as any).video_prompt_type=`${current}I`;
   }
