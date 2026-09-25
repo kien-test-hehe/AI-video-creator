@@ -23,14 +23,14 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
       const profile=routeWorkflow(project,shot);routed.set(profile.id,profile);
       const keys=new Set(profile.bindings.map(binding=>binding.key));
       if(shot.startFrameAssetId&&!keys.has('startImage'))issues.push({level:'error',code:'START_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a start frame is attached but “${profile.name}” has no startImage binding, so the frame would be ignored.`});
-      if(shot.endFrameAssetId&&!keys.has('endImage'))issues.push({level:'warning',code:'END_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: an end frame is attached but “${profile.name}” has no endImage binding.`});
+      if(shot.endFrameAssetId&&!keys.has('endImage'))issues.push({level:'error',code:'END_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: an end frame is attached but “${profile.name}” has no endImage binding.`});
       const hasVisualRefs=Boolean(shot.characterAssetIds.length||shot.locationAssetId||shot.propAssetIds.length||(shot.referenceAssetIds?.length??0));
       const referencePlan=planShotReferences(shot,profile);
       const hasAnyDedicated=referencePlan.characterIds.some(Boolean)||Boolean(referencePlan.locationId)||referencePlan.propIds.some(Boolean);
       if(hasVisualRefs&&referencePlan.genericCapacity===0&&!hasAnyDedicated)issues.push({level:'warning',code:'CONTINUITY_REFS_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: visual continuity assets are attached but the selected workflow has no image-reference binding; only their text descriptions will influence generation.`});
       else if(referencePlan.unservedIds.length)issues.push({level:'warning',code:'CONTINUITY_REF_CAPACITY',shotId:shot.id,profileId:profile.id,message:`${shot.title}: ${referencePlan.genericDemand} continuity image(s) require generic reference slots after dedicated bindings, but “${profile.name}” exposes capacity for ${referencePlan.genericCapacity}. ${referencePlan.unservedIds.length} image(s) will only influence text conditioning.`});
-      if(shot.audioAssetId&&!keys.has('inputAudio'))issues.push({level:'warning',code:'AUDIO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: input audio is attached but “${profile.name}” has no inputAudio binding.`});
-      if(shot.referenceVideoAssetId&&!keys.has('inputVideo'))issues.push({level:'warning',code:'VIDEO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a motion/reference video is attached but “${profile.name}” has no inputVideo binding.`});
+      if(shot.audioAssetId&&!keys.has('inputAudio'))issues.push({level:'error',code:'AUDIO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: input audio is attached but “${profile.name}” has no inputAudio binding.`});
+      if(shot.referenceVideoAssetId&&!keys.has('inputVideo'))issues.push({level:'error',code:'VIDEO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a motion/reference video is attached but “${profile.name}” has no inputVideo binding.`});
     }
     catch(error){issues.push({level:'error',code:'SHOT_NO_WORKFLOW',shotId:shot.id,message:`${shot.title}: ${error instanceof Error?error.message:String(error)}`});}
     if(shot.generation.mode!=='t2v'&&!shot.startFrameAssetId&&shot.generation.mode!=='ia2v')issues.push({level:'info',code:'SHOT_NO_START_FRAME',shotId:shot.id,message:`${shot.title}: no start frame is attached; consistency may be lower for ${shot.generation.mode}.`});
@@ -50,7 +50,7 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
   if(needsWanGp&&machine.wangp.executionMode==='docker'){
     if(!probe.docker?.available)issues.push({level:'error',code:'DOCKER_UNAVAILABLE',message:`WanGP Docker mode is selected but Docker is unavailable: ${probe.docker?.error||'unknown error'}`});
     if(!machine.wangp.docker.image.trim())issues.push({level:'error',code:'WANGP_DOCKER_IMAGE',message:'WanGP Docker mode requires a configured image tag/digest.'});
-    if(probe.docker?.gpuAccessible===false)issues.push({level:'warning',code:'DOCKER_GPU_RUNTIME',message:'Docker did not report an NVIDIA runtime. Verify NVIDIA Container Toolkit / --gpus support before rendering.'});
+    if(probe.docker?.gpuAccessible===false)issues.push({level:'error',code:'DOCKER_GPU_RUNTIME',message:'Docker did not report an NVIDIA runtime. Verify NVIDIA Container Toolkit / --gpus support before rendering.'});
   }
 
   if(!probe.ffmpeg.available)issues.push({level:'error',code:'FFMPEG_MISSING',message:'FFmpeg is unavailable. Technical QC and timeline export require FFmpeg.'});
