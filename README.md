@@ -15,7 +15,7 @@ setup.cmd
 start.cmd
 ```
 
-`setup.cmd` is idempotent and prepares a machine-local runtime under `.runtime/`. `start.cmd` launches the **built** Electron app (not Vite development mode):
+`setup.cmd` is idempotent and prepares a machine-local runtime under `.runtime/`. It also writes `%LOCALAPPDATA%\\CineForge\\bootstrap-machine-settings.v1.json`; a packaged/NSIS CineForge app imports those machine paths on first run when it has no saved machine settings yet. `start.cmd` launches the **built** Electron app (not Vite development mode):
 
 - portable Node.js 22.16;
 - FFmpeg + FFprobe when missing;
@@ -208,6 +208,8 @@ npm run dist:mac
 ```
 
 Production packages use ASAR plus Electron fuses that disable Run-As-Node, Node CLI inspection/options and file-protocol privilege expansion while enabling ASAR integrity validation.
+
+The NSIS installer contains the desktop application, not multi-gigabyte model/runtime payloads. On a workstation bootstrapped with `setup.cmd`, the installed app imports the machine-local WanGP/Python/FFmpeg paths on first run. Without that bootstrap, the same paths can be configured explicitly in **Machine Settings**.
 
 Code signing credentials are intentionally not stored in this repository.
 
