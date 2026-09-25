@@ -208,6 +208,8 @@ export class ProjectService {
         id: randomUUID(), index: index + 1, heading: p.heading, body: p.body, location: p.location, timeOfDay: p.timeOfDay, shotIds: []
       }));
       project.shots = [];
+      project.renderJobs = [];
+      project.renderOutputs = [];
       project.timeline = [];
     });
   }

@@ -154,6 +154,15 @@ export async function inspectWorkflow(path: string): Promise<{ format: 'api' | '
   return { format, suggestedBindings: suggestBindings(workflow as ApiWorkflow) };
 }
 
+export async function validateComfyNodeAvailability(profile:WorkflowProfile,objectInfo:unknown):Promise<string[]>{
+  const workflow=await readWorkflow(profile.workflowPath);
+  if(detectWorkflowFormat(workflow)!=='api')return[];
+  if(!objectInfo||typeof objectInfo!=='object'||Array.isArray(objectInfo))return['ComfyUI object_info returned an invalid node catalog.'];
+  const available=new Set(Object.keys(objectInfo as Record<string,unknown>));
+  const missing=[...new Set(Object.values(workflow as ApiWorkflow).map(node=>node.class_type).filter(classType=>!available.has(classType)))].sort();
+  return missing.map(classType=>`ComfyUI node class is unavailable in the connected runtime: ${classType}`);
+}
+
 export async function validateProfileBindings(profile: WorkflowProfile): Promise<string[]> {
   const workflow = await readWorkflow(profile.workflowPath);
   if (detectWorkflowFormat(workflow) !== 'api') return ['Workflow is not in API format.'];

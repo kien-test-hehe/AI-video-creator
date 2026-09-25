@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseScreenplay } from '../src/main/services/script-parser';
-import { applyBindings, detectWorkflowFormat, suggestBindings, uiWorkflowToApi, validateProfileBindings, type ApiWorkflow } from '../src/main/services/workflow-engine';
+import { applyBindings, detectWorkflowFormat, suggestBindings, uiWorkflowToApi, validateComfyNodeAvailability, validateProfileBindings, type ApiWorkflow } from '../src/main/services/workflow-engine';
 import { assertLocalUrl } from '../src/main/services/local-url';
 import { assertPathInside, assertRelativeProjectPath } from '../src/main/services/path-safety';
 import { chooseModelForShot } from '../src/shared/routing';
@@ -11,9 +11,10 @@ import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveSt
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { historyWasInterrupted } from '../src/main/services/comfy-client';
-import { shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
+import { keyframeProjectInputKey, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
+import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -32,6 +33,15 @@ describe('workflow engine',()=>{
    const suggestions=suggestBindings(workflow);
    expect(suggestions.some(binding=>binding.key==='prompt'&&binding.selector?.nodeId==='1')).toBe(false);
    expect(suggestions.some(binding=>binding.key==='negativePrompt'&&binding.selector?.nodeId==='1')).toBe(true);
+ });
+ it('rejects Comfy profiles whose workflow node classes are unavailable in the connected runtime',async()=>{
+   const root=await mkdtemp(join(tmpdir(),'cineforge-comfy-nodes-')),path=join(root,'workflow.json');
+   await writeFile(path,JSON.stringify({'1':{class_type:'InstalledNode',inputs:{}},'2':{class_type:'MissingCustomNode',inputs:{}}}),'utf8');
+   try{
+     const profile={id:'p',runtime:'comfyui' as const,purpose:'video' as const,name:'nodes',modelFamily:'custom' as const,mode:'t2v' as const,workflowPath:path,workflowFormat:'api' as const,bindings:[],enabled:false};
+     expect(await validateComfyNodeAvailability(profile,{InstalledNode:{}})).toEqual(['ComfyUI node class is unavailable in the connected runtime: MissingCustomNode']);
+     expect(await validateComfyNodeAvailability(profile,{InstalledNode:{},MissingCustomNode:{}})).toEqual([]);
+   }finally{await rm(root,{recursive:true,force:true});}
  });
  it('rejects a video Comfy profile that cannot receive prompt or seed',async()=>{
    const root=await mkdtemp(join(tmpdir(),'cineforge-comfy-')),path=join(root,'workflow.json');
@@ -115,6 +125,14 @@ describe('stale creative result guards',()=>{
     expect(shotProjectRenderInputKey(project,base)).not.toBe(before);
     expect(workflowExecutionKey(project.settings.workflowProfiles[0])).not.toBe(beforeWorkflow);
   });
+  it('changes keyframe project signatures when the workflow execution config changes',()=>{
+    const base=shot();
+    const profile={id:'img',runtime:'wangp' as const,purpose:'image' as const,name:'Image',modelFamily:'custom' as const,mode:'i2i' as const,workflowPath:'workflows/image.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'valid' as const}};
+    const project={settings:{workflowProfiles:[profile]}} as unknown as FilmProject;
+    const before=keyframeProjectInputKey(project,base,'start',profile);
+    profile.bindings=[{key:'prompt',jsonPath:'generation.prompt'}];
+    expect(keyframeProjectInputKey(project,base,'start',profile)).not.toBe(before);
+  });
   it('changes end-keyframe signatures when the chained start frame changes',()=>{
     const a=shot(),b=structuredClone(a);a.startFrameAssetId='kf-a';b.startFrameAssetId='kf-b';
     expect(shotKeyframeInputKey(a,'start')).toBe(shotKeyframeInputKey(b,'start'));
@@ -128,6 +146,19 @@ describe('stale creative result guards',()=>{
     const before=sceneDirectorInputKey(project,project.scenes[0]);project.assets[0].notes='blue coat';expect(sceneDirectorInputKey(project,project.scenes[0])).not.toBe(before);
     expect(filterDirectorAssetIds(project,'character',['char','loc','missing'])).toEqual(['char']);
     const review=continuityReviewInputKey(project,project.shots[0]);project.shots[0].prompt='new';expect(continuityReviewInputKey(project,project.shots[0])).not.toBe(review);
+  });
+});
+describe('active render project guards',()=>{
+  it('detects active renders and rejects structural removal only for active shot ids',()=>{
+    const jobs=[
+      {shotId:'s1',status:'running' as const},
+      {shotId:'s2',status:'done' as const},
+      {shotId:'s3',status:'queued' as const}
+    ];
+    expect(hasActiveRenderJobs(jobs)).toBe(true);
+    const project={shots:[{id:'s1'}]} as unknown as FilmProject;
+    expect(removedActiveRenderShotIds(project,jobs)).toEqual(['s3']);
+    expect(removedActiveRenderShotIds({shots:[{id:'s1'},{id:'s3'}]} as unknown as FilmProject,jobs)).toEqual([]);
   });
 });
 describe('rendered take QC policy',()=>{

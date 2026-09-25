@@ -3,9 +3,10 @@ import type { AppMachineSettings, FilmProject, WorkflowProfile } from '../../sha
 import { ProjectService } from './project-service';
 import { assertExistingPathInside, assertPathInside } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
-import { validateProfileBindings } from './workflow-engine';
+import { validateComfyNodeAvailability, validateProfileBindings } from './workflow-engine';
 import { validateWanGpProfile } from './wangp-engine';
 import { probeSystem } from './system-probe';
+import { ComfyClient } from './comfy-client';
 
 export async function validateAndRecordProfile(projects: ProjectService, machine: AppMachineSettings, profileId: string): Promise<FilmProject> {
   const project = projects.getCurrent();
@@ -21,15 +22,19 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
   const modeErrors=profilePurposeModeErrors(profile);
   const runtimeErrors = runtime === 'wangp' ? await validateWanGpProfile(profile) : await validateProfileBindings(profile);
   const probe=await probeSystem(project,machine);
-  const environmentErrors:string[]=[];
+  const environmentErrors:string[]=[],runtimeNodeErrors:string[]=[];
   if(runtime==='wangp'){
     if(!probe.wangp.available)environmentErrors.push(`WanGP runtime is not production-ready: ${probe.wangp.error||'unavailable'}`);
     if(machine.wangp.executionMode==='docker'&&probe.docker?.gpuAccessible!==true)environmentErrors.push('WanGP Docker validation requires a working NVIDIA GPU runtime.');
   }else{
     if(!probe.comfy.reachable)environmentErrors.push(`ComfyUI is offline: ${probe.comfy.error||machine.comfy.url}`);
+    else{
+      try{runtimeNodeErrors.push(...await validateComfyNodeAvailability(profile,await new ComfyClient(machine.comfy.url,true).objectInfo()));}
+      catch(error){runtimeNodeErrors.push(`ComfyUI node catalog validation failed: ${error instanceof Error?error.message:String(error)}`);}
+    }
     if(!machine.comfy.dedicatedInstance)environmentErrors.push('ComfyUI production profiles require a dedicated CineForge instance for workload isolation, deterministic recovery, and safe legacy cancellation fallback.');
   }
-  const errors=[...modeErrors,...runtimeErrors,...environmentErrors];
+  const errors=[...modeErrors,...runtimeErrors,...runtimeNodeErrors,...environmentErrors];
   const fingerprint = await fingerprintRuntime(machine, profile);
   const now = new Date().toISOString();
 
