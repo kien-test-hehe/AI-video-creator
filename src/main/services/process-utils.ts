@@ -7,12 +7,18 @@ const execFileAsync=promisify(execFile);
 export async function killProcessTree(pid:number):Promise<void>{
   if(!Number.isInteger(pid)||pid<=0)return;
   if(process.platform==='win32'){
-    await execFileAsync('taskkill',['/PID',String(pid),'/T','/F'],{timeout:10_000}).catch(()=>undefined);
+    try{await execFileAsync('taskkill',['/PID',String(pid),'/T','/F'],{timeout:10_000});}
+    catch(error){if(isProcessAlive(pid))throw error;}
+    await new Promise(resolve=>setTimeout(resolve,250));
+    if(isProcessAlive(pid))throw new Error(`Process ${pid} is still alive after taskkill.`);
     return;
   }
   try{process.kill(-pid,'SIGTERM');}catch{try{process.kill(pid,'SIGTERM');}catch{}}
   await new Promise(resolve=>setTimeout(resolve,1500));
+  if(!isProcessAlive(pid))return;
   try{process.kill(-pid,'SIGKILL');}catch{try{process.kill(pid,'SIGKILL');}catch{}}
+  await new Promise(resolve=>setTimeout(resolve,250));
+  if(isProcessAlive(pid))throw new Error(`Process ${pid} is still alive after SIGKILL.`);
 }
 
 export function isProcessAlive(pid:number):boolean{
