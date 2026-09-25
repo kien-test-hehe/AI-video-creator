@@ -1,4 +1,4 @@
-import type { DragEvent } from 'react';
+import { useState, type DragEvent } from 'react';
 import { MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../../shared/defaults';
 import type { Shot } from '../../../shared/types';
 import { useAppStore } from '../store';
@@ -6,7 +6,8 @@ import { autoAssignAssetToShot } from '../asset-assignment';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 
 export function Storyboard(){
-  const{project,updateProject,selectShot,setView,setNotice,setError}=useAppStore();
+  const{project,updateProject,selectShot,setView,setNotice,setError,setBusy}=useAppStore();
+  const[planningSceneId,setPlanningSceneId]=useState<string>();
   if(!project)return <Page title="Storyboard"><Empty>Open a project first.</Empty></Page>;
 
   const addShot=(sceneId:string)=>updateProject(p=>{
@@ -17,8 +18,9 @@ export function Storyboard(){
   });
 
   const aiPlan=async(sceneId:string)=>{
+    if(planningSceneId)return;
     try{
-      await useAppStore.getState().persist();
+      setPlanningSceneId(sceneId);setBusy(true);await useAppStore.getState().persist();
       const drafts=await window.cineforge.director.planScene(sceneId);
       updateProject(p=>{
         const scene=p.scenes.find(s=>s.id===sceneId);if(!scene)return;
@@ -30,7 +32,7 @@ export function Storyboard(){
         }
       });
       setNotice('Local Director added '+drafts.length+' shot draft'+(drafts.length===1?'':'s')+'.');
-    }catch(e){setError(e instanceof Error?e.message:String(e));}
+    }catch(e){setError(e instanceof Error?e.message:String(e));}finally{setPlanningSceneId(undefined);setBusy(false);}
   };
 
   const startShotDrag=(event:DragEvent,shotId:string)=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-shot',shotId);};
@@ -63,7 +65,7 @@ export function Storyboard(){
   return <Page title="Storyboard" subtitle="Drag shots to reorder them. Drag characters, locations, visual references, props, keyframes, audio or video from Assets directly onto a shot.">
     {project.scenes.length===0?<Empty>Parse your screenplay first.</Empty>:<div className="scene-stack">{project.scenes.map(scene=>{
       const shots=project.shots.filter(s=>s.sceneId===scene.id).sort((a,b)=>a.index-b.index);
-      return <Card key={scene.id} kicker={'SCENE '+scene.index} title={scene.heading} actions={<div className="row"><button className="ghost" onClick={()=>aiPlan(scene.id)}>AI Director</button><button className="ghost" onClick={()=>addShot(scene.id)}>+ Shot</button></div>}>
+      return <Card key={scene.id} kicker={'SCENE '+scene.index} title={scene.heading} actions={<div className="row"><button className="ghost" disabled={Boolean(planningSceneId)} onClick={()=>aiPlan(scene.id)}>{planningSceneId===scene.id?'Planning…':'AI Director'}</button><button className="ghost" onClick={()=>addShot(scene.id)}>+ Shot</button></div>}>
         <p className="scene-body">{scene.body}</p>
         <div className="shot-strip">{shots.map(shot=><button className="shot-tile shot-drop-target" key={shot.id} draggable onDragStart={e=>startShotDrag(e,shot.id)} onDragOver={e=>e.preventDefault()} onDrop={e=>dropOnShot(e,shot.id)} onClick={()=>{selectShot(shot.id);setView('shots');}}>
           <span>{shot.title}</span><small>{shot.generation.modelFamily}</small>
