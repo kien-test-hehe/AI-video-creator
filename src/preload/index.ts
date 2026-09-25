@@ -44,7 +44,7 @@ const api: CineforgeApi = {
   },
   timeline: { export: () => ipcRenderer.invoke(IPC.timelineExport), cancelExport: () => ipcRenderer.invoke(IPC.timelineCancelExport) },
   director: { planScene: sceneId => ipcRenderer.invoke(IPC.directorPlanScene, sceneId), reviewShot: shotId => ipcRenderer.invoke(IPC.directorReviewShot, shotId) },
-  keyframe: { generate: request => ipcRenderer.invoke(IPC.keyframeGenerate, request) },
+  keyframe: { generate: request => ipcRenderer.invoke(IPC.keyframeGenerate, request), cancel: () => ipcRenderer.invoke(IPC.keyframeCancel) },
   capcut: { prepareHandoff: () => ipcRenderer.invoke(IPC.capcutPrepareHandoff) }
 };
 
