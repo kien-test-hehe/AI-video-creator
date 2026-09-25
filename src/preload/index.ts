@@ -20,7 +20,9 @@ const api: CineforgeApi = {
     importComfy: () => ipcRenderer.invoke(IPC.workflowImportComfy),
     importWanGp: () => ipcRenderer.invoke(IPC.workflowImportWanGp),
     inspect: path => ipcRenderer.invoke(IPC.workflowInspect, path),
-    validate: profileId => ipcRenderer.invoke(IPC.workflowValidate, profileId)
+    validate: profileId => ipcRenderer.invoke(IPC.workflowValidate, profileId),
+    wanGpCatalog: () => ipcRenderer.invoke(IPC.workflowWanGpCatalog),
+    provisionRecommendedWanGp: () => ipcRenderer.invoke(IPC.workflowProvisionWanGp)
   },
   system: {
     probe: () => ipcRenderer.invoke(IPC.systemProbe),
