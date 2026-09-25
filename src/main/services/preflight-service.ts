@@ -6,7 +6,8 @@ import { probeSystem } from './system-probe';
 import { validateProfileBindings } from './workflow-engine';
 import { validateWanGpProfile } from './wangp-engine';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside } from './path-safety';
-import { sha256File } from './runtime-fingerprint';
+import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
+import { planShotReferences } from './reference-plan';
 
 async function exists(path:string):Promise<boolean>{try{await access(path);return true;}catch{return false;}}
 
@@ -24,17 +25,10 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
       if(shot.startFrameAssetId&&!keys.has('startImage'))issues.push({level:'error',code:'START_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a start frame is attached but “${profile.name}” has no startImage binding, so the frame would be ignored.`});
       if(shot.endFrameAssetId&&!keys.has('endImage'))issues.push({level:'warning',code:'END_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: an end frame is attached but “${profile.name}” has no endImage binding.`});
       const hasVisualRefs=Boolean(shot.characterAssetIds.length||shot.locationAssetId||shot.propAssetIds.length||(shot.referenceAssetIds?.length??0));
-      const genericKeys=['referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const;
-      const characterKeys=['characterImage1','characterImage2','characterImage3','characterImage4'] as const;
-      const propKeys=['propImage1','propImage2'] as const;
-      const genericCapacity=keys.has('referenceImages')?4:genericKeys.filter(key=>keys.has(key)).length;
-      const genericDemand=(shot.referenceAssetIds?.length??0)
-        +shot.characterAssetIds.filter((_,index)=>!keys.has(characterKeys[index])).length
-        +(shot.locationAssetId&&!keys.has('locationImage')?1:0)
-        +shot.propAssetIds.filter((_,index)=>!keys.has(propKeys[index])).length;
-      const hasAnyDedicated=keys.has('locationImage')||characterKeys.some(key=>keys.has(key))||propKeys.some(key=>keys.has(key));
-      if(hasVisualRefs&&genericCapacity===0&&!hasAnyDedicated)issues.push({level:'warning',code:'CONTINUITY_REFS_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: visual continuity assets are attached but the selected workflow has no image-reference binding; only their text descriptions will influence generation.`});
-      else if(genericDemand>genericCapacity)issues.push({level:'warning',code:'CONTINUITY_REF_CAPACITY',shotId:shot.id,profileId:profile.id,message:`${shot.title}: ${genericDemand} continuity image(s) require generic reference slots after dedicated bindings, but “${profile.name}” exposes capacity for ${genericCapacity}. ${genericDemand-genericCapacity} image(s) will only influence text conditioning.`});
+      const referencePlan=planShotReferences(shot,profile);
+      const hasAnyDedicated=referencePlan.characterIds.some(Boolean)||Boolean(referencePlan.locationId)||referencePlan.propIds.some(Boolean);
+      if(hasVisualRefs&&referencePlan.genericCapacity===0&&!hasAnyDedicated)issues.push({level:'warning',code:'CONTINUITY_REFS_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: visual continuity assets are attached but the selected workflow has no image-reference binding; only their text descriptions will influence generation.`});
+      else if(referencePlan.unservedIds.length)issues.push({level:'warning',code:'CONTINUITY_REF_CAPACITY',shotId:shot.id,profileId:profile.id,message:`${shot.title}: ${referencePlan.genericDemand} continuity image(s) require generic reference slots after dedicated bindings, but “${profile.name}” exposes capacity for ${referencePlan.genericCapacity}. ${referencePlan.unservedIds.length} image(s) will only influence text conditioning.`});
       if(shot.audioAssetId&&!keys.has('inputAudio'))issues.push({level:'warning',code:'AUDIO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: input audio is attached but “${profile.name}” has no inputAudio binding.`});
       if(shot.referenceVideoAssetId&&!keys.has('inputVideo'))issues.push({level:'warning',code:'VIDEO_REF_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a motion/reference video is attached but “${profile.name}” has no inputVideo binding.`});
     }
@@ -86,6 +80,15 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
     catch(error){issues.push({level:'error',code:'ASSET_PATH_INVALID',assetId:asset.id,message:`${asset.name}: ${error instanceof Error?error.message:String(error)}`});}
   }
 
+  const currentRuntimeFingerprints=new Map<string,Promise<string>>();
+  const runtimeFingerprintFor=(profile:WorkflowProfile)=>{
+    const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+    const key=runtime==='wangp'?`wangp:${machine.wangp.executionMode}`:'comfyui';
+    let pending=currentRuntimeFingerprints.get(key);
+    if(!pending){pending=fingerprintRuntime(machine,profile).then(value=>value.environmentSha256);currentRuntimeFingerprints.set(key,pending);}
+    return pending;
+  };
+
   for(const profile of usedProfiles){
     if(!profile.workflowPath){issues.push({level:'error',code:'PROFILE_NO_PATH',profileId:profile.id,message:`Routed profile “${profile.name}” has no workflow/settings path.`});continue;}
     try{
@@ -96,6 +99,9 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
       if(!profile.validation?.lastSuccessfulRenderAt)issues.push({level:'info',code:'PROFILE_NO_SUCCESSFUL_RENDER',profileId:profile.id,message:`Profile “${profile.name}” has no recorded successful render on this project yet.`});
       if(!profile.modelFingerprint)issues.push({level:'warning',code:'MODEL_FINGERPRINT_MISSING',profileId:profile.id,message:`Profile “${profile.name}” has no model/checkpoint fingerprint. Exact reproducibility cannot include model weights until you record one.`});
       const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+      const currentRuntimeFingerprint=await runtimeFingerprintFor(profile);
+      if(!profile.validation?.runtimeFingerprint)issues.push({level:'error',code:'PROFILE_RUNTIME_UNVALIDATED',profileId:profile.id,message:`Profile “${profile.name}” has no validated runtime fingerprint. Revalidate it on this workstation.`});
+      else if(profile.validation.runtimeFingerprint!==currentRuntimeFingerprint)issues.push({level:'error',code:'PROFILE_RUNTIME_CHANGED',profileId:profile.id,message:`Profile “${profile.name}” was validated against a different local AI runtime. Revalidate it before rendering.`});
       const details=runtime==='wangp'?await validateWanGpProfile(profile):await validateProfileBindings(profile);
       for(const detail of details)issues.push({level:'error',code:'PROFILE_BINDING',profileId:profile.id,message:`${profile.name}: ${detail}`});
     }catch(error){issues.push({level:'error',code:'PROFILE_INVALID',profileId:profile.id,message:`${profile.name}: ${error instanceof Error?error.message:String(error)}`});}
