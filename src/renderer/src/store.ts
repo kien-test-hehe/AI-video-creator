@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { AppMachineSettings, FilmProject, QueueSnapshot, SystemProbe } from '../../shared/types';
+import { shotRenderInputKey } from '../../shared/shot-signature';
 
 export type ViewId='studio'|'dashboard'|'story'|'assets'|'storyboard'|'shots'|'queue'|'timeline'|'finishing'|'settings';
 interface AppState{
@@ -29,7 +30,7 @@ export const useAppStore=create<AppState>((set,get)=>({
     if(!state.projectDirty)for(const server of mainProject.settings.workflowProfiles)if(!next.settings.workflowProfiles.some(local=>local.id===server.id))next.settings.workflowProfiles.push(structuredClone(server));
     return{project:next};
   }),
-  updateProject:mutator=>{const current=get().project;if(!current)return;const next=structuredClone(current);mutator(next);projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist(),450);},
+  updateProject:mutator=>{const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotRenderInputKey(shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotRenderInputKey(shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist(),450);},
   persist:async()=>{
     clearTimeout(projectTimer);projectTimer=undefined;const project=get().project;if(!project)return;
     const revision=projectEditRevision;
