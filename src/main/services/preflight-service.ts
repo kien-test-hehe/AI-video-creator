@@ -93,7 +93,7 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
     if(!profile.workflowPath){issues.push({level:'error',code:'PROFILE_NO_PATH',profileId:profile.id,message:`Routed profile “${profile.name}” has no workflow/settings path.`});continue;}
     try{
       const safe=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
-      const currentSha=await sha256File(safe);
+      const currentSha=await sha256File(safe),safeProfile={...structuredClone(profile),workflowPath:safe};
       if(profile.validation?.structuralStatus!=='valid')issues.push({level:'error',code:'PROFILE_NOT_VALIDATED',profileId:profile.id,message:`Profile “${profile.name}” has not passed structural validation. Validate it in Settings.`});
       else if(profile.validation.sourceSha256!==currentSha)issues.push({level:'error',code:'PROFILE_CHANGED',profileId:profile.id,message:`Profile “${profile.name}” changed after validation. Revalidate it before rendering.`});
       if(!profile.validation?.lastSuccessfulRenderAt)issues.push({level:'info',code:'PROFILE_NO_SUCCESSFUL_RENDER',profileId:profile.id,message:`Profile “${profile.name}” has no recorded successful render on this project yet.`});
@@ -102,7 +102,7 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
       const currentRuntimeFingerprint=await runtimeFingerprintFor(profile);
       if(!profile.validation?.runtimeFingerprint)issues.push({level:'error',code:'PROFILE_RUNTIME_UNVALIDATED',profileId:profile.id,message:`Profile “${profile.name}” has no validated runtime fingerprint. Revalidate it on this workstation.`});
       else if(profile.validation.runtimeFingerprint!==currentRuntimeFingerprint)issues.push({level:'error',code:'PROFILE_RUNTIME_CHANGED',profileId:profile.id,message:`Profile “${profile.name}” was validated against a different local AI runtime. Revalidate it before rendering.`});
-      const details=runtime==='wangp'?await validateWanGpProfile(profile):await validateProfileBindings(profile);
+      const details=runtime==='wangp'?await validateWanGpProfile(safeProfile):await validateProfileBindings(safeProfile);
       for(const detail of details)issues.push({level:'error',code:'PROFILE_BINDING',profileId:profile.id,message:`${profile.name}: ${detail}`});
     }catch(error){issues.push({level:'error',code:'PROFILE_INVALID',profileId:profile.id,message:`${profile.name}: ${error instanceof Error?error.message:String(error)}`});}
   }
