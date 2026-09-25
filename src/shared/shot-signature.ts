@@ -1,4 +1,4 @@
-import type { Shot } from './types';
+import type { FilmProject, Shot } from './types';
 
 export function shotRenderInputKey(shot:Shot):string{
   return JSON.stringify({
@@ -41,4 +41,13 @@ export function shotKeyframeInputKey(shot:Shot,role:'start'|'end'):string{
       negativePrompt:shot.generation.negativePrompt
     }
   });
+}
+
+
+export function shotProjectRenderInputKey(project:FilmProject,shot:Shot):string{
+  const ids=[...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((id):id is string=>Boolean(id));
+  const assets=[...new Set(ids)].map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({
+    id:asset!.id,kind:asset!.kind,name:asset!.name,projectPath:asset!.projectPath,tags:asset!.tags,notes:asset!.notes
+  })).sort((a,b)=>a.id.localeCompare(b.id));
+  return JSON.stringify({shot:shotRenderInputKey(shot),assets});
 }
