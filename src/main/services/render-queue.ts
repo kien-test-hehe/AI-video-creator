@@ -337,10 +337,34 @@ export class RenderQueueService extends EventEmitter {
     if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await path(shot.audioAssetId);
   }
 
+  private async stageWanGpInputs(project:FilmProject,job:RenderJob,values:WorkflowValues):Promise<void>{
+    const spec=job.spec;if(!spec)throw new Error('Render job has no immutable spec.');
+    const expectedByPath=new Map<string,string>();
+    for(const fingerprint of spec.assetFingerprints){
+      const asset=project.assets.find(item=>item.id===fingerprint.assetId);if(!asset)throw new Error(`Referenced asset was removed after queue: ${fingerprint.assetId}`);
+      const source=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
+      expectedByPath.set(source,fingerprint.sha256);
+    }
+    const root=join(project.rootPath,'cache','wangp-inputs',job.id);await mkdir(root,{recursive:true});
+    const staged=new Map<string,string>();let index=0;
+    const stage=async(source:string):Promise<string>=>{
+      const cached=staged.get(source);if(cached)return cached;
+      const expected=expectedByPath.get(source);if(!expected)throw new Error(`WanGP input is not covered by the queued asset fingerprint set: ${source}`);
+      const safeName=basename(source).replace(/[^a-zA-Z0-9._-]+/g,'_')||'input.bin';
+      const target=await assertSafeWritePath(root,join(root,`${String(index++).padStart(2,'0')}-${safeName}`),'WanGP immutable input snapshot');
+      await copyFile(source,target);
+      if(await sha256File(target)!==expected)throw new Error(`Referenced asset changed while staging the immutable WanGP snapshot: ${basename(source)}. Queue a new render.`);
+      staged.set(source,target);return target;
+    };
+    const scalarKeys=['startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo'] as const;
+    for(const key of scalarKeys){const value=values[key];if(value)values[key]=await stage(value);}
+    if(values.referenceImages)values.referenceImages=await Promise.all(values.referenceImages.map(stage));
+  }
+
   private async runWanGp(project:FilmProject,job:RenderJob):Promise<void>{
     const machine=this.settings.get(),shot=job.spec!.shot,profile=job.spec!.workflowProfile;
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing WanGP · ${profile.name}`},true,true);
-    const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,profile,values);
+    const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,profile,values);await this.stageWanGpInputs(project,job,values);
     let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     await this.verifyImmutableSpec(this.requireProject(),job);
     const cacheDir=join(project.rootPath,'cache','wangp'),outputDir=join(project.rootPath,'renders',shot.id,job.id);
