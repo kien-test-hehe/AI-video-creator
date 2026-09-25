@@ -1,4 +1,4 @@
-import type { FilmProject, Shot } from './types';
+import type { FilmProject, Shot, WorkflowProfile } from './types';
 
 export function shotRenderInputKey(shot:Shot):string{
   return JSON.stringify({
@@ -44,10 +44,32 @@ export function shotKeyframeInputKey(shot:Shot,role:'start'|'end'):string{
 }
 
 
+export function workflowExecutionKey(profile:WorkflowProfile|undefined):string{
+  if(!profile)return'none';
+  return JSON.stringify({
+    id:profile.id,
+    runtime:profile.runtime,
+    purpose:profile.purpose??'video',
+    modelFamily:profile.modelFamily,
+    mode:profile.mode,
+    workflowPath:profile.workflowPath,
+    workflowFormat:profile.workflowFormat,
+    bindings:profile.bindings,
+    enabled:profile.enabled,
+    modelFingerprint:profile.modelFingerprint
+  });
+}
+
+function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile|undefined{
+  if(shot.generation.workflowProfileId)return project.settings.workflowProfiles.find(profile=>profile.id===shot.generation.workflowProfileId);
+  const candidates=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&Boolean(profile.workflowPath));
+  return candidates.find(profile=>profile.validation?.structuralStatus==='valid')??candidates[0];
+}
+
 export function shotProjectRenderInputKey(project:FilmProject,shot:Shot):string{
   const ids=[...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId].filter((id):id is string=>Boolean(id));
   const promptAssets=[...new Set(ids)].map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({
     id:asset!.id,kind:asset!.kind,name:asset!.name,notes:asset!.notes
   })).sort((a,b)=>a.id.localeCompare(b.id));
-  return JSON.stringify({shot:shotRenderInputKey(shot),promptAssets});
+  return JSON.stringify({shot:shotRenderInputKey(shot),promptAssets,workflow:workflowExecutionKey(effectiveWorkflowProfile(project,shot))});
 }
