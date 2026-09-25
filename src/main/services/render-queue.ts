@@ -33,9 +33,12 @@ export class RenderQueueService extends EventEmitter {
   private wanGpProcesses=new Map<string,ChildProcess>();
   private liveJobs=new Map<string,RenderJob>();
   private lastJournalWrite=new Map<string,number>();
-  private journal=new JobJournal();
+  private journal:JobJournal;
 
-  constructor(private projects:ProjectService,private settings:AppSettingsService){super();}
+  constructor(private projects:ProjectService,private settings:AppSettingsService){
+    super();
+    this.journal=new JobJournal(settings.getJournalKey());
+  }
 
   snapshot():QueueSnapshot{
     const project=this.projects.getCurrent();
@@ -105,8 +108,13 @@ export class RenderQueueService extends EventEmitter {
     const jobs=project.renderJobs.map(j=>byId.get(j.id)??j).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
     let recoveryStarted=false;
     for(const job of jobs){
+      const signed=byId.has(job.id);
       this.liveJobs.set(job.id,structuredClone(job));
       if(TERMINAL.has(job.status))continue;
+      if(!signed){
+        await this.updateJob(job.id,{status:'orphaned',progress:0,message:'Untrusted runtime state was not resumed',error:'No valid installation-signed job journal exists for this active job. Queue a new render explicitly.'},true,false);
+        continue;
+      }
       if(['queued','preparing','uploading'].includes(job.status)){
         await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
         this.pending.push(job.id);continue;
