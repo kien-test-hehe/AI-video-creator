@@ -11,12 +11,11 @@ For a fresh Windows workstation:
 ```bat
 git clone https://github.com/kien-test-hehe/AI-video-creator.git
 cd AI-video-creator
-git switch hardening-production
 setup.cmd
 start.cmd
 ```
 
-`setup.cmd` is idempotent and prepares a machine-local runtime under `.runtime/`:
+`setup.cmd` is idempotent and prepares a machine-local runtime under `.runtime/`. `start.cmd` launches the **built** Electron app (not Vite development mode):
 
 - portable Node.js 22.16;
 - FFmpeg + FFprobe when missing;
