@@ -63,9 +63,10 @@ export class ComfyClient {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt, client_id: this.clientId, extra_data: extraData })
     }, 30_000);
-    const payload = await res.json() as any;
+    const raw=await res.text();let payload:any;
+    try{payload=raw?JSON.parse(raw):{};}catch{throw new Error(`ComfyUI /prompt returned ${res.status} with non-JSON body: ${raw.slice(0,1000)}`);}
     if (!res.ok || payload.error) {
-      throw new Error(`ComfyUI rejected prompt: ${JSON.stringify(payload)}`);
+      throw new Error(`ComfyUI rejected prompt (${res.status}): ${JSON.stringify(payload).slice(0,4000)}`);
     }
     return payload as ComfyPromptResult;
   }
