@@ -13,7 +13,7 @@ import { planShotReferences } from '../src/main/services/reference-plan';
 import { historyWasInterrupted } from '../src/main/services/comfy-client';
 import { shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey } from '../src/shared/director-signature';
-import { takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/renderer/src/take-policy';
+import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -138,6 +138,11 @@ describe('rendered take QC policy',()=>{
     expect(takeUseConfirmationMessage(output({passed:false,issues:['bad duration']}),'timeline')).toMatch(/bad duration/i);
     expect(takeNeedsConfirmation(output({passed:true,issues:[]}))).toBe(false);
     expect(takeUseConfirmationMessage(output({passed:true,issues:[]}),'preferred')).toBeUndefined();
+    const passingOld=output({passed:true,issues:[]});passingOld.id='pass-old';passingOld.createdAt='2026-01-01T00:00:00.000Z';
+    const failingNew=output({passed:false,issues:['bad']});failingNew.id='fail-new';failingNew.createdAt='2026-01-03T00:00:00.000Z';
+    const passingNew=output({passed:true,issues:[]});passingNew.id='pass-new';passingNew.createdAt='2026-01-02T00:00:00.000Z';
+    expect(latestPassingVideoTake([passingOld,failingNew,passingNew])?.id).toBe('pass-new');
+    expect(latestPassingVideoTake([failingNew])).toBeUndefined();
   });
 });
 describe('hardware advisor',()=>{
