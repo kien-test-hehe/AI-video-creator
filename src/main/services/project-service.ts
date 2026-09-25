@@ -23,13 +23,16 @@ export class ProjectService {
   }
 
   async createAt(rootPath: string, name: string): Promise<FilmProject> {
-    await this.ensureFolders(rootPath);
+    const resolvedRoot=resolve(rootPath),projectFile=join(resolvedRoot,PROJECT_FILE);
+    try{await stat(projectFile);throw new Error('This folder already contains a CineForge project. Use Open instead, or choose a new/empty folder.');}
+    catch(error:any){if(error?.code!=='ENOENT')throw error;}
+    await this.ensureFolders(resolvedRoot);
     const now = new Date().toISOString();
     const project: FilmProject = {
       schemaVersion: 2,
       id: randomUUID(),
       name,
-      rootPath: resolve(rootPath),
+      rootPath: resolvedRoot,
       createdAt: now,
       updatedAt: now,
       story: { title: name, logline: '', script: '', notes: '' },
