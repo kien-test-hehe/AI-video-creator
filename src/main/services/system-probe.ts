@@ -90,12 +90,13 @@ async function probeWanGp(machine:AppMachineSettings):Promise<SystemProbe['wangp
   }catch(error){return{configured:true,available:false,executionMode:'native',rootPath:cfg.rootPath,error:error instanceof Error?error.message:String(error)};}
 }
 
-async function probeDisk(project:FilmProject):Promise<SystemProbe['disk']>{
+async function probeDisk(project?:FilmProject):Promise<SystemProbe['disk']>{
+  if(!project)return undefined;
   try{const stats=await statfs(project.rootPath);return{path:project.rootPath,freeBytes:Number(stats.bavail)*Number(stats.bsize),totalBytes:Number(stats.blocks)*Number(stats.bsize)};}catch{return undefined;}
 }
 
-async function probeCapCut(project:FilmProject):Promise<SystemProbe['capcut']>{
-  const configuredTier=project.settings.capcut.pro?'pro':'free';
+async function probeCapCut(project?:FilmProject):Promise<SystemProbe['capcut']>{
+  const configuredTier=project?.settings.capcut.pro?'pro':'free';
   if(process.platform!=='win32')return{installed:false,configuredTier};
   const env=process.env,candidates=[
     env.LOCALAPPDATA?join(env.LOCALAPPDATA,'CapCut','Apps','CapCut.exe'):'',
@@ -121,7 +122,7 @@ async function firstExisting(paths:string[]):Promise<string|undefined>{
   return undefined;
 }
 
-export async function probeSystem(project:FilmProject,machine:AppMachineSettings):Promise<SystemProbe>{
+export async function probeSystem(project:FilmProject|undefined,machine:AppMachineSettings):Promise<SystemProbe>{
   const[cpu,gpu,ffmpeg,comfy,wangp,docker,disk,capcut]=await Promise.all([
     probeCpu(),probeGpu(),probeFfmpeg(machine),new ComfyClient(machine.comfy.url,true).ping(),probeWanGp(machine),
     machine.wangp.executionMode==='docker'?probeDocker(machine):Promise.resolve(undefined),probeDisk(project),probeCapCut(project)

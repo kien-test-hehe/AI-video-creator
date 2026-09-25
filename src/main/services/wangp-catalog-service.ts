@@ -18,7 +18,7 @@ export async function listWanGpCatalog(machine:AppMachineSettings):Promise<WanGp
   if(!Array.isArray(value))throw new Error('WanGP catalog bridge returned an invalid payload.');
   return value.filter(item=>item&&typeof item.modelType==='string'&&item.modelType).map(item=>({
     modelType:String(item.modelType),name:String(item.name||item.modelType),family:item.family?String(item.family):undefined,familyLabel:item.familyLabel?String(item.familyLabel):undefined,
-    mainOutput:Array.isArray(item.mainOutput)?item.mainOutput.map(String):[],outputs:Array.isArray(item.outputs)?item.outputs.map(String):[],inputs:Array.isArray(item.inputs)?item.inputs.map(String):[],description:item.description?String(item.description):undefined
+    mainOutput:Array.isArray(item.mainOutput)?item.mainOutput.map(String):[],outputs:Array.isArray(item.outputs)?item.outputs.map(String):[],inputs:Array.isArray(item.inputs)?item.inputs.map(String):[],capabilities:item.capabilities&&typeof item.capabilities==='object'?Object.fromEntries(Object.entries(item.capabilities).map(([key,value])=>[key,Boolean(value)])):undefined,description:item.description?String(item.description):undefined
   }));
 }
 
@@ -78,12 +78,15 @@ function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogE
   const motion=maxBy(video,e=>score(e,[['Wan2.2 TextImage2video 5B',100],['ti2v_2_2',95],['Wan2.2',50],['5B',20]]));
   const keyframe=maxBy(image,e=>score(e,[['Qwen Image 2.1',100],['qwen_image_2',95],['Qwen Image Edit Plus',90],['Krea 2 Identity',85],['Krea 2',70],['Z-Image',60]]));
   const out:Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:'t2v'|'i2v'|'t2i'|'i2i'}>=[];
-  if(general)out.push({entry:general,role:'general',purpose:'video',mode:general.inputs.includes('image')?'i2v':'t2v'});
-  if(hero&&hero.modelType!==general?.modelType)out.push({entry:hero,role:'hero',purpose:'video',mode:hero.inputs.includes('image')?'i2v':'t2v'});
-  if(motion&&motion.modelType!==general?.modelType&&motion.modelType!==hero?.modelType)out.push({entry:motion,role:'motion',purpose:'video',mode:motion.inputs.includes('image')?'i2v':'t2v'});
-  if(keyframe)out.push({entry:keyframe,role:'keyframe',purpose:'image',mode:keyframe.inputs.includes('image')?'i2i':'t2i'});
+  if(general)out.push({entry:general,role:'general',purpose:'video',mode:preferredVideoMode(general)});
+  if(hero&&hero.modelType!==general?.modelType)out.push({entry:hero,role:'hero',purpose:'video',mode:preferredVideoMode(hero)});
+  if(motion&&motion.modelType!==general?.modelType&&motion.modelType!==hero?.modelType)out.push({entry:motion,role:'motion',purpose:'video',mode:preferredVideoMode(motion)});
+  if(keyframe)out.push({entry:keyframe,role:'keyframe',purpose:'image',mode:preferredImageMode(keyframe)});
   return out;
 }
+
+function preferredVideoMode(entry:WanGpCatalogEntry):'t2v'|'i2v'{if(entry.capabilities?.image_to_video)return'i2v';return't2v';}
+function preferredImageMode(entry:WanGpCatalogEntry):'t2i'|'i2i'{if(entry.capabilities?.text_to_image)return't2i';if(entry.capabilities?.image_to_image)return'i2i';return entry.inputs.includes('image')?'i2i':'t2i';}
 
 function score(entry:WanGpCatalogEntry,rules:Array<[string,number]>):number{
   const hay=`${entry.modelType} ${entry.name} ${entry.familyLabel||''}`.toLowerCase();

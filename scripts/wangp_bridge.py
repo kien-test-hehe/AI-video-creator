@@ -43,6 +43,7 @@ def compact(entry):
         "mainOutput": as_list(metadata.get("main_output")),
         "outputs": as_list(metadata.get("outputs")),
         "inputs": as_list(metadata.get("inputs")),
+        "capabilities": metadata.get("capabilities") if isinstance(metadata.get("capabilities"), dict) else {},
         "description": entry.get("description") or metadata.get("description") or "",
     }
 

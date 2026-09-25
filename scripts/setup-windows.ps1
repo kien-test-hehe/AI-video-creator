@@ -198,8 +198,13 @@ if (-not $SkipBuild) {
   if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed.' }
   & $npm run test:smoke --prefix $RepoRoot
   if ($LASTEXITCODE -ne 0) { throw 'Core smoke test failed.' }
+  & $python tests\wangp_bridge_test.py
+  if ($LASTEXITCODE -ne 0) { throw 'WanGP bridge tests failed.' }
   & $npm run build --prefix $RepoRoot
   if ($LASTEXITCODE -ne 0) { throw 'Electron/Vite build failed.' }
+  $git = Get-Command git.exe -ErrorAction SilentlyContinue
+  if ($git) { (& $git.Source -C $RepoRoot rev-parse HEAD).Trim() | Set-Content -Encoding ASCII (Join-Path $RuntimeRoot 'build-commit.txt') }
+  if (Test-Path (Join-Path $RepoRoot 'package-lock.json')) { (Get-FileHash -Algorithm SHA256 (Join-Path $RepoRoot 'package-lock.json')).Hash | Set-Content -Encoding ASCII (Join-Path $RuntimeRoot 'package-lock.sha256') }
 }
 
 Write-Host ''

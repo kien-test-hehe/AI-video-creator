@@ -17,7 +17,7 @@ function setPath(root:any,path:string,value:unknown):void{const parts=splitPath(
 
 export function analyzeWanGpBindings(settings:any):{bindings:WorkflowBinding[];warnings:string[]}{
   const leaves:Array<{path:string;key:string;value:unknown}>=[];
-  const walk=(value:any,path='')=>{if(Array.isArray(value))return value.forEach((v,i)=>walk(v,`${path}[${i}]`));if(value&&typeof value==='object')return Object.entries(value).forEach(([k,v])=>walk(v,path?`${path}.${k}`:k));const key=path.split('.').at(-1)?.replace(/\[\d+\]$/,'')||path;leaves.push({path,key:key.toLowerCase(),value});};walk(settings);
+  const walk=(value:any,path='')=>{const key=path.split('.').at(-1)?.replace(/\[\d+\]$/,'')||path,lowerKey=key.toLowerCase();if(Array.isArray(value)){if(value.length===0||['image_refs','reference_images'].includes(lowerKey)){leaves.push({path,key:lowerKey,value});return;}return value.forEach((v,i)=>walk(v,`${path}[${i}]`));}if(value&&typeof value==='object')return Object.entries(value).forEach(([k,v])=>walk(v,path?`${path}.${k}`:k));leaves.push({path,key:lowerKey,value});};walk(settings);
   const bindings:WorkflowBinding[]=[],warnings:string[]=[];
   for(const[bindingKey,hints]of Object.entries(KEY_HINTS) as[WorkflowBindingKey,string[]][]){
     const candidates=leaves.filter(x=>hints.some(h=>x.key===h));

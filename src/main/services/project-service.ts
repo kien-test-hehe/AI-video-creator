@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { dialog } from 'electron';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
 import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject } from './project-schema';
+import { shotProjectRenderInputKey } from '../../shared/shot-signature';
+import { latestPassingVideoTake } from '../../shared/take-policy';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -26,6 +28,11 @@ export class ProjectService {
     const resolvedRoot=resolve(rootPath),projectFile=join(resolvedRoot,PROJECT_FILE);
     try{await stat(projectFile);throw new Error('This folder already contains a CineForge project. Use Open instead, or choose a new/empty folder.');}
     catch(error:any){if(error?.code!=='ENOENT')throw error;}
+    try{
+      const harmless=new Set(['.DS_Store','Thumbs.db','desktop.ini']);
+      const existing=(await readdir(resolvedRoot)).filter(name=>!harmless.has(name));
+      if(existing.length)throw new Error(`Choose an empty folder for a new CineForge project. “${resolvedRoot}” already contains ${existing.length} item(s).`);
+    }catch(error:any){if(error?.code!=='ENOENT')throw error;}
     await this.ensureFolders(resolvedRoot);
     const now = new Date().toISOString();
     const project: FilmProject = {
@@ -101,10 +108,15 @@ export class ProjectService {
         const edited = editedAssets.get(original.id);
         return edited ? { ...structuredClone(original), name: edited.name, tags: [...edited.tags], notes: edited.notes } : structuredClone(original);
       });
-      const runtime = new Map(this.current.shots.map(shot => [shot.id, { status: shot.status, latestRenderId: shot.latestRenderId }]));
+      const currentShots = new Map(this.current.shots.map(shot => [shot.id, shot]));
       for (const shot of incoming.shots) {
-        const state = runtime.get(shot.id);
-        if (state) { shot.status = state.status; shot.latestRenderId = state.latestRenderId; }
+        const currentShot=currentShots.get(shot.id);if(!currentShot)continue;
+        if(shotProjectRenderInputKey(incoming,shot)!==shotProjectRenderInputKey(this.current,currentShot)){
+          shot.status=shot.latestRenderId?'rendered':currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
+        }else{
+          shot.status=currentShot.status;
+          shot.latestRenderId=currentShot.latestRenderId;
+        }
       }
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
       incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>{
@@ -167,6 +179,26 @@ export class ProjectService {
       }
     });
     if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete asset file after removing it from the project: ${absolute}`,error));
+    return updated;
+  }
+
+  async deleteRenderOutput(outputId:string):Promise<FilmProject>{
+    const current=this.current;if(!current)throw new Error('Open a project first.');
+    const output=current.renderOutputs.find(item=>item.id===outputId);if(!output)throw new Error('Render output not found.');
+    const duplicatePath=current.renderOutputs.some(item=>item.id!==outputId&&resolve(item.path)===resolve(output.path));
+    const absolute=duplicatePath?undefined:await assertExistingPathInside(join(current.rootPath,'renders'),output.path,'render output').catch(()=>undefined);
+    const updated=await this.mutate(project=>{
+      project.renderOutputs=project.renderOutputs.filter(item=>item.id!==outputId);
+      for(const job of project.renderJobs)job.outputs=job.outputs.filter(item=>item.id!==outputId);
+      project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId).sort((a,b)=>a.order-b.order).map((clip,index)=>({...clip,order:index}));
+      const shot=project.shots.find(item=>item.id===output.shotId);
+      if(shot?.latestRenderId===outputId){
+        const fallback=latestPassingVideoTake(project.renderOutputs.filter(item=>item.shotId===shot.id));
+        shot.latestRenderId=fallback?.id;
+        if(!fallback&&shot.status==='rendered')shot.status='ready';
+      }
+    });
+    if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete render output file after removing it from the project: ${absolute}`,error));
     return updated;
   }
 

@@ -35,6 +35,7 @@ export interface CineforgeApi {
     retry(jobId: string): Promise<QueueSnapshot>;
     cancel(jobId: string): Promise<QueueSnapshot>;
     snapshot(): Promise<QueueSnapshot>;
+    deleteOutput(outputId:string):Promise<FilmProject>;
     onQueueEvent(handler: (snapshot: QueueSnapshot) => void): () => void;
   };
   timeline: { export(): Promise<{ outputPath: string } | null>; cancelExport(): Promise<void>; };
@@ -42,6 +43,6 @@ export interface CineforgeApi {
     planScene(sceneId: string): Promise<DirectorShotDraft[]>;
     reviewShot(shotId: string): Promise<ContinuityReview>;
   };
-  keyframe: { generate(request: KeyframeRequest): Promise<FilmProject>; };
+  keyframe: { generate(request: KeyframeRequest): Promise<FilmProject>; cancel(): Promise<boolean>; };
   capcut: { prepareHandoff(): Promise<CapCutHandoffResult>; };
 }

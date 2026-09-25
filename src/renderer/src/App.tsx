@@ -32,6 +32,9 @@ export default function App(){
         const latest=useAppStore.getState();
         if(!latest.projectDirty&&!latest.machineDirty){allowClose=true;window.close();}
         else{flushing=false;latest.setError('CineForge could not save all pending edits, so closing was cancelled. Resolve the save error and try again.');}
+      }).catch(error=>{
+        flushing=false;
+        useAppStore.getState().setError(`CineForge could not save pending edits, so closing was cancelled: ${error instanceof Error?error.message:String(error)}`);
       });
     };
     window.addEventListener('beforeunload',beforeUnload);

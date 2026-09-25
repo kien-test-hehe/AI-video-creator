@@ -4,7 +4,7 @@ import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type {
-  AppMachineSettings, Asset, AssetFingerprint, FilmProject, QueueSnapshot, RenderBatchRequest, RenderJob, RenderOutput,
+  AppMachineSettings, Asset, AssetFingerprint, FilmProject, QueueSnapshot, RenderBatchRequest, RenderJob, RenderOutput, RenderRuntimeFingerprint,
   RenderRequest, Shot, SystemProbe, WorkflowBindingKey, WorkflowProfile
 } from '../../shared/types';
 import { ProjectService } from './project-service';
@@ -23,6 +23,8 @@ import { JobJournal } from './job-journal';
 import { technicalQcVideo } from './technical-qc';
 import { isExpectedProcess, isProcessAlive, killProcessTree } from './process-utils';
 import { probeSystem } from './system-probe';
+import { planShotReferences } from './reference-plan';
+import { shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -66,14 +68,19 @@ export class RenderQueueService extends EventEmitter {
   async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{
     const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
     const jobs:RenderJob[]=[];
-    const machine=this.settings.get(),probe=await probeSystem(project,machine);
+    const machine=this.settings.get(),probe=await probeSystem(project,machine),runtimeFingerprints=new Map<string,Promise<RenderRuntimeFingerprint>>();
+    const fingerprintFor=(profile:WorkflowProfile)=>{
+      const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+      const key=runtime==='wangp'?`wangp:${machine.wangp.executionMode}`:'comfyui';
+      let pending=runtimeFingerprints.get(key);if(!pending){pending=fingerprintRuntime(machine,profile);runtimeFingerprints.set(key,pending);}return pending;
+    };
     for(const id of [...new Set(request.shotIds)]){
       const shot=project.shots.find(s=>s.id===id);if(!shot)throw new Error(`Shot not found: ${id}`);
       if(request.skipIfRendered&&shot.latestRenderId)continue;
       if(this.hasActiveJobForShot(shot.id))continue;
       const profile=routeWorkflow(project,shot);
       this.assertExecutionEnvironment(machine,profile,probe);
-      jobs.push(await this.createJob(project,shot,profile,machine));
+      jobs.push(await this.createJob(project,shot,profile,machine,await fingerprintFor(profile)));
     }
     if(jobs.length)await this.commitQueuedJobs(jobs);return this.snapshot();
   }
@@ -95,25 +102,30 @@ export class RenderQueueService extends EventEmitter {
     const wasRunning=this.runningJobId===jobId;
     const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(wasRunning&&runtime==='comfyui'&&!this.settings.get().comfy.dedicatedInstance)throw new Error('Safe cancellation is disabled for a shared ComfyUI instance. Configure a dedicated CineForge ComfyUI instance first.');
-    this.cancelled.add(jobId);this.pending=this.pending.filter(id=>id!==jobId);
+    this.pending=this.pending.filter(id=>id!==jobId);
     if(wasRunning){
       if(runtime==='wangp'){
+        this.cancelled.add(jobId);
         const machine=this.settings.get(),child=this.wanGpProcesses.get(jobId);
         if(machine.wangp.executionMode==='docker'){
           await stopWanGpDocker(machine,job.id);
           if(child?.pid)await killProcessTree(child.pid);
         }else if(child?.pid)await killProcessTree(child.pid);
         else if(job.backendPid){
-          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');
+          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py'])){this.cancelled.delete(jobId);throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');}
           await killProcessTree(job.backendPid);
         }
       }else{
-        const machine=this.settings.get();
-        await new ComfyClient(machine.comfy.url,true).interrupt().catch(()=>undefined);
+        if(job.comfyPromptId){
+          const machine=this.settings.get(),client=new ComfyClient(machine.comfy.url,true);
+          try{await client.cancelPrompt(job.comfyPromptId);}
+          catch(error){throw new Error(`ComfyUI did not confirm cancellation for ${job.comfyPromptId}: ${error instanceof Error?error.message:String(error)}`);}
+        }
+        this.cancelled.add(jobId);
       }
-    }
+    }else this.cancelled.add(jobId);
     await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled'},true,true);
-    await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(shot)shot.status=shot.latestRenderId?'rendered':'draft';});
+    await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shot.latestRenderId?'rendered':currentSpec&&job.spec?.shot.status==='draft'?'draft':'ready';});
     if(!wasRunning){this.cancelled.delete(jobId);void this.pump();}
     return this.snapshot();
   }
@@ -150,7 +162,6 @@ export class RenderQueueService extends EventEmitter {
     try{
       const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job?.spec)throw new Error('Recovered job has no immutable spec.');
       recoveredJob=job;
-      await this.verifyImmutableSpec(project,job);
       const runtime=job.spec.workflowProfile.runtime??(job.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
       await this.updateJob(jobId,{status:'recovering',message:`Recovering ${runtime} job after restart`},true,true);
       if(runtime==='wangp')await this.recoverWanGp(project,job);
@@ -210,7 +221,7 @@ export class RenderQueueService extends EventEmitter {
 
   private hasActiveJobForShot(shotId:string):boolean{return this.snapshot().jobs.some(j=>j.shotId===shotId&&ACTIVE.has(j.status));}
 
-  private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile,machine:AppMachineSettings):Promise<RenderJob>{
+  private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile,machine:AppMachineSettings,knownRuntimeFingerprint?:RenderRuntimeFingerprint):Promise<RenderJob>{
     if(profile.validation?.structuralStatus!=='valid')throw new Error(`Profile “${profile.name}” must be validated in Settings before rendering.`);
     const bindingKeys=new Set(profile.bindings.map(binding=>binding.key));
     const requiredInputs:Array<[boolean,WorkflowBindingKey,string]>=[
@@ -224,9 +235,11 @@ export class RenderQueueService extends EventEmitter {
     const workflowSha256=await sha256File(workflowPath);
     if(profile.validation.sourceSha256!==workflowSha256)throw new Error(`Profile “${profile.name}” changed after validation. Revalidate it before rendering.`);
     const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
-    if(runtime==='comfyui'&&!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance because cancellation/recovery uses server-wide queue controls.');
+    if(runtime==='comfyui'&&!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance for workload isolation, deterministic recovery, and safe legacy cancellation fallback.');
     const assetFingerprints=await this.fingerprintAssets(project,shot);
-    const runtimeFingerprint=await fingerprintRuntime(machine,profile);
+    const runtimeFingerprint=knownRuntimeFingerprint??await fingerprintRuntime(machine,profile);
+    if(!profile.validation?.runtimeFingerprint)throw new Error(`Profile “${profile.name}” has no validated runtime fingerprint. Revalidate it on this workstation before rendering.`);
+    if(profile.validation.runtimeFingerprint!==runtimeFingerprint.environmentSha256)throw new Error(`Profile “${profile.name}” was validated against a different local AI runtime. Revalidate it before rendering.`);
     const now=new Date().toISOString();
     return{id:randomUUID(),shotId:shot.id,createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(profile),effectivePrompt:buildPrompt(project,shot),queuedProjectUpdatedAt:project.updatedAt,workflowSha256,assetFingerprints,runtimeFingerprint,modelFingerprint:profile.modelFingerprint}};
   }
@@ -272,7 +285,8 @@ export class RenderQueueService extends EventEmitter {
         const message=error instanceof Error?error.message:String(error);
         await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed',error:message},true,true);
         const current=this.projects.getCurrent(),job=current?.renderJobs.find(j=>j.id===jobId);
-        if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(shot)shot.status='failed';});
+        const externalSpecCurrent=job&&current?await this.immutableFilesStillCurrent(current,job):false;
+        if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
       }
     }finally{
       this.wanGpProcesses.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
@@ -303,29 +317,77 @@ export class RenderQueueService extends EventEmitter {
     if((currentProfile?.modelFingerprint||undefined)!==(spec.modelFingerprint||undefined))throw new Error('Model/checkpoint fingerprint changed after queue. Queue a new render.');
   }
 
+  private isCurrentJobSpec(project:FilmProject,job:RenderJob,shot:Shot):boolean{
+    if(!job.spec)return false;
+    let currentWorkflowKey:string|undefined;
+    try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(project,shot));}catch{currentWorkflowKey=undefined;}
+    return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildPrompt(project,shot)===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
+  }
+
+  private async immutableFilesStillCurrent(project:FilmProject,job:RenderJob):Promise<boolean>{
+    const spec=job.spec;if(!spec)return false;
+    try{
+      const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),spec.workflowProfile.workflowPath,`workflow path for ${spec.workflowProfile.name}`);
+      if(await sha256File(workflowPath)!==spec.workflowSha256)return false;
+      for(const fingerprint of spec.assetFingerprints){
+        const asset=project.assets.find(item=>item.id===fingerprint.assetId);if(!asset||asset.projectPath!==fingerprint.projectPath)return false;
+        const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
+        if(await sha256File(path)!==fingerprint.sha256)return false;
+      }
+      return true;
+    }catch{return false;}
+  }
+
   private baseValues(job:RenderJob):WorkflowValues{
     const shot=job.spec!.shot;return{prompt:job.spec!.effectivePrompt,negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:shot.generation.frames,fps:shot.generation.fps,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed,filenamePrefix:`cineforge/${shot.id}/${job.id}`};
   }
 
-  private async populateLocalReferencePaths(project:FilmProject,shot:Shot,values:WorkflowValues):Promise<void>{
+  private async populateLocalReferencePaths(project:FilmProject,shot:Shot,profile:WorkflowProfile,values:WorkflowValues):Promise<void>{
     const path=async(id:string)=>{const asset=project.assets.find(a=>a.id===id);if(!asset)throw new Error(`Referenced asset not found: ${id}`);return assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);};
-    if(shot.startFrameAssetId)values.startImage=await path(shot.startFrameAssetId);
-    if(shot.endFrameAssetId)values.endImage=await path(shot.endFrameAssetId);
-    if(shot.locationAssetId)values.locationImage=await path(shot.locationAssetId);
-    for(const[i,id]of shot.characterAssetIds.slice(0,4).entries())Object.assign(values,{[`characterImage${i+1}`]:await path(id)});
-    for(const[i,id]of shot.propAssetIds.slice(0,2).entries())Object.assign(values,{[`propImage${i+1}`]:await path(id)});
-    const continuityRefs=collectContinuityReferenceAssets(project,shot);
-    values.referenceImages=await Promise.all(continuityRefs.slice(0,4).map(asset=>path(asset.id)));
-    for(const[i,asset]of continuityRefs.slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:await path(asset.id)});
-    if(shot.referenceVideoAssetId)values.inputVideo=await path(shot.referenceVideoAssetId);
-    if(shot.audioAssetId)values.inputAudio=await path(shot.audioAssetId);
+    const keys=new Set(profile.bindings.map(binding=>binding.key));
+    if(shot.startFrameAssetId&&keys.has('startImage'))values.startImage=await path(shot.startFrameAssetId);
+    if(shot.endFrameAssetId&&keys.has('endImage'))values.endImage=await path(shot.endFrameAssetId);
+    const plan=planShotReferences(shot,profile);
+    if(plan.locationId)values.locationImage=await path(plan.locationId);
+    for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{[`characterImage${index+1}`]:await path(id)});
+    for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{[`propImage${index+1}`]:await path(id)});
+    const genericPaths=await Promise.all(plan.genericIds.map(id=>path(id)));
+    if(plan.genericArray)values.referenceImages=genericPaths;
+    else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
+    if(shot.referenceVideoAssetId&&keys.has('inputVideo'))values.inputVideo=await path(shot.referenceVideoAssetId);
+    if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await path(shot.audioAssetId);
+  }
+
+  private async stageWanGpInputs(project:FilmProject,job:RenderJob,values:WorkflowValues):Promise<void>{
+    const spec=job.spec;if(!spec)throw new Error('Render job has no immutable spec.');
+    const expectedByPath=new Map<string,string>();
+    for(const fingerprint of spec.assetFingerprints){
+      const asset=project.assets.find(item=>item.id===fingerprint.assetId);if(!asset)throw new Error(`Referenced asset was removed after queue: ${fingerprint.assetId}`);
+      const source=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
+      expectedByPath.set(source,fingerprint.sha256);
+    }
+    const root=join(project.rootPath,'cache','wangp-inputs',job.id);await mkdir(root,{recursive:true});
+    const staged=new Map<string,string>();let index=0;
+    const stage=async(source:string):Promise<string>=>{
+      const cached=staged.get(source);if(cached)return cached;
+      const expected=expectedByPath.get(source);if(!expected)throw new Error(`WanGP input is not covered by the queued asset fingerprint set: ${source}`);
+      const safeName=basename(source).replace(/[^a-zA-Z0-9._-]+/g,'_')||'input.bin';
+      const target=await assertSafeWritePath(root,join(root,`${String(index++).padStart(2,'0')}-${safeName}`),'WanGP immutable input snapshot');
+      await copyFile(source,target);
+      if(await sha256File(target)!==expected)throw new Error(`Referenced asset changed while staging the immutable WanGP snapshot: ${basename(source)}. Queue a new render.`);
+      staged.set(source,target);return target;
+    };
+    const scalarKeys=['startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo'] as const;
+    for(const key of scalarKeys){const value=values[key];if(value)values[key]=await stage(value);}
+    if(values.referenceImages)values.referenceImages=await Promise.all(values.referenceImages.map(stage));
   }
 
   private async runWanGp(project:FilmProject,job:RenderJob):Promise<void>{
     const machine=this.settings.get(),shot=job.spec!.shot,profile=job.spec!.workflowProfile;
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing WanGP · ${profile.name}`},true,true);
-    const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,values);
+    const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,profile,values);await this.stageWanGpInputs(project,job,values);
     let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
+    await this.verifyImmutableSpec(this.requireProject(),job);
     const cacheDir=join(project.rootPath,'cache','wangp'),outputDir=join(project.rootPath,'renders',shot.id,job.id);
     await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(outputDir,{recursive:true})]);
     const settingsPath=await assertSafeWritePath(cacheDir,join(cacheDir,`${job.id}.json`),'WanGP job settings');
@@ -335,6 +397,7 @@ export class RenderQueueService extends EventEmitter {
       await this.updateJob(job.id,{status:'preparing',progress:.08,message:'WanGP dry-run validation'},true,true);
       const dry=startWanGp(project,machine,{settingsPath,outputDir,dryRun:true,runId:job.id});if(dry.pid)await this.updateJob(job.id,{backendPid:dry.pid},false,true);
       await waitWanGp(dry);if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
+      await this.verifyImmutableSpec(this.requireProject(),job);
     }
 
     let lastLogAt=0;
@@ -365,21 +428,21 @@ export class RenderQueueService extends EventEmitter {
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing ComfyUI · ${profile.name}`},true,true);
     const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable at ${machine.comfy.url}: ${ping.error||'unknown error'}`);
     const values=this.baseValues(job);await this.updateJob(job.id,{status:'uploading',progress:.1,message:'Staging continuity references'},true,true);
-    const stagedImages=new Map<string,string>();
+    const stagedImages=new Map<string,string>(),keys=new Set(profile.bindings.map(binding=>binding.key)),plan=planShotReferences(shot,profile);
     const stageImage=async(id:string)=>{const cached=stagedImages.get(id);if(cached)return cached;const staged=await this.stageComfyAsset(project,id,client,'image');stagedImages.set(id,staged);return staged;};
-    if(shot.startFrameAssetId)values.startImage=await stageImage(shot.startFrameAssetId);
-    if(shot.endFrameAssetId)values.endImage=await stageImage(shot.endFrameAssetId);
-    if(shot.locationAssetId)values.locationImage=await stageImage(shot.locationAssetId);
-    for(const[i,id]of shot.characterAssetIds.slice(0,4).entries())Object.assign(values,{[`characterImage${i+1}`]:await stageImage(id)});
-    for(const[i,id]of shot.propAssetIds.slice(0,2).entries())Object.assign(values,{[`propImage${i+1}`]:await stageImage(id)});
-    const continuityRefs=collectContinuityReferenceAssets(project,shot).slice(0,4);
-    values.referenceImages=await Promise.all(continuityRefs.map(asset=>stageImage(asset.id)));
-    values.referenceImages.forEach((value,index)=>Object.assign(values,{[`referenceImage${index+1}`]:value}));
-    if(shot.referenceVideoAssetId)values.inputVideo=await this.stageComfyAsset(project,shot.referenceVideoAssetId,client,'file');
-    if(shot.audioAssetId)values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
+    if(shot.startFrameAssetId&&keys.has('startImage'))values.startImage=await stageImage(shot.startFrameAssetId);
+    if(shot.endFrameAssetId&&keys.has('endImage'))values.endImage=await stageImage(shot.endFrameAssetId);
+    if(plan.locationId)values.locationImage=await stageImage(plan.locationId);
+    for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{[`characterImage${index+1}`]:await stageImage(id)});
+    for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{[`propImage${index+1}`]:await stageImage(id)});
+    const genericPaths=await Promise.all(plan.genericIds.map(id=>stageImage(id)));
+    if(plan.genericArray)values.referenceImages=genericPaths;
+    else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
+    if(shot.referenceVideoAssetId&&keys.has('inputVideo'))values.inputVideo=await this.stageComfyAsset(project,shot.referenceVideoAssetId,client,'file');
+    if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
 
-    const prompt=await compileProfile(profile,values);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
+    const prompt=await compileProfile(profile,values);await this.verifyImmutableSpec(this.requireProject(),job);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
     await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to ComfyUI',comfyPromptId:queued.prompt_id,lastHeartbeatAt:new Date().toISOString()},true,true);
     let history:any;
     try{history=await waitForComfyCompletion(client,queued.prompt_id,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:'running',progress:.35,message:`ComfyUI · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});}
@@ -394,23 +457,25 @@ export class RenderQueueService extends EventEmitter {
     const refs=uniqueComfyFileRefs(collectComfyFileRefs(history?.outputs||history));if(!refs.length)throw new Error('ComfyUI finished but no downloadable output files were found in history.');
     const outputDir=join(project.rootPath,'renders',shot.id,job.id);await mkdir(outputDir,{recursive:true});const outputs:RenderOutput[]=[];
     for(const ref of refs){
-      const bytes=await client.download(ref);const safeLeaf=ref.filename.replace(/[\\/]/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');const safeSub=(ref.subfolder||'').replace(/[\\/]+/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');
+      const safeLeaf=ref.filename.replace(/[\\/]/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');const safeSub=(ref.subfolder||'').replace(/[\\/]+/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');
       const destination=await assertSafeWritePath(outputDir,join(outputDir,`${String(outputs.length).padStart(2,'0')}-${safeSub?`${safeSub}-`:''}${safeLeaf}`),'ComfyUI output');
-      await writeFile(destination,bytes);const mediaType=inferMediaType(ref.filename);const output:RenderOutput={id:randomUUID(),jobId:job.id,shotId:shot.id,path:destination,filename:ref.filename,mediaType,createdAt:new Date().toISOString(),comfyMeta:{...ref,runtime:'comfyui'}};
+      await client.downloadToFile(ref,destination);const mediaType=inferMediaType(ref.filename);const output:RenderOutput={id:randomUUID(),jobId:job.id,shotId:shot.id,path:destination,filename:ref.filename,mediaType,createdAt:new Date().toISOString(),comfyMeta:{...ref,runtime:'comfyui'}};
       if(mediaType==='video')output.technicalQc=await technicalQcVideo(machine,destination,shot);outputs.push(output);
     }
     await this.commitOutputs(job,outputs);
   }
 
   private async commitOutputs(job:RenderJob,outputs:RenderOutput[]):Promise<void>{
+    const externalSpecCurrent=await this.immutableFilesStillCurrent(this.requireProject(),job);
     const videos=outputs.filter(o=>o.mediaType==='video'),passing=videos.find(o=>o.technicalQc?.passed);
     const expectsVideo=(job.spec?.workflowProfile.purpose??'video')==='video';
     const qcFailed=expectsVideo&&(!videos.length||!passing);const now=new Date().toISOString();
     await this.projects.mutate(p=>{
       for(const output of outputs)if(!p.renderOutputs.some(existing=>existing.id===output.id))p.renderOutputs.push(output);
       const target=p.renderJobs.find(j=>j.id===job.id);const shot=p.shots.find(s=>s.id===job.shotId);
-      if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message='Rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message='Done';target.error=undefined;}}
-      if(shot){if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
+      const currentSpec=Boolean(shot&&externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot));
+      if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message=currentSpec?'Rendered but failed technical QC':'Historical snapshot rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message=currentSpec?'Done':'Done · shot changed after queue; take kept as historical output';target.error=undefined;}}
+      if(shot){if(!currentSpec){if(shot.latestRenderId)shot.status='rendered';else if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(profile&&!qcFailed){profile.validation={...(profile.validation??{structuralStatus:'valid'}),structuralStatus:'valid',sourceSha256:job.spec?.workflowSha256,lastSuccessfulRenderAt:now};}
     });
     const current=this.projects.getCurrent()?.renderJobs.find(j=>j.id===job.id);if(current){this.liveJobs.set(job.id,structuredClone(current));await this.journal.write(this.requireProject().rootPath,current);}
@@ -443,5 +508,4 @@ export class RenderQueueService extends EventEmitter {
 function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
 function assetLine(asset:Asset|undefined,label:string):string{if(!asset)return'';return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}`;}
 function buildPrompt(project:FilmProject,shot:Shot):string{const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],refs=(shot.referenceAssetIds??[]).map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;return[shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',...characters.map(a=>assetLine(a,'Character continuity')),...refs.map(a=>assetLine(a,'Visual reference')),...props.map(a=>assetLine(a,'Prop / wardrobe continuity')),shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''].filter(Boolean).join('\n');}
-function collectContinuityReferenceAssets(project:FilmProject,shot:Shot):Asset[]{const ids=[...(shot.referenceAssetIds??[]),...shot.characterAssetIds,...(shot.locationAssetId?[shot.locationAssetId]:[]),...shot.propAssetIds];return[...new Set(ids)].map(id=>project.assets.find(a=>a.id===id)).filter((a):a is Asset=>Boolean(a));}
 function sleep(ms:number):Promise<void>{return new Promise(resolve=>setTimeout(resolve,ms));}

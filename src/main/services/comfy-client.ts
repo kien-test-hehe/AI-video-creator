@@ -1,4 +1,7 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { assertLocalUrl } from './local-url';
@@ -84,18 +87,88 @@ export class ComfyClient {
     return res.json();
   }
 
-  async interrupt(): Promise<void> {
-    const res = await this.request('/interrupt', { method: 'POST' }, 10_000);
+  async deleteQueued(promptId:string):Promise<void>{
+    const res=await this.request('/queue',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delete:[promptId]})},10_000);
+    if(!res.ok)throw new Error(`ComfyUI queue delete failed: ${res.status}`);
+  }
+
+  async interrupt(promptId?:string): Promise<void> {
+    const res = await this.request('/interrupt', {
+      method: 'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify(promptId?{prompt_id:promptId}:{})
+    }, 10_000);
     if (!res.ok) throw new Error(`ComfyUI interrupt failed: ${res.status}`);
   }
 
+  async cancelPrompt(promptId:string):Promise<void>{
+    const modern=await this.request(`/api/jobs/${encodeURIComponent(promptId)}/cancel`,{method:'POST'},10_000).catch(()=>undefined);
+    if(modern&&modern.status!==404&&modern.status!==405){
+      if(!modern.ok)throw new Error(`ComfyUI targeted cancel failed: ${modern.status} ${(await modern.text()).slice(0,1000)}`);
+      const payload=await modern.json().catch(()=>({})) as {cancelled?:boolean};
+      if(payload.cancelled===true)return;
+      if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} finished before cancellation could be applied.`);
+      throw new Error(`ComfyUI did not confirm targeted cancellation for ${promptId}.`);
+    }
+
+    const before=await this.queue();
+    const state=queueState(before,promptId);
+    if(state==='pending')await this.deleteQueued(promptId);
+    else if(state==='running')await this.interrupt(promptId);
+    else if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} already finished.`);
+    else throw new Error(`ComfyUI prompt ${promptId} is no longer present in queue or history.`);
+
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline){
+      const now=queueState(await this.queue(),promptId);
+      if(now==='absent'){
+        const history=await this.history(promptId);
+        if(!history)return;
+        if(historyWasInterrupted(history))return;
+        throw new Error(`ComfyUI prompt ${promptId} reached terminal history before cancellation was confirmed.`);
+      }
+      await new Promise(resolve=>setTimeout(resolve,150));
+    }
+    throw new Error(`ComfyUI did not confirm removal of prompt ${promptId} after cancellation.`);
+  }
+
   async download(ref: ComfyFileRef): Promise<Uint8Array> {
-    const url = this.url('/view');
-    url.searchParams.set('filename', ref.filename);
-    if (ref.subfolder) url.searchParams.set('subfolder', ref.subfolder);
-    if (ref.type) url.searchParams.set('type', ref.type);
-    const res = await fetch(url, { signal: AbortSignal.timeout(180_000) });
-    if (!res.ok) throw new Error(`ComfyUI output download failed: ${res.status}`);
+    const res=await this.outputResponse(ref);
     return new Uint8Array(await res.arrayBuffer());
   }
+
+  async downloadToFile(ref:ComfyFileRef,destination:string):Promise<void>{
+    const res=await this.outputResponse(ref,30*60_000);
+    if(!res.body)throw new Error('ComfyUI output download returned no response body.');
+    try{
+      await pipeline(Readable.fromWeb(res.body as any),createWriteStream(destination,{flags:'w'}));
+    }catch(error){
+      await rm(destination,{force:true}).catch(()=>undefined);
+      throw error;
+    }
+  }
+
+  private async outputResponse(ref:ComfyFileRef,timeoutMs=180_000):Promise<Response>{
+    const url=this.url('/view');
+    url.searchParams.set('filename',ref.filename);
+    if(ref.subfolder)url.searchParams.set('subfolder',ref.subfolder);
+    if(ref.type)url.searchParams.set('type',ref.type);
+    const res=await fetch(url,{signal:AbortSignal.timeout(timeoutMs)});
+    if(!res.ok)throw new Error(`ComfyUI output download failed: ${res.status} ${(await res.text()).slice(0,1000)}`);
+    return res;
+  }
+}
+
+function queueState(queue:any,promptId:string):'running'|'pending'|'absent'{
+  const running=Array.isArray(queue?.queue_running)?queue.queue_running:[];
+  const pending=Array.isArray(queue?.queue_pending)?queue.queue_pending:[];
+  if(running.some((item:any)=>Array.isArray(item)&&item[1]===promptId))return'running';
+  if(pending.some((item:any)=>Array.isArray(item)&&item[1]===promptId))return'pending';
+  return'absent';
+}
+
+
+export function historyWasInterrupted(history:unknown):boolean{
+  const messages=(history as any)?.status?.messages;
+  return Array.isArray(messages)&&messages.some((message:any)=>Array.isArray(message)&&message[0]==='execution_interrupted');
 }

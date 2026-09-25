@@ -24,9 +24,22 @@ import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/
 
 type Handler = (...args: any[]) => any;
 
+let activeExportAbortController:AbortController|null=null;
+let activeKeyframeAbortController:AbortController|null=null;
+let activeExportPromise:Promise<unknown>|null=null;
+let activeKeyframePromise:Promise<unknown>|null=null;
+let activeHandoffPromise:Promise<unknown>|null=null;
+
+export async function shutdownForegroundOperations():Promise<void>{
+  activeExportAbortController?.abort();
+  activeKeyframeAbortController?.abort();
+  const pending=[activeExportPromise,activeKeyframePromise,activeHandoffPromise].filter((value):value is Promise<unknown>=>Boolean(value));
+  if(pending.length)await Promise.allSettled(pending);
+}
+
 export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
-  let exportAbortController: AbortController | null = null;
   let keyframeBusy = false;
+  let directorBusy = false;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
       assertTrustedIpcSender(event,trustedRendererUrl);
@@ -34,8 +47,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     });
   };
 
-  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||exportAbortController)throw new Error('Finish or cancel active renders, keyframe generation, or timeline export before switching projects.');};
-  const assertGpuGenerationAvailable=()=>{if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
+  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||directorBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active renders, local Director work, keyframe generation, timeline export, or CapCut handoff before switching projects.');};
+  const assertGpuGenerationAvailable=()=>{if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
+  const assertDirectorAvailable=()=>{if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
 
   handle(IPC.projectCreate, async (name?: string) => {
     assertProjectSwitchAllowed();
@@ -61,13 +75,13 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
   handle(IPC.assetImport, (kind: AssetKind) => projects.importAsset(kind));
   handle(IPC.assetDelete, (assetId:string) => {
-    if(queue.isBusy()||keyframeBusy)throw new Error('Finish or cancel active generation before deleting project assets.');
+    if(queue.isBusy()||keyframeBusy||directorBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active generation/Director/export/handoff before deleting project assets.');
     return projects.deleteAsset(assetId);
   });
 
   handle(IPC.settingsGet, () => settings.get());
   handle(IPC.settingsSave, async (next: AppMachineSettings) => {
-    if (queue.isBusy()||keyframeBusy) throw new Error('Machine runtime settings cannot change while render jobs or keyframe generation are active.');
+    if (queue.isBusy()||keyframeBusy||directorBusy) throw new Error('Machine runtime settings cannot change while render jobs, keyframe generation, or local Director work are active.');
     return settings.save(next);
   });
 
@@ -113,8 +127,8 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.workflowProvisionWanGp, () => provisionRecommendedWanGpProfiles(projects,settings));
 
   handle(IPC.systemProbe, async()=>{
-    const project=requireProject(projects),machine=settings.get(),probe=await probeSystem(project,machine);
-    probe.codexContextPath=await writeCodexMachineContext(project,machine,probe);
+    const project=projects.getCurrent()??undefined,machine=settings.get(),probe=await probeSystem(project,machine);
+    if(project)probe.codexContextPath=await writeCodexMachineContext(project,machine,probe);
     return probe;
   });
   handle(IPC.comfyPing, async(url?:string)=>{
@@ -128,38 +142,60 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     shell.showItemInFolder(safe);
   });
 
-  handle(IPC.renderEnqueue,(request:RenderRequest)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before queueing a video render.');return queue.enqueue(request);});
-  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before queueing video renders.');return queue.enqueueBatch(request);});
-  handle(IPC.renderRetry,(jobId:string)=>{if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before retrying a render.');return queue.retry(jobId);});
+  handle(IPC.renderEnqueue,(request:RenderRequest)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before queueing a video render.');return queue.enqueue(request);});
+  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before queueing video renders.');return queue.enqueueBatch(request);});
+  handle(IPC.renderRetry,(jobId:string)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before retrying a render.');return queue.retry(jobId);});
   handle(IPC.renderCancel,(jobId:string)=>queue.cancel(jobId));
   handle(IPC.renderSnapshot,()=>queue.snapshot());
+  handle(IPC.renderOutputDelete,(outputId:string)=>{
+    if(activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel the active timeline export / CapCut handoff before deleting rendered takes.');
+    return projects.deleteRenderOutput(outputId);
+  });
 
   handle(IPC.directorPlanScene,async(sceneId:string)=>{
-    const project=requireProject(projects);
-    const scene=project.scenes.find(s=>s.id===sceneId);
-    if(!scene)throw new Error('Scene not found.');
-    return planSceneWithLocalDirector(project,scene,settings.get());
+    assertDirectorAvailable();directorBusy=true;
+    try{
+      const project=requireProject(projects);
+      const scene=project.scenes.find(s=>s.id===sceneId);
+      if(!scene)throw new Error('Scene not found.');
+      return await planSceneWithLocalDirector(project,scene,settings.get());
+    }finally{directorBusy=false;}
   });
   handle(IPC.directorReviewShot,async(shotId:string)=>{
-    const project=requireProject(projects);
-    const shot=project.shots.find(s=>s.id===shotId);
-    if(!shot)throw new Error('Shot not found.');
-    return reviewShotWithLocalDirector(project,shot,settings.get());
+    assertDirectorAvailable();directorBusy=true;
+    try{
+      const project=requireProject(projects);
+      const shot=project.shots.find(s=>s.id===shotId);
+      if(!shot)throw new Error('Shot not found.');
+      return await reviewShotWithLocalDirector(project,shot,settings.get());
+    }finally{directorBusy=false;}
   });
   handle(IPC.keyframeGenerate,async(request:KeyframeRequest)=>{
-    assertGpuGenerationAvailable();keyframeBusy=true;
-    try{return await generateKeyframe(projects,settings.get(),request);}
-    finally{keyframeBusy=false;}
+    assertGpuGenerationAvailable();keyframeBusy=true;activeKeyframeAbortController=new AbortController();
+    const task=generateKeyframe(projects,settings.get(),request,activeKeyframeAbortController.signal);activeKeyframePromise=task;
+    try{return await task;}
+    finally{keyframeBusy=false;activeKeyframeAbortController=null;activeKeyframePromise=null;}
+  });
+  handle(IPC.keyframeCancel,async()=>{
+    if(!keyframeBusy||!activeKeyframeAbortController)return false;
+    activeKeyframeAbortController.abort();
+    return true;
   });
   handle(IPC.timelineExport,async()=>{
-    if(exportAbortController)throw new Error('A timeline export is already running.');
+    if(activeExportAbortController)throw new Error('A timeline export is already running.');
     if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before exporting the timeline.');
-    exportAbortController=new AbortController();
-    try{return{outputPath:await exportTimeline(requireProject(projects),settings.get(),exportAbortController.signal)};}
-    finally{exportAbortController=null;}
+    activeExportAbortController=new AbortController();
+    const task=exportTimeline(requireProject(projects),settings.get(),activeExportAbortController.signal);activeExportPromise=task;
+    try{return{outputPath:await task};}
+    finally{activeExportAbortController=null;activeExportPromise=null;}
   });
-  handle(IPC.timelineCancelExport,async()=>{exportAbortController?.abort();});
-  handle(IPC.capcutPrepareHandoff,async()=>prepareCapCutHandoff(requireProject(projects)));
+  handle(IPC.timelineCancelExport,async()=>{activeExportAbortController?.abort();});
+  handle(IPC.capcutPrepareHandoff,async()=>{
+    if(activeHandoffPromise)throw new Error('A CapCut handoff is already being prepared.');
+    if(activeExportAbortController)throw new Error('Wait for the active timeline export to finish before preparing a CapCut handoff.');
+    const task=prepareCapCutHandoff(requireProject(projects));activeHandoffPromise=task;
+    try{return await task;}finally{activeHandoffPromise=null;}
+  });
 
   queue.on('snapshot',snapshot=>{for(const window of BrowserWindow.getAllWindows())if(!window.isDestroyed())window.webContents.send(IPC.queueEvent,snapshot);});
 }

@@ -35,6 +35,7 @@ const api: CineforgeApi = {
     retry: jobId => ipcRenderer.invoke(IPC.renderRetry, jobId),
     cancel: jobId => ipcRenderer.invoke(IPC.renderCancel, jobId),
     snapshot: () => ipcRenderer.invoke(IPC.renderSnapshot),
+    deleteOutput: outputId => ipcRenderer.invoke(IPC.renderOutputDelete, outputId),
     onQueueEvent: handler => {
       const listener = (_event: unknown, snapshot: any) => handler(snapshot);
       ipcRenderer.on(IPC.queueEvent, listener);
@@ -43,7 +44,7 @@ const api: CineforgeApi = {
   },
   timeline: { export: () => ipcRenderer.invoke(IPC.timelineExport), cancelExport: () => ipcRenderer.invoke(IPC.timelineCancelExport) },
   director: { planScene: sceneId => ipcRenderer.invoke(IPC.directorPlanScene, sceneId), reviewShot: shotId => ipcRenderer.invoke(IPC.directorReviewShot, shotId) },
-  keyframe: { generate: request => ipcRenderer.invoke(IPC.keyframeGenerate, request) },
+  keyframe: { generate: request => ipcRenderer.invoke(IPC.keyframeGenerate, request), cancel: () => ipcRenderer.invoke(IPC.keyframeCancel) },
   capcut: { prepareHandoff: () => ipcRenderer.invoke(IPC.capcutPrepareHandoff) }
 };
 

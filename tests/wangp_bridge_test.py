@@ -18,11 +18,13 @@ class WanGpBridgeTests(unittest.TestCase):
             "main_output":"video",
             "outputs":["video","audio"],
             "inputs":["text","image"],
+            "capabilities":{"text_to_image":True,"image_to_image":True},
             "description":"test"
         })
         self.assertEqual(item["modelType"],"ltx2_25_22B_distilled_nvfp4")
         self.assertEqual(item["mainOutput"],["video"])
         self.assertIn("image",item["inputs"])
+        self.assertTrue(item["capabilities"]["text_to_image"])
 
     def test_nested_metadata_shape_remains_supported(self):
         item=bridge.compact({"model_type":"x","metadata":{"outputs":"image","inputs":{"text":True}}})

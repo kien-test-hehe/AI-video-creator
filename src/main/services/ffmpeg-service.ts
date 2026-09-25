@@ -23,6 +23,8 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
   }
 
   const first=await probeVideo(machine.ffmpeg.ffprobePath,sources[0].path,signal);
+  const master={...first,fps:Math.max(1,project.settings.defaultFps||first.fps)};
+  const h264Encoder=await chooseH264Encoder(machine,signal);
   const cacheDir=join(project.rootPath,'cache',`export-${randomUUID()}`);
   const exportDir=join(project.rootPath,'exports');
   await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(exportDir,{recursive:true})]);
@@ -32,7 +34,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
       const target=await assertSafeWritePath(cacheDir,join(cacheDir,`${String(i).padStart(4,'0')}.mp4`),'normalized export clip');
       throwIfAborted(signal);
       const info=await probeVideo(machine.ffmpeg.ffprobePath,sources[i].path,signal);
-      await normalizeClip(machine,sources[i].path,target,sources[i].clip,info,first,signal);
+      await normalizeClip(machine,sources[i].path,target,sources[i].clip,info,master,h264Encoder,signal);
       normalized.push(target);
     }
     const listPath=join(cacheDir,'concat.txt');
@@ -51,7 +53,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
   }
 }
 
-async function normalizeClip(machine:AppMachineSettings,input:string,output:string,clip:TimelineClip,info:ProbeInfo,master:ProbeInfo,signal?:AbortSignal):Promise<void>{
+async function normalizeClip(machine:AppMachineSettings,input:string,output:string,clip:TimelineClip,info:ProbeInfo,master:ProbeInfo,h264Encoder:'h264_nvenc'|'libx264',signal?:AbortSignal):Promise<void>{
   throwIfAborted(signal);
   if(clip.trimOutSec!=null&&clip.trimOutSec<=clip.trimInSec)throw new Error(`Invalid timeline trim: out (${clip.trimOutSec}s) must be greater than in (${clip.trimInSec}s).`);
   if(info.durationSec!=null&&clip.trimInSec>=info.durationSec)throw new Error(`Invalid timeline trim: in (${clip.trimInSec}s) is beyond media duration (${info.durationSec.toFixed(3)}s).`);
@@ -65,13 +67,23 @@ async function normalizeClip(machine:AppMachineSettings,input:string,output:stri
   if(!info.hasAudio)args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000');
   const vf=`scale=${master.width}:${master.height}:force_original_aspect_ratio=decrease,pad=${master.width}:${master.height}:(ow-iw)/2:(oh-ih)/2,fps=${master.fps}`;
   args.push('-vf',vf);
-  if(machine.ffmpeg.preferredH264Encoder==='h264_nvenc')args.push('-c:v','h264_nvenc','-preset','p6','-cq','16','-b:v','0');
+  if(h264Encoder==='h264_nvenc')args.push('-c:v','h264_nvenc','-preset','p6','-cq','16','-b:v','0');
   else args.push('-c:v','libx264','-preset','medium','-crf','16');
   args.push('-pix_fmt','yuv420p');
   if(info.hasAudio)args.push('-af',`volume=${Math.max(0,clip.volume)}`);
   else args.push('-shortest');
   args.push('-c:a','aac','-b:a','256k','-ar','48000','-ac','2',output);
   await run(machine.ffmpeg.path,args,60*60_000,signal);
+}
+
+async function chooseH264Encoder(machine:AppMachineSettings,signal?:AbortSignal):Promise<'h264_nvenc'|'libx264'>{
+  const text=await runCapture(machine.ffmpeg.path,['-hide_banner','-encoders'],30_000,signal);
+  const hasNvenc=/\bh264_nvenc\b/.test(text),hasX264=/\blibx264\b/.test(text);
+  if(machine.ffmpeg.preferredH264Encoder==='h264_nvenc'&&hasNvenc)return'h264_nvenc';
+  if(machine.ffmpeg.preferredH264Encoder==='libx264'&&hasX264)return'libx264';
+  if(hasX264)return'libx264';
+  if(hasNvenc)return'h264_nvenc';
+  throw new Error('FFmpeg exposes neither h264_nvenc nor libx264; CineForge cannot normalize timeline clips.');
 }
 
 async function probeVideo(ffprobe:string,input:string,signal?:AbortSignal):Promise<ProbeInfo>{
