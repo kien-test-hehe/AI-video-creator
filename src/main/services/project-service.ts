@@ -170,6 +170,26 @@ export class ProjectService {
     return updated;
   }
 
+  async deleteRenderOutput(outputId:string):Promise<FilmProject>{
+    const current=this.current;if(!current)throw new Error('Open a project first.');
+    const output=current.renderOutputs.find(item=>item.id===outputId);if(!output)throw new Error('Render output not found.');
+    const duplicatePath=current.renderOutputs.some(item=>item.id!==outputId&&resolve(item.path)===resolve(output.path));
+    const absolute=duplicatePath?undefined:await assertExistingPathInside(join(current.rootPath,'renders'),output.path,'render output').catch(()=>undefined);
+    const updated=await this.mutate(project=>{
+      project.renderOutputs=project.renderOutputs.filter(item=>item.id!==outputId);
+      for(const job of project.renderJobs)job.outputs=job.outputs.filter(item=>item.id!==outputId);
+      project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId).sort((a,b)=>a.order-b.order).map((clip,index)=>({...clip,order:index}));
+      const shot=project.shots.find(item=>item.id===output.shotId);
+      if(shot?.latestRenderId===outputId){
+        const fallback=[...project.renderOutputs].filter(item=>item.shotId===shot.id&&item.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+        shot.latestRenderId=fallback?.id;
+        if(!fallback&&shot.status==='rendered')shot.status='ready';
+      }
+    });
+    if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete render output file after removing it from the project: ${absolute}`,error));
+    return updated;
+  }
+
   applyParsedScenes(parsed: ParsedScene[]): Promise<FilmProject> {
     return this.mutate(project => {
       project.scenes = parsed.map((p, index): Scene => ({
