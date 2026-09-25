@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from 'react';
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
 import { chooseModelForShot } from '../../../shared/routing';
-import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, WorkflowProfile } from '../../../shared/types';
+import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
-import { reorderTimeline, routeShotToWorkflow } from '../studio-logic';
+import { reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow } from '../studio-logic';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
 
@@ -80,7 +80,7 @@ export function Studio(){
       const id=`shot:${shot.id}`,y=42+index*158;
       nodes.push({id,kind:'shot',x:670,y,width:280,height:142,title:shot.title,subtitle:compact(shot.prompt||shot.action||'No visual prompt yet.',88),shotId:shot.id});
       edges.push({id:`scene-${shot.id}`,source:`scene:${shot.sceneId}`,target:id,kind:'primary'});
-      const route=resolveWorkflow(project.settings.workflowProfiles,shot);
+      const route=resolveStudioWorkflow(project.settings.workflowProfiles,shot);
       if(route)edges.push({id:`route-${shot.id}`,source:id,target:`workflow:${route.id}`,kind:route.validation?.structuralStatus==='valid'?'primary':'warning'});
     });
 
@@ -89,7 +89,7 @@ export function Studio(){
       const id=`workflow:${profile.id}`,y=42+index*142;
       nodes.push({id,kind:'workflow',x:1080,y,width:285,height:124,title:profile.name,subtitle:`${profile.runtime||'comfyui'} · ${profile.modelFamily} · ${profile.mode}`,profileId:profile.id});
     });
-    const unbound=sortedShots.filter(shot=>!resolveWorkflow(profiles,shot));
+    const unbound=sortedShots.filter(shot=>!resolveStudioWorkflow(profiles,shot));
     if(unbound.length){
       const id='workflow:missing',y=42+profiles.length*142;
       nodes.push({id,kind:'workflow',x:1080,y,width:285,height:124,title:'Unbound shots',subtitle:`${unbound.length} shot(s) have no enabled matching workflow profile`});
@@ -114,10 +114,10 @@ export function Studio(){
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
   const fallbackFocusId=selectedShot?`shot:${selectedShot.id}`:(nodes[0]?.id||'story');
   const focusedNode=nodeMap.get(focusedNodeId||fallbackFocusId)||nodeMap.get(fallbackFocusId);
-  const selectedRoute=selectedShot&&project?resolveWorkflow(project.settings.workflowProfiles,selectedShot):undefined;
+  const selectedRoute=selectedShot&&project?resolveStudioWorkflow(project.settings.workflowProfiles,selectedShot):undefined;
   const selectedRouteReady=selectedRoute?.validation?.structuralStatus==='valid';
   const activeNodeIds=useMemo(()=>{
-    const ids=new Set<string>();if(selectedShot){ids.add(`shot:${selectedShot.id}`);ids.add(`scene:${selectedShot.sceneId}`);const route=project?resolveWorkflow(project.settings.workflowProfiles,selectedShot):undefined;if(route)ids.add(`workflow:${route.id}`);}return ids;
+    const ids=new Set<string>();if(selectedShot){ids.add(`shot:${selectedShot.id}`);ids.add(`scene:${selectedShot.sceneId}`);const route=project?resolveStudioWorkflow(project.settings.workflowProfiles,selectedShot):undefined;if(route)ids.add(`workflow:${route.id}`);}return ids;
   },[project,selectedShot]);
 
   const updateViewRect=useCallback(()=>{
@@ -282,7 +282,7 @@ export function Studio(){
 function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerMove,onPointerUp,onActivate,onOpen,onDropToShot,onStartWorkflowDrag}:{node:StudioNode;project:FilmProject;selected:boolean;active:boolean;locked:boolean;onPointerDown:(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>void;onPointerMove:(event:ReactPointerEvent<HTMLElement>)=>void;onPointerUp:(event:ReactPointerEvent<HTMLElement>)=>void;onActivate:(node:StudioNode)=>void;onOpen:(view:ViewId)=>void;onDropToShot:(event:DragEvent<HTMLElement>,shotId:string)=>void;onStartWorkflowDrag:(event:DragEvent<HTMLElement>,profileId:string)=>void}){
   const shot=node.shotId?project.shots.find(item=>item.id===node.shotId):undefined;
   const profile=node.profileId?project.settings.workflowProfiles.find(item=>item.id===node.profileId):undefined;
-  const route=shot?resolveWorkflow(project.settings.workflowProfiles,shot):undefined;
+  const route=shot?resolveStudioWorkflow(project.settings.workflowProfiles,shot):undefined;
   const routeableProfile=Boolean(profile?.enabled&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&(profile.purpose??'video')==='video');
   const visual=shot?shotPreviewAsset(project,shot):undefined;
   const className=['studio-node',`node-${node.kind}`,selected?'selected':'',active?'on-path':'',locked?'locked':''].filter(Boolean).join(' ');
@@ -355,7 +355,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
   const[keyframeProfileId,setKeyframeProfileId]=useState('');
   const mutate=(fn:(shot:Shot)=>void)=>updateProject(next=>{const target=next.shots.find(item=>item.id===shot.id);if(target)fn(target);});
   const matching=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&profile.workflowPath);
-  const route=resolveWorkflow(project.settings.workflowProfiles,shot);
+  const route=resolveStudioWorkflow(project.settings.workflowProfiles,shot);
   const routeReady=route?.validation?.structuralStatus==='valid';
   const imageProfiles=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='image'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   const activeKeyframeProfileId=imageProfiles.some(profile=>profile.id===keyframeProfileId)?keyframeProfileId:(imageProfiles[0]?.id||'');
@@ -431,12 +431,6 @@ function NumberField({label,value,set,step=1}:{label:string;value:number;set:(va
 function isVisual(asset:Asset):boolean{return['image','reference','keyframe','character','location','prop','wardrobe'].includes(asset.kind);}
 function compact(value:string,max:number):string{const clean=value.replace(/\s+/g,' ').trim();return clean.length>max?`${clean.slice(0,max-1)}…`:clean;}
 function relativeOutput(root:string,path:string):string{const base=root.replace(/\\/g,'/').replace(/\/$/,'');const value=path.replace(/\\/g,'/');return value.startsWith(`${base}/`)?value.slice(base.length+1):value;}
-function resolveWorkflow(profiles:WorkflowProfile[],shot:Shot):WorkflowProfile|undefined{
-  const usable=(profile:WorkflowProfile)=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode;
-  const explicit=shot.generation.workflowProfileId?profiles.find(profile=>profile.id===shot.generation.workflowProfileId&&usable(profile)):undefined;
-  if(explicit)return explicit;
-  const candidates=profiles.filter(usable);return candidates.find(profile=>profile.validation?.structuralStatus==='valid')||candidates[0];
-}
 function shotPreviewAsset(project:FilmProject,shot:Shot):Asset|undefined{
   const ids=[shot.startFrameAssetId,shot.endFrameAssetId,shot.characterAssetIds[0],shot.locationAssetId,shot.propAssetIds[0]].filter((id):id is string=>Boolean(id));
   return ids.map(id=>project.assets.find(asset=>asset.id===id)).find((asset):asset is Asset=>Boolean(asset&&isVisual(asset)));
