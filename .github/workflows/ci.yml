@@ -19,9 +19,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
-          cache: npm
-          cache-dependency-path: package-lock.json
-        continue-on-error: true
       - name: Generate lockfile when bootstrapping
         if: hashFiles('package-lock.json') == ''
         run: npm install --package-lock-only --ignore-scripts
