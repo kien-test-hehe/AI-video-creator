@@ -63,6 +63,7 @@ export function Studio(){
   },[project]);
 
   const selectedShot=project?(project.shots.find(shot=>shot.id===selectedShotId)||sortedShots[0]):undefined;
+  const hardwareTier=probe?.hardwarePlan.tier,wanGpAvailable=probe?.wangp.available;
   const selectedShotIsValid=Boolean(selectedShotId&&sortedShots.some(shot=>shot.id===selectedShotId));
   useEffect(()=>{if((!selectedShotId||!selectedShotIsValid)&&sortedShots[0])selectShot(sortedShots[0].id);},[selectShot,selectedShotId,selectedShotIsValid,sortedShots]);
 
@@ -72,7 +73,7 @@ export function Studio(){
     const edges:StudioEdge[]=[];
     nodes.push({id:'story',kind:'story',x:40,y:70,width:230,height:132,title:project.story.title||project.name,subtitle:project.story.logline||'Script / story bible'});
     nodes.push({id:'assets',kind:'assets',x:40,y:280,width:230,height:132,title:'Asset Library',subtitle:`${project.assets.length} continuity / media assets`});
-    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${probe?.hardwarePlan.tier||'hardware unknown'} · WanGP ${probe?.wangp.available?'ready':'check'}`});
+    nodes.push({id:'system',kind:'system',x:40,y:490,width:230,height:132,title:'System / Preflight',subtitle:`${hardwareTier||'hardware unknown'} · WanGP ${wanGpAvailable?'ready':'check'}`});
 
     let sceneShotCursor=42;
     for(const scene of project.scenes){
@@ -119,7 +120,7 @@ export function Studio(){
     const workflowRows=profiles.length+(unbound.length?1:0);
     const height=Math.max(900,180+Math.max(sceneShotCursor,42+workflowRows*142));
     return{nodes,edges,width:2070,height};
-  },[probe?.hardwarePlan.tier,probe?.wangp.available,project,queue.jobs,selectedShot,sortedShots]);
+  },[hardwareTier,project,queue.jobs,selectedShot,sortedShots,wanGpAvailable]);
 
   const nodes=useMemo(()=>graph.nodes.map(node=>{const saved=positions[node.id],x=saved?.x??node.x,y=saved?.y??node.y;return{...node,x:Math.min(Math.max(0,graph.width-node.width),Math.max(0,x)),y:Math.min(Math.max(0,graph.height-node.height),Math.max(0,y))};}),[graph.height,graph.nodes,graph.width,positions]);
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
