@@ -12,6 +12,8 @@ $NodeRoot = Join-Path $RuntimeRoot "node-v$NodeVersion-win-x64"
 $WanRoot = Join-Path $RuntimeRoot 'Wan2GP'
 $WanPin = (Get-Content (Join-Path $RepoRoot 'runtime\WANGP_PIN.txt') -Raw).Trim()
 $EnvFile = Join-Path $RuntimeRoot 'cineforge.env.ps1'
+$BootstrapSettingsDir = Join-Path $env:LOCALAPPDATA 'CineForge'
+$BootstrapSettingsFile = Join-Path $BootstrapSettingsDir 'bootstrap-machine-settings.v1.json'
 
 function Step([string]$Message) {
   Write-Host ''
@@ -179,6 +181,44 @@ $escapedFfprobe = $ffprobePath.Replace("'", "''")
   '$env:CINEFORGE_DIRECTOR_URL = ''http://127.0.0.1:11434/v1'''
 ) | Set-Content -Encoding UTF8 $EnvFile
 
+New-Item -ItemType Directory -Force -Path $BootstrapSettingsDir | Out-Null
+$bootstrapSettings = @{
+  schemaVersion = 1
+  endpointPolicy = 'loopback-only'
+  ffmpeg = @{
+    path = $ffmpegPath
+    ffprobePath = $ffprobePath
+    preferredH264Encoder = 'h264_nvenc'
+  }
+  wangp = @{
+    executionMode = 'native'
+    rootPath = $WanRoot
+    pythonPath = $wanPython
+    entrypoint = 'wgp.py'
+    profile = 4
+    attention = 'auto'
+    dryRunBeforeRender = $true
+    docker = @{
+      command = 'docker'
+      image = ''
+      projectMount = '/workspace/project'
+      wangpMount = '/workspace/Wan2GP'
+    }
+  }
+  comfy = @{
+    url = 'http://127.0.0.1:8188'
+    inputDir = ''
+    dedicatedInstance = $true
+  }
+  director = @{
+    baseUrl = 'http://127.0.0.1:11434/v1'
+    model = ''
+    temperature = 0.3
+  }
+  diagnostics = @{ persistVerboseLogs = $false }
+}
+$bootstrapSettings | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $BootstrapSettingsFile
+
 Step 'Installing CineForge dependencies'
 $npm = Join-Path $NodeRoot 'npm.cmd'
 if (Test-Path (Join-Path $RepoRoot 'package-lock.json')) {
@@ -198,7 +238,7 @@ if (-not $SkipBuild) {
   if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed.' }
   & $npm run test:smoke --prefix $RepoRoot
   if ($LASTEXITCODE -ne 0) { throw 'Core smoke test failed.' }
-  & $python tests\wangp_bridge_test.py
+  & $python (Join-Path $RepoRoot 'tests\wangp_bridge_test.py')
   if ($LASTEXITCODE -ne 0) { throw 'WanGP bridge tests failed.' }
   & $npm run build --prefix $RepoRoot
   if ($LASTEXITCODE -ne 0) { throw 'Electron/Vite build failed.' }
@@ -212,3 +252,4 @@ Write-Host 'CineForge workstation setup is ready.' -ForegroundColor Green
 Write-Host 'Run: start.cmd'
 Write-Host 'CapCut Pro is NOT assumed. New projects default to CapCut Free / No Pro.'
 Write-Host 'WanGP model weights download on demand on the first generation for each chosen model.'
+Write-Host "Packaged CineForge will import bootstrap machine paths from: $BootstrapSettingsFile on first run (unless machine settings already exist)."
