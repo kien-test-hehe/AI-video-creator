@@ -12,7 +12,7 @@ export function Storyboard(){
   const addShot=(sceneId:string)=>updateProject(p=>{
     const scene=p.scenes.find(s=>s.id===sceneId);if(!scene)return;
     const index=p.shots.filter(s=>s.sceneId===sceneId).length+1,id=crypto.randomUUID(),d=MODEL_DEFAULTS[PRIMARY_VIDEO_MODEL];
-    const shot:Shot={id,sceneId,index,title:'Shot '+scene.index+'.'+index,prompt:scene.body,camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],status:'draft',generation:{modelFamily:PRIMARY_VIDEO_MODEL,mode:d.mode||'i2v',quality:'balanced',width:d.width!,height:d.height!,frames:d.frames!,fps:d.fps!,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??true}};
+    const shot:Shot={id,sceneId,index,title:'Shot '+scene.index+'.'+index,prompt:scene.body,camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'draft',generation:{modelFamily:PRIMARY_VIDEO_MODEL,mode:d.mode||'i2v',quality:'balanced',width:d.width!,height:d.height!,frames:d.frames!,fps:d.fps!,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??true}};
     p.shots.push(shot);scene.shotIds.push(id);
   });
 
@@ -25,7 +25,7 @@ export function Storyboard(){
         let index=p.shots.filter(s=>s.sceneId===sceneId).length;
         for(const draft of drafts){
           index+=1;const model=draft.preferredModel||PRIMARY_VIDEO_MODEL,d=MODEL_DEFAULTS[model],id=crypto.randomUUID();
-          const shot:Shot={id,sceneId,index,title:draft.title||('Shot '+scene.index+'.'+index),prompt:draft.prompt,camera:draft.camera,action:draft.action,dialogue:draft.dialogue,continuityNotes:draft.continuityNotes,characterAssetIds:draft.characterAssetIds||[],locationAssetId:draft.locationAssetId,propAssetIds:draft.propAssetIds||[],status:'draft',generation:{modelFamily:model,mode:d.mode||'i2v',quality:draft.quality,width:d.width||768,height:d.height||432,frames:d.frames||97,fps:d.fps||24,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??false}};
+          const shot:Shot={id,sceneId,index,title:draft.title||('Shot '+scene.index+'.'+index),prompt:draft.prompt,camera:draft.camera,action:draft.action,dialogue:draft.dialogue,continuityNotes:draft.continuityNotes,characterAssetIds:draft.characterAssetIds||[],locationAssetId:draft.locationAssetId,propAssetIds:draft.propAssetIds||[],referenceAssetIds:draft.referenceAssetIds||[],status:'draft',generation:{modelFamily:model,mode:d.mode||'i2v',quality:draft.quality,width:d.width||768,height:d.height||432,frames:d.frames||97,fps:d.fps||24,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??false}};
           p.shots.push(shot);scene.shotIds.push(id);
         }
       });
@@ -60,14 +60,14 @@ export function Storyboard(){
     else if(result)setError(result.message);
   };
 
-  return <Page title="Storyboard" subtitle="Drag shots to reorder them. Drag characters, locations, props, keyframes, audio or video from Assets directly onto a shot.">
+  return <Page title="Storyboard" subtitle="Drag shots to reorder them. Drag characters, locations, visual references, props, keyframes, audio or video from Assets directly onto a shot.">
     {project.scenes.length===0?<Empty>Parse your screenplay first.</Empty>:<div className="scene-stack">{project.scenes.map(scene=>{
       const shots=project.shots.filter(s=>s.sceneId===scene.id).sort((a,b)=>a.index-b.index);
       return <Card key={scene.id} kicker={'SCENE '+scene.index} title={scene.heading} actions={<div className="row"><button className="ghost" onClick={()=>aiPlan(scene.id)}>AI Director</button><button className="ghost" onClick={()=>addShot(scene.id)}>+ Shot</button></div>}>
         <p className="scene-body">{scene.body}</p>
         <div className="shot-strip">{shots.map(shot=><button className="shot-tile shot-drop-target" key={shot.id} draggable onDragStart={e=>startShotDrag(e,shot.id)} onDragOver={e=>e.preventDefault()} onDrop={e=>dropOnShot(e,shot.id)} onClick={()=>{selectShot(shot.id);setView('shots');}}>
           <span>{shot.title}</span><small>{shot.generation.modelFamily}</small>
-          <div className="shot-ref-pills"><Pill>C{shot.characterAssetIds.length}</Pill><Pill>{shot.locationAssetId?'LOC':'NO LOC'}</Pill><Pill>R{shot.propAssetIds.length}</Pill></div>
+          <div className="shot-ref-pills"><Pill>C{shot.characterAssetIds.length}</Pill><Pill>{shot.locationAssetId?'LOC':'NO LOC'}</Pill><Pill>REF{shot.referenceAssetIds?.length??0}</Pill><Pill>P{shot.propAssetIds.length}</Pill></div>
           <b>{shot.status}</b>
         </button>)}</div>
       </Card>;
