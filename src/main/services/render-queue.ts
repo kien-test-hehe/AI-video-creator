@@ -5,7 +5,7 @@ import { basename, join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type {
   AppMachineSettings, Asset, AssetFingerprint, FilmProject, QueueSnapshot, RenderBatchRequest, RenderJob, RenderOutput,
-  RenderRequest, Shot, WorkflowProfile
+  RenderRequest, Shot, SystemProbe, WorkflowProfile
 } from '../../shared/types';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
@@ -22,6 +22,7 @@ import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { JobJournal } from './job-journal';
 import { technicalQcVideo } from './technical-qc';
 import { isProcessAlive, killProcessTree } from './process-utils';
+import { probeSystem } from './system-probe';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -56,18 +57,23 @@ export class RenderQueueService extends EventEmitter {
     const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');
     if(this.hasActiveJobForShot(shot.id))throw new Error(`An active render already exists for ${shot.title}.`);
     const profile=routeWorkflow(project,shot,request.forceWorkflowProfileId);
-    const job=await this.createJob(project,shot,profile);
+    const machine=this.settings.get(),probe=await probeSystem(project,machine);
+    this.assertExecutionEnvironment(machine,profile,probe);
+    const job=await this.createJob(project,shot,profile,machine);
     await this.commitQueuedJobs([job]);return this.snapshot();
   }
 
   async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{
     const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
     const jobs:RenderJob[]=[];
+    const machine=this.settings.get(),probe=await probeSystem(project,machine);
     for(const id of [...new Set(request.shotIds)]){
       const shot=project.shots.find(s=>s.id===id);if(!shot)throw new Error(`Shot not found: ${id}`);
       if(request.skipIfRendered&&shot.latestRenderId)continue;
       if(this.hasActiveJobForShot(shot.id))continue;
-      jobs.push(await this.createJob(project,shot,routeWorkflow(project,shot)));
+      const profile=routeWorkflow(project,shot);
+      this.assertExecutionEnvironment(machine,profile,probe);
+      jobs.push(await this.createJob(project,shot,profile,machine));
     }
     if(jobs.length)await this.commitQueuedJobs(jobs);return this.snapshot();
   }
@@ -76,6 +82,9 @@ export class RenderQueueService extends EventEmitter {
     const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
     if(ACTIVE.has(prior.status))throw new Error('Cannot retry an active job.');
     if(!prior.spec)return this.enqueue({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
+    const project=this.requireProject(),machine=this.settings.get(),probe=await probeSystem(project,machine);
+    this.assertExecutionEnvironment(machine,prior.spec.workflowProfile,probe);
+    await this.verifyImmutableSpec(project,prior);
     const now=new Date().toISOString();
     const retry:RenderJob={id:randomUUID(),shotId:prior.shotId,createdAt:now,updatedAt:now,status:'queued',progress:0,message:`Retry of ${prior.id.slice(0,8)} · immutable snapshot`,modelFamily:prior.spec.shot.generation.modelFamily,workflowProfileId:prior.spec.workflowProfile.id,outputs:[],spec:structuredClone(prior.spec)};
     await this.commitQueuedJobs([retry]);return this.snapshot();
@@ -174,18 +183,30 @@ export class RenderQueueService extends EventEmitter {
 
   private hasActiveJobForShot(shotId:string):boolean{return this.snapshot().jobs.some(j=>j.shotId===shotId&&ACTIVE.has(j.status));}
 
-  private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile):Promise<RenderJob>{
+  private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile,machine:AppMachineSettings):Promise<RenderJob>{
     if(profile.validation?.structuralStatus!=='valid')throw new Error(`Profile “${profile.name}” must be validated in Settings before rendering.`);
     const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
     const workflowSha256=await sha256File(workflowPath);
     if(profile.validation.sourceSha256!==workflowSha256)throw new Error(`Profile “${profile.name}” changed after validation. Revalidate it before rendering.`);
-    const machine=this.settings.get();
     const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(runtime==='comfyui'&&!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance because cancellation/recovery uses server-wide queue controls.');
     const assetFingerprints=await this.fingerprintAssets(project,shot);
     const runtimeFingerprint=await fingerprintRuntime(machine,profile);
     const now=new Date().toISOString();
     return{id:randomUUID(),shotId:shot.id,createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(profile),effectivePrompt:buildPrompt(project,shot),queuedProjectUpdatedAt:project.updatedAt,workflowSha256,assetFingerprints,runtimeFingerprint,modelFingerprint:profile.modelFingerprint}};
+  }
+
+  private assertExecutionEnvironment(machine:AppMachineSettings,profile:WorkflowProfile,probe:SystemProbe):void{
+    if(!probe.ffmpeg.available||!probe.ffmpeg.ffprobeAvailable)throw new Error('FFmpeg and FFprobe must be available before queueing because every video output is technically QC-checked.');
+    if(probe.disk&&probe.disk.freeBytes<5*1024*1024*1024)throw new Error('Less than 5 GB free on the project volume. Free disk space before rendering.');
+    const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
+    if(runtime==='wangp'){
+      if(!probe.wangp.available)throw new Error(`WanGP is unavailable: ${probe.wangp.error||'not configured'}`);
+      if(machine.wangp.executionMode==='docker'&&!probe.docker?.available)throw new Error(`Docker is unavailable for the selected WanGP runtime: ${probe.docker?.error||'not running'}`);
+    }else{
+      if(!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance.');
+      if(!probe.comfy.reachable)throw new Error(`ComfyUI is unavailable: ${probe.comfy.error||machine.comfy.url}`);
+    }
   }
 
   private async fingerprintAssets(project:FilmProject,shot:Shot):Promise<AssetFingerprint[]>{
@@ -342,11 +363,12 @@ export class RenderQueueService extends EventEmitter {
 
   private async commitOutputs(job:RenderJob,outputs:RenderOutput[]):Promise<void>{
     const videos=outputs.filter(o=>o.mediaType==='video'),passing=videos.find(o=>o.technicalQc?.passed);
-    const qcFailed=videos.length>0&&!passing;const now=new Date().toISOString();
+    const expectsVideo=(job.spec?.workflowProfile.purpose??'video')==='video';
+    const qcFailed=expectsVideo&&(!videos.length||!passing);const now=new Date().toISOString();
     await this.projects.mutate(p=>{
       for(const output of outputs)if(!p.renderOutputs.some(existing=>existing.id===output.id))p.renderOutputs.push(output);
       const target=p.renderJobs.find(j=>j.id===job.id);const shot=p.shots.find(s=>s.id===job.shotId);
-      if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message='Rendered but failed technical QC';target.error=videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | ');}else{target.status='done';target.progress=1;target.message='Done';target.error=undefined;}}
+      if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message='Rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message='Done';target.error=undefined;}}
       if(shot){if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(profile&&!qcFailed){profile.validation={...(profile.validation??{structuralStatus:'valid'}),structuralStatus:'valid',sourceSha256:job.spec?.workflowSha256,lastSuccessfulRenderAt:now};}
     });
