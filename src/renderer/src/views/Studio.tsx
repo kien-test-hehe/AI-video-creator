@@ -202,7 +202,7 @@ export function Studio(){
   });
   const latest=selectedShot?.latestRenderId?project.renderOutputs.find(output=>output.id===selectedShot.latestRenderId):undefined;
 
-  return <section className="studio-page">
+  return <section className={`studio-page ${showDock?'':'without-dock'}`}>
     <header className="studio-commandbar">
       <div className="studio-command-title"><span className="eyebrow">UNIFIED PRODUCTION WORKSPACE</span><strong>{project.story.title||project.name}</strong></div>
       <div className="studio-hud">
