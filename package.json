@@ -4,7 +4,7 @@
   "private": true,
   "description": "Local-first Codex + CapCut AI film production orchestrator",
   "main": "out/main/index.js",
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:smoke": "node --experimental-strip-types scripts/core-smoke.ts",
+    "test:smoke": "tsx scripts/core-smoke.ts",
     "lint": "eslint .",
     "workflows:fetch": "node scripts/fetch-reference-workflows.mjs",
     "pack": "npm run build && electron-builder --dir",
