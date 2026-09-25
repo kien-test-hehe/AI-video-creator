@@ -34,6 +34,7 @@ export class RenderQueueService extends EventEmitter {
   private runningJobId?:string;
   private cancelled=new Set<string>();
   private wanGpProcesses=new Map<string,ChildProcess>();
+  private comfyCancelPromises=new Map<string,Promise<void>>();
   private liveJobs=new Map<string,RenderJob>();
   private lastJournalWrite=new Map<string,number>();
   private journal:JobJournal;
@@ -125,7 +126,7 @@ export class RenderQueueService extends EventEmitter {
           catch(error){this.cancelled.delete(jobId);throw error;}
         }
         if(promptId){
-          try{await client.cancelPrompt(promptId);}
+          try{await this.confirmComfyCancellation(jobId,client,promptId);}
           catch(error){this.cancelled.delete(jobId);throw new Error(`ComfyUI did not confirm cancellation for ${promptId}: ${error instanceof Error?error.message:String(error)}`);}
         }
         this.cancelled.add(jobId);
@@ -180,7 +181,7 @@ export class RenderQueueService extends EventEmitter {
         await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
       }
     }finally{
-      this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
+      this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
     }
   }
 
@@ -231,6 +232,13 @@ export class RenderQueueService extends EventEmitter {
 
   private hasActiveJobForShot(shotId:string):boolean{return this.snapshot().jobs.some(j=>j.shotId===shotId&&ACTIVE.has(j.status));}
 
+  private confirmComfyCancellation(jobId:string,client:ComfyClient,promptId:string):Promise<void>{
+    const existing=this.comfyCancelPromises.get(jobId);if(existing)return existing;
+    let pending:Promise<void>;
+    pending=client.cancelPrompt(promptId).catch(error=>{if(this.comfyCancelPromises.get(jobId)===pending)this.comfyCancelPromises.delete(jobId);throw error;});
+    this.comfyCancelPromises.set(jobId,pending);return pending;
+  }
+
   private async waitForComfyPromptOrExit(jobId:string,timeoutMs=35_000):Promise<string|undefined>{
     const deadline=Date.now()+timeoutMs;
     while(Date.now()<deadline){
@@ -247,7 +255,7 @@ export class RenderQueueService extends EventEmitter {
       return await waitForComfyCompletion(client,promptId,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:recovering?'recovering':'running',progress:recovering?Math.max(job.progress,.35):.35,message:`${recovering?'ComfyUI recovered':'ComfyUI'} · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});
     }catch(error){
       if(!(error instanceof Error)||!/timed out/i.test(error.message))throw error;
-      try{await client.cancelPrompt(promptId);}
+      try{await this.confirmComfyCancellation(job.id,client,promptId);}
       catch(cancelError){
         await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timed out; cancellation is unconfirmed, so the GPU slot remains reserved · ${cancelError instanceof Error?cancelError.message:String(cancelError)}`,lastHeartbeatAt:new Date().toISOString()},true,true);
         return this.waitForComfyResolutionAfterTimeout(client,job,promptId);
@@ -350,7 +358,7 @@ export class RenderQueueService extends EventEmitter {
         if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
       }
     }finally{
-      this.wanGpProcesses.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
+      this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
     }
   }
 
@@ -506,7 +514,7 @@ export class RenderQueueService extends EventEmitter {
     const prompt=await compileProfile(profile,values);await this.verifyImmutableSpec(this.requireProject(),job);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
     await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to ComfyUI',comfyPromptId:queued.prompt_id,lastHeartbeatAt:new Date().toISOString()},true,true);
     if(this.cancelled.has(job.id)){
-      try{await client.cancelPrompt(queued.prompt_id);}
+      try{await this.confirmComfyCancellation(job.id,client,queued.prompt_id);}
       catch(error){
         this.cancelled.delete(job.id);
         await this.updateJob(job.id,{status:'submitted',message:`Cancellation was not confirmed; render continues under the reserved GPU slot · ${error instanceof Error?error.message:String(error)}`},true,true);
