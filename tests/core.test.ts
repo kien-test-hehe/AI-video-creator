@@ -5,7 +5,8 @@ import { assertLocalUrl } from '../src/main/services/local-url';
 import { assertPathInside, assertRelativeProjectPath } from '../src/main/services/path-safety';
 import { chooseModelForShot } from '../src/shared/routing';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
-import type { Shot } from '../src/shared/types';
+import type { Asset, Shot } from '../src/shared/types';
+import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,6 +25,17 @@ describe('workflow engine',()=>{
 });
 describe('local-only networking',()=>{it('accepts loopback and blocks public hosts',()=>{expect(assertLocalUrl('http://127.0.0.1:8188').hostname).toBe('127.0.0.1');expect(()=>assertLocalUrl('https://example.com')).toThrow(/Local-only/);});});
 function routedShot(overrides:Partial<Shot>={}):Pick<Shot,'dialogue'|'generation'|'camera'|'action'>{const generation:Shot['generation']={modelFamily:'ltx-2.5-fast',mode:'i2v',width:1280,height:720,frames:121,fps:24,steps:8,cfg:1,seed:42,quality:'balanced',includeAudio:false,negativePrompt:''};return{dialogue:'',camera:'locked tripod',action:'A person looks out of a window.',...overrides,generation:{...generation,...(overrides.generation||{})}};}
+describe('drag-drop asset assignment',()=>{
+ it('assigns visual roles predictably and refuses silent overflow',()=>{
+   const shot:Shot={id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],status:'draft',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}};
+   const asset=(id:string,kind:Asset['kind']):Asset=>({id,kind,name:id,sourcePath:id,projectPath:`assets/${id}.png`,tags:[],notes:'',createdAt:new Date(0).toISOString()});
+   expect(autoAssignAssetToShot(shot,asset('hero','character')).role).toBe('character');
+   expect(autoAssignAssetToShot(shot,asset('start','keyframe')).role).toBe('start frame');
+   expect(autoAssignAssetToShot(shot,asset('end','image')).role).toBe('end frame');
+   expect(autoAssignAssetToShot(shot,asset('extra','image')).ok).toBe(false);
+   expect(shot.status).toBe('ready');
+ });
+});
 describe('hardware advisor',()=>{
  it('recognizes a 16 GB RTX 50-series workstation and chooses the managed low-VRAM profile',()=>{
    const plan=deriveHardwarePlan({cpu:{model:'Intel Core i5-14400F',logicalCores:16,physicalCores:10},gpu:{name:'NVIDIA GeForce RTX 5060 Ti',totalVramMb:16384,freeVramMb:15000},memory:{totalMb:48*1024,freeMb:32*1024}});
