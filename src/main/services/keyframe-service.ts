@@ -58,11 +58,11 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
 
 async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end'):Promise<string>{
   let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
-  const cache=join(project.rootPath,'cache','keyframes',randomUUID());await mkdir(cache,{recursive:true});
+  const runId=`keyframe-${randomUUID()}`,cache=join(project.rootPath,'cache','keyframes',runId);await mkdir(cache,{recursive:true});
   try{
     const settingsPath=join(cache,'settings.json'),outputDir=join(cache,'output');await mkdir(outputDir,{recursive:true});await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
-    if(machine.wangp.dryRunBeforeRender){const dry=startWanGp(project,machine,{settingsPath,outputDir,dryRun:true});await waitWanGp(dry);}
-    const child=startWanGp(project,machine,{settingsPath,outputDir});await waitWanGp(child);
+    if(machine.wangp.dryRunBeforeRender){const dry=startWanGp(project,machine,{settingsPath,outputDir,dryRun:true,runId});await waitWanGp(dry);}
+    const child=startWanGp(project,machine,{settingsPath,outputDir,runId});await waitWanGp(child);
     const files=await collectWanGpOutputs(outputDir);const image=files.find(path=>outputMediaType(path)==='image');if(!image)throw new Error(`WanGP keyframe profile completed but returned no image for ${shot.title} ${role}.`);
     const durable=join(project.rootPath,'cache','keyframe-stage',`${randomUUID()}${extname(image)||'.png'}`);await mkdir(join(project.rootPath,'cache','keyframe-stage'),{recursive:true});await copyFile(image,durable);return durable;
   }finally{await rm(cache,{recursive:true,force:true}).catch(()=>undefined);}
