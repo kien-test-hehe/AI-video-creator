@@ -29,6 +29,9 @@ export function Studio(){
   const[importKind,setImportKind]=useState<AssetKind>('reference');
   const[assetSearch,setAssetSearch]=useState('');
   const[preflightBusy,setPreflightBusy]=useState(false);
+  const[showLibrary,setShowLibrary]=useState(true);
+  const[showInspector,setShowInspector]=useState(true);
+  const[showDock,setShowDock]=useState(true);
   const[preflightSummary,setPreflightSummary]=useState('unchecked');
   const[positions,setPositions]=useState<Record<string,Point>>(()=>loadStudioLayout(projectId));
   const[viewRect,setViewRect]=useState<ViewRect>({left:0,top:0,width:1000,height:700});
@@ -215,14 +218,17 @@ export function Studio(){
         <button className="ghost" onClick={fitAll}>Fit all</button>
         <button className={locked?'ghost active-toggle':'ghost'} onClick={()=>setLocked(value=>!value)}>{locked?'Unlock nodes':'Lock nodes'}</button>
         <button className="ghost" onClick={resetLayout}>Auto layout</button>
+        <button className={showLibrary?'ghost active-toggle':'ghost'} onClick={()=>setShowLibrary(value=>!value)}>Library</button>
+        <button className={showInspector?'ghost active-toggle':'ghost'} onClick={()=>setShowInspector(value=>!value)}>Inspector</button>
+        <button className={showDock?'ghost active-toggle':'ghost'} onClick={()=>setShowDock(value=>!value)}>Dock</button>
         <button className="ghost" disabled={preflightBusy||sortedShots.length===0} onClick={runPreflight}>{preflightBusy?'Checking…':`Preflight · ${preflightSummary}`}</button>
         <button className="ghost" disabled={sortedShots.length===0||preflightBusy} onClick={renderAll}>Render all</button>
         <button className="primary" disabled={!selectedShot} onClick={queueSelected}>Render selected</button>
       </div>
     </header>
 
-    <div className="studio-layout">
-      <aside className="studio-library">
+    <div className={['studio-layout',!showLibrary?'without-library':'',!showInspector?'without-inspector':''].filter(Boolean).join(' ')}>
+      {showLibrary&&<aside className="studio-library">
         <div className="studio-panel-head"><div><span className="eyebrow">LIBRARY</span><strong>Assets</strong></div><span>{project.assets.length}</span></div>
         <div className="studio-import-row"><select value={importKind} onChange={event=>setImportKind(event.target.value as AssetKind)}>{ASSET_KINDS.map(kind=><option key={kind}>{kind}</option>)}</select><button className="primary" onClick={importAsset}>Import</button></div>
         <input className="studio-search" value={assetSearch} onChange={event=>setAssetSearch(event.target.value)} placeholder="Search assets / tags…"/>
@@ -235,7 +241,7 @@ export function Studio(){
           <div className="studio-scene-list">{project.scenes.map(scene=>{const shots=sortedShots.filter(shot=>shot.sceneId===scene.id);return <button key={scene.id} onClick={()=>{const first=shots[0];if(first)selectShot(first.id);scrollToNode(`scene:${scene.id}`,nodeMap,viewportRef.current,zoom);}}><span>{scene.index}</span><div><strong>{scene.heading}</strong><small>{shots.length} shots</small></div></button>;})}</div>
         </div>
         <div className="studio-section-links"><QuickLink label="Story" view="story" setView={setView}/><QuickLink label="Assets" view="assets" setView={setView}/><QuickLink label="Storyboard" view="storyboard" setView={setView}/><QuickLink label="Settings" view="settings" setView={setView}/></div>
-      </aside>
+      </aside>}
 
       <main className="studio-canvas-panel">
         <div className="studio-canvas-title"><div><span className="eyebrow">PIPELINE GRAPH</span><strong>Story → scenes → shots → workflows → render → edit</strong></div><span>Drag blank canvas to pan · Ctrl/⌘ + wheel zoom · node position is visual only</span></div>
@@ -252,19 +258,19 @@ export function Studio(){
         </div>
       </main>
 
-      <aside className="studio-inspector">
+      {showInspector&&<aside className="studio-inspector">
         {!selectedShot?<div className="studio-mini-empty">Select a shot node to inspect it.</div>:<ShotInspector project={project} shot={selectedShot} latestPath={latest?.path} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>}
-      </aside>
+      </aside>}
     </div>
 
-    <footer className="studio-bottom-dock">
+    {showDock&&<footer className="studio-bottom-dock">
       <section className="studio-dock-block queue-dock"><div className="studio-dock-head"><div><span className="eyebrow">QUEUE</span><strong>{queue.jobs.filter(job=>ACTIVE_JOB_STATUSES.has(job.status)).length} active / {queue.jobs.length} total</strong></div><button className="ghost" onClick={()=>setView('queue')}>Open queue ↗</button></div>
         <div className="studio-job-strip">{queue.jobs.length===0?<span className="muted">Nothing queued.</span>:queue.jobs.map(job=>{const shot=project.shots.find(item=>item.id===job.shotId),active=ACTIVE_JOB_STATUSES.has(job.status),retryable=['failed','cancelled','orphaned'].includes(job.status);return <div className="studio-job" key={job.id}><span className={`job-dot ${job.status}`}/><div><strong>{shot?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}%</small></div><div className="studio-job-progress"><i style={{width:`${Math.round(job.progress*100)}%`}}/></div>{active?<button className="studio-job-action" title="Cancel job" onClick={()=>cancelJob(job.id)}>×</button>:retryable?<button className="studio-job-action" title="Retry exact job" onClick={()=>retryJob(job.id)}>↻</button>:null}</div>;})}</div>
       </section>
       <section className="studio-dock-block timeline-dock"><div className="studio-dock-head"><div><span className="eyebrow">TIMELINE</span><strong>{project.timeline.length} clips</strong></div><button className="ghost" onClick={()=>setView('timeline')}>Open timeline ↗</button></div>
         <div className="studio-timeline-strip">{project.timeline.length===0?<span className="muted">Build a cut from rendered takes.</span>:[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>{event.preventDefault();const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(sourceId)updateProject(next=>{reorderTimeline(next,sourceId,clip.id);});}} onClick={()=>{if(shot){selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
       </section>
-    </footer>
+    </footer>}
   </section>;
 }
 
