@@ -71,6 +71,15 @@ async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,
 async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end'):Promise<string>{
   const client=new ComfyClient(machine.comfy.url,true);const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable: ${ping.error||machine.comfy.url}`);
   if(values.startImage){const uploaded=await client.uploadImage(values.startImage);values.startImage=uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;}
+  if(values.referenceImages?.length){
+    const staged:string[]=[];
+    for(const path of values.referenceImages){
+      const uploaded=await client.uploadImage(path);
+      staged.push(uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename);
+    }
+    values.referenceImages=staged;
+    staged.slice(0,4).forEach((path,index)=>Object.assign(values,{[`referenceImage${index+1}`]:path}));
+  }
   const workflow=await compileProfile(profile,values);const queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role}});
   const history=await waitForComfyCompletion(client,queued.prompt_id,{timeoutMs:60*60_000});const refs=uniqueComfyFileRefs(collectComfyFileRefs(history?.outputs||history));const imageRef=refs.find(r=>inferMediaType(r.filename)==='image');if(!imageRef)throw new Error('Image workflow completed but returned no image output.');
   const bytes=await client.download(imageRef),durable=join(project.rootPath,'cache','keyframe-stage',`${randomUUID()}${extname(imageRef.filename)||'.png'}`);await mkdir(join(project.rootPath,'cache','keyframe-stage'),{recursive:true});await writeFile(durable,bytes);return durable;
