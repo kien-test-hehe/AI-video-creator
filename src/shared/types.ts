@@ -61,7 +61,7 @@ export interface StoryDocument { title:string;logline:string;script:string;notes
 export interface Scene { id:UUID;index:number;heading:string;body:string;location?:string;timeOfDay?:string;shotIds:UUID[]; }
 export interface Asset { id:UUID;kind:AssetKind;name:string;sourcePath:string;projectPath:string;mimeType?:string;tags:string[];notes:string;createdAt:ISODate; }
 export interface ShotGenerationSettings { modelFamily:ModelFamily;mode:GenerationMode;quality:QualityIntent;width:number;height:number;frames:number;fps:number;steps?:number;cfg?:number;seed:number;negativePrompt:string;includeAudio:boolean;workflowProfileId?:UUID; }
-export interface Shot { id:UUID;sceneId:UUID;index:number;title:string;prompt:string;camera:string;action:string;dialogue:string;continuityNotes:string;characterAssetIds:UUID[];locationAssetId?:UUID;propAssetIds:UUID[];startFrameAssetId?:UUID;endFrameAssetId?:UUID;referenceVideoAssetId?:UUID;audioAssetId?:UUID;status:ShotStatus;generation:ShotGenerationSettings;latestRenderId?:UUID; }
+export interface Shot { id:UUID;sceneId:UUID;index:number;title:string;prompt:string;camera:string;action:string;dialogue:string;continuityNotes:string;characterAssetIds:UUID[];locationAssetId?:UUID;propAssetIds:UUID[];referenceAssetIds?:UUID[];startFrameAssetId?:UUID;endFrameAssetId?:UUID;referenceVideoAssetId?:UUID;audioAssetId?:UUID;status:ShotStatus;generation:ShotGenerationSettings;latestRenderId?:UUID; }
 
 export interface WorkflowValidation {
   structuralStatus: 'unvalidated' | 'valid' | 'invalid';
@@ -187,5 +187,5 @@ export interface TechnicalQcResult {
 }
 
 export interface ContinuityReview { issues:string[];suggestedContinuityNotes:string;promptAddendum:string; }
-export interface DirectorShotDraft { title:string;prompt:string;camera:string;action:string;dialogue:string;continuityNotes:string;quality:QualityIntent;preferredModel?:ModelFamily;characterAssetIds?:UUID[];locationAssetId?:UUID;propAssetIds?:UUID[]; }
+export interface DirectorShotDraft { title:string;prompt:string;camera:string;action:string;dialogue:string;continuityNotes:string;quality:QualityIntent;preferredModel?:ModelFamily;characterAssetIds?:UUID[];locationAssetId?:UUID;propAssetIds?:UUID[];referenceAssetIds?:UUID[]; }
 export interface ParsedScene { heading:string;body:string;location?:string;timeOfDay?:string; }

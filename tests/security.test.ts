@@ -31,6 +31,47 @@ describe('portable project trust boundary',()=>{
     expect(loaded.migrationNotes.join(' ')).toMatch(/discarded executable paths/i);
   });
 
+  it('preserves dedicated generic visual references while filtering unknown ids',()=>{
+    const root='/safe/project';
+    const loaded=loadPortableProject({
+      schemaVersion:2,id:'p2',name:'Refs',rootPath:'/attacker',
+      story:{title:'Refs',logline:'',script:'',notes:''},
+      scenes:[{id:'scene',index:1,heading:'INT. ROOM - DAY',body:'',shotIds:['shot']}],
+      assets:[
+        {id:'ref1',kind:'reference',name:'Look',sourcePath:'look.png',projectPath:'assets/reference/look.png',tags:[],notes:'palette',createdAt:'2026-01-01T00:00:00.000Z'},
+        {id:'prop1',kind:'prop',name:'Cup',sourcePath:'cup.png',projectPath:'assets/prop/cup.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}
+      ],
+      shots:[{id:'shot',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:['prop1'],referenceAssetIds:['ref1','missing'],status:'draft',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}}],
+      renderJobs:[],renderOutputs:[],timeline:[],
+      settings:{costPolicy:{allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    },root);
+    expect(loaded.project.shots[0].referenceAssetIds).toEqual(['ref1']);
+    expect(loaded.project.shots[0].propAssetIds).toEqual(['prop1']);
+  });
+
+  it('migrates legacy reference-in-prop data and filters role-kind mismatches',()=>{
+    const root='/safe/project';
+    const loaded=loadPortableProject({
+      schemaVersion:2,id:'p3',name:'Roles',rootPath:'/attacker',
+      story:{title:'Roles',logline:'',script:'',notes:''},
+      scenes:[{id:'scene',index:1,heading:'EXT. STREET - DAY',body:'',shotIds:['shot']}],
+      assets:[
+        {id:'char',kind:'character',name:'Hero',sourcePath:'char.png',projectPath:'assets/character/char.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'},
+        {id:'loc',kind:'location',name:'Street',sourcePath:'loc.png',projectPath:'assets/location/loc.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'},
+        {id:'look',kind:'reference',name:'Look',sourcePath:'look.png',projectPath:'assets/reference/look.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'},
+        {id:'coat',kind:'wardrobe',name:'Coat',sourcePath:'coat.png',projectPath:'assets/wardrobe/coat.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}
+      ],
+      shots:[{id:'shot',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:['loc','char'],locationAssetId:'char',propAssetIds:['look','coat'],status:'draft',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}}],
+      renderJobs:[],renderOutputs:[],timeline:[],
+      settings:{costPolicy:{allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    },root);
+    const shot=loaded.project.shots[0];
+    expect(shot.characterAssetIds).toEqual(['char']);
+    expect(shot.locationAssetId).toBeUndefined();
+    expect(shot.propAssetIds).toEqual(['coat']);
+    expect(shot.referenceAssetIds).toEqual(['look']);
+  });
+
   it('rejects oversized or invalid semantic references at schema level',()=>{
     expect(()=>loadPortableProject({
       schemaVersion:2,id:'p',name:'x',story:{},scenes:[],assets:[],shots:[{id:'s',sceneId:'missing',generation:{}}],renderJobs:[],renderOutputs:[],timeline:[],

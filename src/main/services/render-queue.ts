@@ -357,12 +357,16 @@ export class RenderQueueService extends EventEmitter {
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing ComfyUI · ${profile.name}`},true,true);
     const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable at ${machine.comfy.url}: ${ping.error||'unknown error'}`);
     const values=this.baseValues(job);await this.updateJob(job.id,{status:'uploading',progress:.1,message:'Staging continuity references'},true,true);
-    if(shot.startFrameAssetId)values.startImage=await this.stageComfyAsset(project,shot.startFrameAssetId,client,'image');
-    if(shot.endFrameAssetId)values.endImage=await this.stageComfyAsset(project,shot.endFrameAssetId,client,'image');
-    if(shot.locationAssetId)values.locationImage=await this.stageComfyAsset(project,shot.locationAssetId,client,'image');
-    for(const[i,id]of shot.characterAssetIds.slice(0,4).entries())Object.assign(values,{[`characterImage${i+1}`]:await this.stageComfyAsset(project,id,client,'image')});
-    for(const[i,id]of shot.propAssetIds.slice(0,2).entries())Object.assign(values,{[`propImage${i+1}`]:await this.stageComfyAsset(project,id,client,'image')});
-    for(const[i,a]of collectContinuityReferenceAssets(project,shot).slice(0,4).entries())Object.assign(values,{[`referenceImage${i+1}`]:await this.stageComfyAsset(project,a.id,client,'image')});
+    const stagedImages=new Map<string,string>();
+    const stageImage=async(id:string)=>{const cached=stagedImages.get(id);if(cached)return cached;const staged=await this.stageComfyAsset(project,id,client,'image');stagedImages.set(id,staged);return staged;};
+    if(shot.startFrameAssetId)values.startImage=await stageImage(shot.startFrameAssetId);
+    if(shot.endFrameAssetId)values.endImage=await stageImage(shot.endFrameAssetId);
+    if(shot.locationAssetId)values.locationImage=await stageImage(shot.locationAssetId);
+    for(const[i,id]of shot.characterAssetIds.slice(0,4).entries())Object.assign(values,{[`characterImage${i+1}`]:await stageImage(id)});
+    for(const[i,id]of shot.propAssetIds.slice(0,2).entries())Object.assign(values,{[`propImage${i+1}`]:await stageImage(id)});
+    const continuityRefs=collectContinuityReferenceAssets(project,shot).slice(0,4);
+    values.referenceImages=await Promise.all(continuityRefs.map(asset=>stageImage(asset.id)));
+    values.referenceImages.forEach((value,index)=>Object.assign(values,{[`referenceImage${index+1}`]:value}));
     if(shot.referenceVideoAssetId)values.inputVideo=await this.stageComfyAsset(project,shot.referenceVideoAssetId,client,'file');
     if(shot.audioAssetId)values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
@@ -428,8 +432,8 @@ export class RenderQueueService extends EventEmitter {
   private emitSnapshot():void{this.emit('snapshot',this.snapshot());}
 }
 
-function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
+function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
 function assetLine(asset:Asset|undefined,label:string):string{if(!asset)return'';return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}`;}
-function buildPrompt(project:FilmProject,shot:Shot):string{const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;return[shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',...characters.map(a=>assetLine(a,'Character continuity')),...props.map(a=>assetLine(a,'Prop continuity')),shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''].filter(Boolean).join('\n');}
-function collectContinuityReferenceAssets(project:FilmProject,shot:Shot):Asset[]{const ids=[...shot.characterAssetIds,...(shot.locationAssetId?[shot.locationAssetId]:[]),...shot.propAssetIds];return[...new Set(ids)].map(id=>project.assets.find(a=>a.id===id)).filter((a):a is Asset=>Boolean(a));}
+function buildPrompt(project:FilmProject,shot:Shot):string{const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],refs=(shot.referenceAssetIds??[]).map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;return[shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',...characters.map(a=>assetLine(a,'Character continuity')),...refs.map(a=>assetLine(a,'Visual reference')),...props.map(a=>assetLine(a,'Prop / wardrobe continuity')),shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''].filter(Boolean).join('\n');}
+function collectContinuityReferenceAssets(project:FilmProject,shot:Shot):Asset[]{const ids=[...(shot.referenceAssetIds??[]),...shot.characterAssetIds,...(shot.locationAssetId?[shot.locationAssetId]:[]),...shot.propAssetIds];return[...new Set(ids)].map(id=>project.assets.find(a=>a.id===id)).filter((a):a is Asset=>Boolean(a));}
 function sleep(ms:number):Promise<void>{return new Promise(resolve=>setTimeout(resolve,ms));}
