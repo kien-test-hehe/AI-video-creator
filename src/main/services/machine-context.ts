@@ -10,7 +10,7 @@ export async function writeCodexMachineContext(project:FilmProject,machine:AppMa
   const snapshot={
     generatedAt:new Date().toISOString(),projectId:project.id,
     policy:{capcutTier:project.settings.capcut.pro?'pro':'free',capcutAiCreditsAllowed:project.settings.costPolicy.allowCapcutAiCredits,cloudGenerationAllowed:false},
-    platform:{platform:probe.platform.platform,release:probe.platform.release,arch:probe.platform.arch},cpu:probe.cpu,gpu:probe.gpu,memory:probe.memory,disk:probe.disk,ffmpeg:probe.ffmpeg,capcut:probe.capcut,
+    platform:{platform:probe.platform.platform,release:probe.platform.release,arch:probe.platform.arch},cpu:probe.cpu,gpu:probe.gpu,memory:probe.memory,disk:probe.disk?{freeBytes:probe.disk.freeBytes,totalBytes:probe.disk.totalBytes}:undefined,ffmpeg:probe.ffmpeg,capcut:{installed:probe.capcut.installed,configuredTier:probe.capcut.configuredTier},
     wangp:{configured:probe.wangp.configured,available:probe.wangp.available,executionMode:probe.wangp.executionMode,runtimeVersion:probe.wangp.runtimeVersion,pythonVersion:probe.wangp.pythonVersion,torchVersion:probe.wangp.torchVersion,torchCudaVersion:probe.wangp.torchCudaVersion,cudaAvailable:probe.wangp.cudaAvailable,error:probe.wangp.error},
     docker:probe.docker,hardwarePlan:probe.hardwarePlan,
     runtimePolicy:{aiEndpoints:'loopback-only',wanGpExecutionMode:machine.wangp.executionMode,comfyDedicated:machine.comfy.dedicatedInstance}
