@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseScreenplay } from '../src/main/services/script-parser';
-import { applyBindings, detectWorkflowFormat, suggestBindings, uiWorkflowToApi, validateProfileBindings, type ApiWorkflow } from '../src/main/services/workflow-engine';
+import { applyBindings, detectWorkflowFormat, suggestBindings, uiWorkflowToApi, validateComfyNodeAvailability, validateProfileBindings, type ApiWorkflow } from '../src/main/services/workflow-engine';
 import { assertLocalUrl } from '../src/main/services/local-url';
 import { assertPathInside, assertRelativeProjectPath } from '../src/main/services/path-safety';
 import { chooseModelForShot } from '../src/shared/routing';
@@ -33,6 +33,15 @@ describe('workflow engine',()=>{
    const suggestions=suggestBindings(workflow);
    expect(suggestions.some(binding=>binding.key==='prompt'&&binding.selector?.nodeId==='1')).toBe(false);
    expect(suggestions.some(binding=>binding.key==='negativePrompt'&&binding.selector?.nodeId==='1')).toBe(true);
+ });
+ it('rejects Comfy profiles whose workflow node classes are unavailable in the connected runtime',async()=>{
+   const root=await mkdtemp(join(tmpdir(),'cineforge-comfy-nodes-')),path=join(root,'workflow.json');
+   await writeFile(path,JSON.stringify({'1':{class_type:'InstalledNode',inputs:{}},'2':{class_type:'MissingCustomNode',inputs:{}}}),'utf8');
+   try{
+     const profile={id:'p',runtime:'comfyui' as const,purpose:'video' as const,name:'nodes',modelFamily:'custom' as const,mode:'t2v' as const,workflowPath:path,workflowFormat:'api' as const,bindings:[],enabled:false};
+     expect(await validateComfyNodeAvailability(profile,{InstalledNode:{}})).toEqual(['ComfyUI node class is unavailable in the connected runtime: MissingCustomNode']);
+     expect(await validateComfyNodeAvailability(profile,{InstalledNode:{},MissingCustomNode:{}})).toEqual([]);
+   }finally{await rm(root,{recursive:true,force:true});}
  });
  it('rejects a video Comfy profile that cannot receive prompt or seed',async()=>{
    const root=await mkdtemp(join(tmpdir(),'cineforge-comfy-')),path=join(root,'workflow.json');
