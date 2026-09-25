@@ -113,8 +113,8 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.workflowProvisionWanGp, () => provisionRecommendedWanGpProfiles(projects,settings));
 
   handle(IPC.systemProbe, async()=>{
-    const project=requireProject(projects),machine=settings.get(),probe=await probeSystem(project,machine);
-    probe.codexContextPath=await writeCodexMachineContext(project,machine,probe);
+    const project=projects.getCurrent()??undefined,machine=settings.get(),probe=await probeSystem(project,machine);
+    if(project)probe.codexContextPath=await writeCodexMachineContext(project,machine,probe);
     return probe;
   });
   handle(IPC.comfyPing, async(url?:string)=>{
