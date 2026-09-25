@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
-import type { Asset, AssetKind, FilmProject, GenerationMode, ModelFamily, QualityIntent, Shot, WorkflowProfile } from '../../../shared/types';
+import type { Asset, AssetKind, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, Shot, WorkflowProfile } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { useAppStore, type ViewId } from '../store';
@@ -26,10 +26,13 @@ export function Studio(){
   const[assetKind,setAssetKind]=useState<AssetKind|'all'>('all');
   const[importKind,setImportKind]=useState<AssetKind>('reference');
   const[assetSearch,setAssetSearch]=useState('');
+  const[preflightBusy,setPreflightBusy]=useState(false);
+  const[preflightSummary,setPreflightSummary]=useState('unchecked');
   const[positions,setPositions]=useState<Record<string,Point>>(()=>loadStudioLayout(projectId));
   const[viewRect,setViewRect]=useState<ViewRect>({left:0,top:0,width:1000,height:700});
   const viewportRef=useRef<HTMLDivElement>(null);
   const dragState=useRef<{id:string;pointerId:number;startClient:Point;startNode:Point}|null>(null);
+  const panState=useRef<{pointerId:number;startClient:Point;scrollLeft:number;scrollTop:number}|null>(null);
 
   useEffect(()=>{
     if(!projectId)return;
@@ -121,15 +124,25 @@ export function Studio(){
 
   const beginNodeDrag=(event:ReactPointerEvent<HTMLElement>,node:StudioNode)=>{
     if(locked||event.button!==0)return;
-    event.currentTarget.setPointerCapture(event.pointerId);
+    event.stopPropagation();event.currentTarget.setPointerCapture(event.pointerId);
     dragState.current={id:node.id,pointerId:event.pointerId,startClient:{x:event.clientX,y:event.clientY},startNode:{x:node.x,y:node.y}};
   };
   const moveNode=(event:ReactPointerEvent<HTMLElement>)=>{
     const drag=dragState.current;if(!drag||drag.pointerId!==event.pointerId)return;
-    const dx=(event.clientX-drag.startClient.x)/zoom,dy=(event.clientY-drag.startClient.y)/zoom;
-    setPositions(current=>({...current,[drag.id]:{x:Math.max(0,drag.startNode.x+dx),y:Math.max(0,drag.startNode.y+dy)}}));
+    const dx=(event.clientX-drag.startClient.x)/zoom,dy=(event.clientY-drag.startClient.y)/zoom,node=nodeMap.get(drag.id);
+    const maxX=Math.max(0,graph.width-(node?.width||220)),maxY=Math.max(0,graph.height-(node?.height||120));
+    setPositions(current=>({...current,[drag.id]:{x:Math.min(maxX,Math.max(0,drag.startNode.x+dx)),y:Math.min(maxY,Math.max(0,drag.startNode.y+dy))}}));
   };
   const endNodeDrag=(event:ReactPointerEvent<HTMLElement>)=>{if(dragState.current?.pointerId===event.pointerId)dragState.current=null;};
+  const beginPan=(event:ReactPointerEvent<HTMLDivElement>)=>{
+    if(event.button!==0)return;
+    const target=event.target as Element;if(target.closest('.studio-node')||target.closest('.studio-minimap'))return;
+    const viewport=viewportRef.current;if(!viewport)return;
+    event.currentTarget.setPointerCapture(event.pointerId);panState.current={pointerId:event.pointerId,startClient:{x:event.clientX,y:event.clientY},scrollLeft:viewport.scrollLeft,scrollTop:viewport.scrollTop};
+  };
+  const movePan=(event:ReactPointerEvent<HTMLDivElement>)=>{const pan=panState.current,viewport=viewportRef.current;if(!pan||pan.pointerId!==event.pointerId||!viewport)return;viewport.scrollLeft=pan.scrollLeft-(event.clientX-pan.startClient.x);viewport.scrollTop=pan.scrollTop-(event.clientY-pan.startClient.y);};
+  const endPan=(event:ReactPointerEvent<HTMLDivElement>)=>{if(panState.current?.pointerId===event.pointerId)panState.current=null;};
+  const zoomWheel=(event:ReactWheelEvent<HTMLDivElement>)=>{if(!event.ctrlKey&&!event.metaKey)return;event.preventDefault();changeZoom(event.deltaY>0?-.06:.06);};
 
   const importAsset=async()=>{
     if(!project)return;
@@ -145,6 +158,18 @@ export function Studio(){
     updateProject(next=>{const target=next.shots.find(item=>item.id===shotId),candidate=next.assets.find(item=>item.id===assetId);if(target&&candidate)result=autoAssignAssetToShot(target,candidate);});
     selectShot(shotId);if(result?.ok)setNotice(`${asset.name} → ${shot.title}: ${result.message}`);else if(result)setError(result.message);
   };
+
+  const runPreflight=async():Promise<PreflightReport|undefined>=>{
+    try{setPreflightBusy(true);await useAppStore.getState().persist();const report=await window.cineforge.project.preflight();setProbe(report.probe);const blockers=report.issues.filter(issue=>issue.level==='error').length;setPreflightSummary(report.ready?'ready':`${blockers} blocker${blockers===1?'':'s'}`);if(report.ready)setNotice('Preflight passed.');else setError(`Preflight found ${blockers} blocking issue${blockers===1?'':'s'}. Open System for the full report.`);return report;}
+    catch(error){setError(error instanceof Error?error.message:String(error));return undefined;}finally{setPreflightBusy(false);}
+  };
+  const renderAll=async()=>{
+    if(!project||sortedShots.length===0)return;const report=await runPreflight();if(!report?.ready)return;
+    try{setQueue(await window.cineforge.render.enqueueBatch({projectRoot:project.rootPath,shotIds:sortedShots.map(shot=>shot.id),skipIfRendered:true}));setNotice('Queued all unrendered shots.');}
+    catch(error){setError(error instanceof Error?error.message:String(error));}
+  };
+  const cancelJob=async(id:string)=>{try{setQueue(await window.cineforge.render.cancel(id));}catch(error){setError(error instanceof Error?error.message:String(error));}};
+  const retryJob=async(id:string)=>{try{setQueue(await window.cineforge.render.retry(id));}catch(error){setError(error instanceof Error?error.message:String(error));}};
 
   const queueSelected=async()=>{
     if(!project||!selectedShot)return;
@@ -177,6 +202,8 @@ export function Studio(){
         <button className="ghost" onClick={fitAll}>Fit all</button>
         <button className={locked?'ghost active-toggle':'ghost'} onClick={()=>setLocked(value=>!value)}>{locked?'Unlock nodes':'Lock nodes'}</button>
         <button className="ghost" onClick={resetLayout}>Auto layout</button>
+        <button className="ghost" disabled={preflightBusy||sortedShots.length===0} onClick={runPreflight}>{preflightBusy?'Checking…':`Preflight · ${preflightSummary}`}</button>
+        <button className="ghost" disabled={sortedShots.length===0||preflightBusy} onClick={renderAll}>Render all</button>
         <button className="primary" disabled={!selectedShot} onClick={queueSelected}>Render selected</button>
       </div>
     </header>
@@ -198,8 +225,8 @@ export function Studio(){
       </aside>
 
       <main className="studio-canvas-panel">
-        <div className="studio-canvas-title"><div><span className="eyebrow">PIPELINE GRAPH</span><strong>Story → scenes → shots → workflows → render → edit</strong></div><span>Canvas position is visual only · drag assets onto shots</span></div>
-        <div className="studio-viewport" ref={viewportRef} onScroll={updateViewRect}>
+        <div className="studio-canvas-title"><div><span className="eyebrow">PIPELINE GRAPH</span><strong>Story → scenes → shots → workflows → render → edit</strong></div><span>Drag blank canvas to pan · Ctrl/⌘ + wheel zoom · node position is visual only</span></div>
+        <div className="studio-viewport" ref={viewportRef} onScroll={updateViewRect} onPointerDown={beginPan} onPointerMove={movePan} onPointerUp={endPan} onWheel={zoomWheel}>
           <div className="studio-world-shell" style={{width:graph.width*zoom,height:graph.height*zoom}}>
             <div className="studio-world" style={{width:graph.width,height:graph.height,transform:`scale(${zoom})`}}>
               <svg className="studio-edges" width={graph.width} height={graph.height} aria-hidden="true">
@@ -219,7 +246,7 @@ export function Studio(){
 
     <footer className="studio-bottom-dock">
       <section className="studio-dock-block queue-dock"><div className="studio-dock-head"><div><span className="eyebrow">QUEUE</span><strong>{queue.jobs.filter(job=>ACTIVE_JOB_STATUSES.has(job.status)).length} active / {queue.jobs.length} total</strong></div><button className="ghost" onClick={()=>setView('queue')}>Open queue ↗</button></div>
-        <div className="studio-job-strip">{queue.jobs.length===0?<span className="muted">Nothing queued.</span>:queue.jobs.slice(0,8).map(job=>{const shot=project.shots.find(item=>item.id===job.shotId);return <div className="studio-job" key={job.id}><span className={`job-dot ${job.status}`}/><div><strong>{shot?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}%</small></div><div className="studio-job-progress"><i style={{width:`${Math.round(job.progress*100)}%`}}/></div></div>;})}</div>
+        <div className="studio-job-strip">{queue.jobs.length===0?<span className="muted">Nothing queued.</span>:queue.jobs.map(job=>{const shot=project.shots.find(item=>item.id===job.shotId),active=ACTIVE_JOB_STATUSES.has(job.status),retryable=['failed','cancelled','orphaned'].includes(job.status);return <div className="studio-job" key={job.id}><span className={`job-dot ${job.status}`}/><div><strong>{shot?.title||job.shotId}</strong><small>{job.status} · {Math.round(job.progress*100)}%</small></div><div className="studio-job-progress"><i style={{width:`${Math.round(job.progress*100)}%`}}/></div>{active?<button className="studio-job-action" title="Cancel job" onClick={()=>cancelJob(job.id)}>×</button>:retryable?<button className="studio-job-action" title="Retry exact job" onClick={()=>retryJob(job.id)}>↻</button>:null}</div>;})}</div>
       </section>
       <section className="studio-dock-block timeline-dock"><div className="studio-dock-head"><div><span className="eyebrow">TIMELINE</span><strong>{project.timeline.length} clips</strong></div><button className="ghost" onClick={()=>setView('timeline')}>Open timeline ↗</button></div>
         <div className="studio-timeline-strip">{project.timeline.length===0?<span className="muted">Build a cut from rendered takes.</span>:[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>{event.preventDefault();const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(sourceId)reorderTimeline(project,sourceId,clip.id,updateProject);}} onClick={()=>{if(shot){selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
