@@ -57,11 +57,12 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const sceneIds = new Set(scenes.map(s=>s.id));
   const assets = array(source.assets).slice(0,100_000).map(sanitizeAsset);
   const assetIds = new Set(assets.map(a=>a.id));
-  const shots = array(source.shots).slice(0,100_000).map(value => sanitizeShot(value, sceneIds, assetIds));
+  const assetKinds = new Map(assets.map(a=>[a.id,a.kind] as const));
+  const shots = array(source.shots).slice(0,100_000).map(value => sanitizeShot(value, sceneIds, assetIds, assetKinds));
   const shotIds = new Set(shots.map(s=>s.id));
   const renderOutputs = array(source.renderOutputs).slice(0,100_000).map(value => sanitizeRenderOutput(value, shotIds));
   const outputIds = new Set(renderOutputs.map(o=>o.id));
-  const renderJobs = array(source.renderJobs).slice(0,100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds));
+  const renderJobs = array(source.renderJobs).slice(0,100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds, assetKinds));
   const jobIds=new Set(renderJobs.map(job=>job.id));
   const timeline = array(source.timeline).slice(0,100_000).map(value => sanitizeTimelineClip(value, shotIds, outputIds));
 
@@ -186,7 +187,7 @@ function sanitizeAsset(value: unknown): Asset {
   };
 }
 
-function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<string>): Shot {
+function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<string>, assetKinds: Map<string,AssetKind>): Shot {
   const source = asObject(value, 'shot');
   const sceneId = safeId(source.sceneId);
   if (!sceneIds.has(sceneId)) throw new Error(`Shot references unknown scene: ${sceneId}`);
@@ -194,11 +195,17 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const rawModelFamily=typeof generationSource.modelFamily==='string'?generationSource.modelFamily:'';
   const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
   const defaults = MODEL_DEFAULTS[modelFamily];
-  const filterIds = (value: unknown, max:number) => array(value).map(safeId).filter(id=>assetIds.has(id)).slice(0,max);
-  const optionalAsset = (value: unknown) => {
+  const rawIds = (value: unknown) => array(value).map(safeId).filter(id=>assetIds.has(id));
+  const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!)).slice(0,max);
+  const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
     if (typeof value !== 'string' || !value) return undefined;
-    return assetIds.has(value) ? value : undefined;
+    return assetIds.has(value)&&allowed.has(assetKinds.get(value)!) ? value : undefined;
   };
+  const characterKinds=new Set<AssetKind>(['character']),locationKinds=new Set<AssetKind>(['location']),propKinds=new Set<AssetKind>(['prop','wardrobe']),referenceKinds=new Set<AssetKind>(['reference']);
+  const startKinds=new Set<AssetKind>(['image','reference','keyframe','character','location']),endKinds=new Set<AssetKind>(['image','reference','keyframe']),videoKinds=new Set<AssetKind>(['video']),audioKinds=new Set<AssetKind>(['audio']);
+  const rawPropIds=rawIds(source.propAssetIds);
+  const legacyReferenceIds=source.referenceAssetIds==null?rawPropIds.filter(id=>assetKinds.get(id)==='reference'):[];
+  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,4,referenceKinds),...legacyReferenceIds])].slice(0,4);
   return {
     id: safeId(source.id),
     sceneId,
@@ -209,14 +216,14 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     action: str(source.action,'',100_000),
     dialogue: str(source.dialogue,'',100_000),
     continuityNotes: str(source.continuityNotes,'',100_000),
-    characterAssetIds: filterIds(source.characterAssetIds,4),
-    locationAssetId: optionalAsset(source.locationAssetId),
-    propAssetIds: filterIds(source.propAssetIds,2),
-    referenceAssetIds: filterIds(source.referenceAssetIds,4),
-    startFrameAssetId: optionalAsset(source.startFrameAssetId),
-    endFrameAssetId: optionalAsset(source.endFrameAssetId),
-    referenceVideoAssetId: optionalAsset(source.referenceVideoAssetId),
-    audioAssetId: optionalAsset(source.audioAssetId),
+    characterAssetIds: filterIds(source.characterAssetIds,4,characterKinds),
+    locationAssetId: optionalAsset(source.locationAssetId,locationKinds),
+    propAssetIds: rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!)).slice(0,2),
+    referenceAssetIds,
+    startFrameAssetId: optionalAsset(source.startFrameAssetId,startKinds),
+    endFrameAssetId: optionalAsset(source.endFrameAssetId,endKinds),
+    referenceVideoAssetId: optionalAsset(source.referenceVideoAssetId,videoKinds),
+    audioAssetId: optionalAsset(source.audioAssetId,audioKinds),
     status: SHOT_STATUSES.has(source.status) ? source.status : 'draft',
     generation: {
       modelFamily,
@@ -251,7 +258,7 @@ function sanitizeRenderOutput(value: unknown, shotIds: Set<string>): RenderOutpu
   };
 }
 
-function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: WorkflowProfile[], sceneIds:Set<string>, assetIds:Set<string>): RenderJob {
+function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: WorkflowProfile[], sceneIds:Set<string>, assetIds:Set<string>, assetKinds:Map<string,AssetKind>): RenderJob {
   const source = asObject(value, 'render job');
   const shotId = safeId(source.shotId);
   if (!shotIds.has(shotId)) throw new Error(`Render job references unknown shot: ${shotId}`);
@@ -262,7 +269,7 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
     const workflowProfile=sanitizeWorkflowProfile(rawSpec.workflowProfile);
     const runtimeRaw=rawSpec.runtimeFingerprint&&typeof rawSpec.runtimeFingerprint==='object'?rawSpec.runtimeFingerprint:{};
     spec={
-      shot:sanitizeShot(rawSpec.shot,sceneIds,assetIds),
+      shot:sanitizeShot(rawSpec.shot,sceneIds,assetIds,assetKinds),
       workflowProfile,
       effectivePrompt:str(rawSpec.effectivePrompt,'',300_000),
       queuedProjectUpdatedAt:iso(rawSpec.queuedProjectUpdatedAt,new Date().toISOString()),
