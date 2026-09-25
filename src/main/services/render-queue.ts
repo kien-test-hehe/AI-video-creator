@@ -24,7 +24,7 @@ import { technicalQcVideo } from './technical-qc';
 import { isExpectedProcess, isProcessAlive, killProcessTree } from './process-utils';
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
-import { shotRenderInputKey } from '../../shared/shot-signature';
+import { shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -342,6 +342,7 @@ export class RenderQueueService extends EventEmitter {
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing WanGP · ${profile.name}`},true,true);
     const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,profile,values);
     let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
+    await this.verifyImmutableSpec(this.requireProject(),job);
     const cacheDir=join(project.rootPath,'cache','wangp'),outputDir=join(project.rootPath,'renders',shot.id,job.id);
     await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(outputDir,{recursive:true})]);
     const settingsPath=await assertSafeWritePath(cacheDir,join(cacheDir,`${job.id}.json`),'WanGP job settings');
@@ -351,6 +352,7 @@ export class RenderQueueService extends EventEmitter {
       await this.updateJob(job.id,{status:'preparing',progress:.08,message:'WanGP dry-run validation'},true,true);
       const dry=startWanGp(project,machine,{settingsPath,outputDir,dryRun:true,runId:job.id});if(dry.pid)await this.updateJob(job.id,{backendPid:dry.pid},false,true);
       await waitWanGp(dry);if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
+      await this.verifyImmutableSpec(this.requireProject(),job);
     }
 
     let lastLogAt=0;
@@ -395,7 +397,7 @@ export class RenderQueueService extends EventEmitter {
     if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
 
-    const prompt=await compileProfile(profile,values);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
+    const prompt=await compileProfile(profile,values);await this.verifyImmutableSpec(this.requireProject(),job);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
     await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to ComfyUI',comfyPromptId:queued.prompt_id,lastHeartbeatAt:new Date().toISOString()},true,true);
     let history:any;
     try{history=await waitForComfyCompletion(client,queued.prompt_id,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:'running',progress:.35,message:`ComfyUI · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});}
@@ -425,7 +427,9 @@ export class RenderQueueService extends EventEmitter {
     await this.projects.mutate(p=>{
       for(const output of outputs)if(!p.renderOutputs.some(existing=>existing.id===output.id))p.renderOutputs.push(output);
       const target=p.renderJobs.find(j=>j.id===job.id);const shot=p.shots.find(s=>s.id===job.shotId);
-      const currentSpec=Boolean(shot&&job.spec&&shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildPrompt(p,shot)===job.spec.effectivePrompt);
+      let currentWorkflowKey:string|undefined;
+      if(shot&&job.spec){try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(p,shot));}catch{currentWorkflowKey=undefined;}}
+      const currentSpec=Boolean(shot&&job.spec&&shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildPrompt(p,shot)===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile));
       if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message=currentSpec?'Rendered but failed technical QC':'Historical snapshot rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message=currentSpec?'Done':'Done · shot changed after queue; take kept as historical output';target.error=undefined;}}
       if(shot){if(!currentSpec){shot.latestRenderId=undefined;if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(profile&&!qcFailed){profile.validation={...(profile.validation??{structuralStatus:'valid'}),structuralStatus:'valid',sourceSha256:job.spec?.workflowSha256,lastSuccessfulRenderAt:now};}
