@@ -9,6 +9,7 @@ import { assertSafeWritePath } from './path-safety';
 import { ProjectService } from './project-service';
 import { validateAndRecordProfile } from './profile-validation';
 import { analyzeWanGpBindings } from './wangp-engine';
+import { shotProjectRenderInputKey } from '../../shared/shot-signature';
 
 const execFileAsync=promisify(execFile);
 const BRIDGE_MARKER='CINEFORGE_JSON:';
@@ -56,18 +57,28 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
       validation:{structuralStatus:'unvalidated'}
     };
     await projects.mutate(p=>{
+      const before=new Map(p.shots.map(shot=>[shot.id,shotProjectRenderInputKey(p,shot)]));
       const index=p.settings.workflowProfiles.findIndex(existing=>existing.id===id);
       if(index>=0)p.settings.workflowProfiles[index]=profile;else p.settings.workflowProfiles.push(profile);
+      invalidateChangedRoutes(p,before);
     });
     await validateAndRecordProfile(projects,machine,id);
     const validated=projects.getCurrent()?.settings.workflowProfiles.find(x=>x.id===id);
     if(validated?.validation?.structuralStatus==='valid'){
-      await projects.mutate(p=>{const target=p.settings.workflowProfiles.find(x=>x.id===id);if(target)target.enabled=true;});
+      await projects.mutate(p=>{const before=new Map(p.shots.map(shot=>[shot.id,shotProjectRenderInputKey(p,shot)]));const target=p.settings.workflowProfiles.find(x=>x.id===id);if(target)target.enabled=true;invalidateChangedRoutes(p,before);});
       created.push(id);
     }
   }
   if(!created.length)throw new Error('Managed profiles were generated but none passed structural validation.');
   return projects.getCurrent()!;
+}
+
+function invalidateChangedRoutes(project:FilmProject,before:Map<string,string>):void{
+  for(const shot of project.shots){
+    if(before.get(shot.id)===shotProjectRenderInputKey(project,shot))continue;
+    shot.latestRenderId=undefined;
+    if(['rendered','failed'].includes(shot.status))shot.status='ready';
+  }
 }
 
 function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:'t2v'|'i2v'|'t2i'|'i2i'}>{
