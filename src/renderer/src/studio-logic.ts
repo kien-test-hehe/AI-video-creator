@@ -23,6 +23,15 @@ export function routeShotToWorkflow(shot:Shot,profile:WorkflowProfile):WorkflowR
   return{ok:true,message:`Routed to ${profile.name}.`};
 }
 
+
+export function resolveStudioWorkflow(profiles:WorkflowProfile[],shot:Shot):WorkflowProfile|undefined{
+  const usable=(profile:WorkflowProfile)=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode;
+  const explicit=shot.generation.workflowProfileId?profiles.find(profile=>profile.id===shot.generation.workflowProfileId&&usable(profile)):undefined;
+  if(explicit)return explicit;
+  const candidates=profiles.filter(usable);
+  return candidates.find(profile=>profile.validation?.structuralStatus==='valid')||candidates[0];
+}
+
 export function reorderTimeline(project:FilmProject,sourceId:string,targetId:string):boolean{
   if(sourceId===targetId)return false;
   const ordered=[...project.timeline].sort((a,b)=>a.order-b.order);
