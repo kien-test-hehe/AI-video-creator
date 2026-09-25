@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared/types';
 import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
 import { killProcessTree } from './process-utils';
