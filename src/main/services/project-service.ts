@@ -166,6 +166,7 @@ export class ProjectService {
     const asset=current.assets.find(item=>item.id===assetId);if(!asset)throw new Error('Asset not found.');
     const absolute=await assertExistingRelativeProjectPath(current.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`).catch(()=>undefined);
     const updated=await this.mutate(project=>{
+      const before=new Map(project.shots.map(shot=>[shot.id,shotProjectRenderInputKey(project,shot)]));
       project.assets=project.assets.filter(item=>item.id!==assetId);
       for(const shot of project.shots){
         shot.characterAssetIds=shot.characterAssetIds.filter(id=>id!==assetId);
@@ -176,6 +177,7 @@ export class ProjectService {
         if(shot.endFrameAssetId===assetId)shot.endFrameAssetId=undefined;
         if(shot.referenceVideoAssetId===assetId)shot.referenceVideoAssetId=undefined;
         if(shot.audioAssetId===assetId)shot.audioAssetId=undefined;
+        if(before.get(shot.id)!==shotProjectRenderInputKey(project,shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}
       }
     });
     if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete asset file after removing it from the project: ${absolute}`,error));
@@ -286,13 +288,14 @@ export class ProjectService {
     const backupFile = join(project.rootPath, PROJECT_BACKUP_FILE);
     const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${process.pid}.tmp`);
     const payload = JSON.stringify(serializable, null, 2);
-    try { await copyFile(projectFile, backupFile); } catch {}
+    try { await copyFile(projectFile, backupFile); }
+    catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
     await writeFile(tempFile, payload, 'utf8');
     try { await rename(tempFile, projectFile); }
     catch (error: any) {
-      if (!['EEXIST','EPERM','EACCES'].includes(error?.code)) throw error;
-      await writeFile(projectFile, payload, 'utf8');
-      await rm(tempFile, { force: true }).catch(() => undefined);
+      if (!['EEXIST','EPERM','EACCES'].includes(error?.code)){await rm(tempFile,{force:true}).catch(()=>undefined);throw error;}
+      try{await writeFile(projectFile, payload, 'utf8');}
+      finally{await rm(tempFile, { force: true }).catch(() => undefined);}
     }
     this.current = serializable;
     return structuredClone(serializable);
