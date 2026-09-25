@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import type { AppMachineSettings, Asset, FilmProject, KeyframeRequest, Shot, WorkflowProfile } from '../../shared/types';
 import { ProjectService } from './project-service';
 import { ComfyClient } from './comfy-client';
@@ -14,7 +14,7 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { killProcessTree } from './process-utils';
 import { planShotReferences } from './reference-plan';
-import { shotKeyframeInputKey } from '../../shared/shot-signature';
+import { keyframeProjectInputKey } from '../../shared/shot-signature';
 
 function keyframePrompt(shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
@@ -29,22 +29,57 @@ function chooseProfile(project:FilmProject,id:string):WorkflowProfile{
   return profile;
 }
 
+interface KeyframeAssetFingerprint{assetId:string;projectPath:string;sha256:string}
+
+async function assertKeyframeSnapshotCurrent(
+  projects:ProjectService,
+  machine:AppMachineSettings,
+  baseline:{projectId:string;rootPath:string;shotId:string;role:'start'|'end';profileId:string;inputSignature:string;workflowSha256:string;runtimeFingerprint:string;assetFingerprints:Map<string,KeyframeAssetFingerprint>},
+  checkRuntime:boolean
+):Promise<void>{
+  const current=projects.getCurrent();
+  if(!current||current.id!==baseline.projectId||current.rootPath!==baseline.rootPath)throw new Error('The project changed while keyframe generation was running.');
+  const shot=current.shots.find(item=>item.id===baseline.shotId),profile=current.settings.workflowProfiles.find(item=>item.id===baseline.profileId);
+  if(!shot||!profile||keyframeProjectInputKey(current,shot,baseline.role,profile)!==baseline.inputSignature)throw new Error('The shot or keyframe workflow configuration changed while generation was running.');
+  const workflowPath=await assertExistingPathInside(join(current.rootPath,'workflows'),assertPathInside(join(current.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
+  if(await sha256File(workflowPath)!==baseline.workflowSha256)throw new Error('The keyframe workflow file changed while generation was running.');
+  for(const fp of baseline.assetFingerprints.values()){
+    const asset=current.assets.find(item=>item.id===fp.assetId);
+    if(!asset||asset.projectPath!==fp.projectPath)throw new Error(`A keyframe input asset changed or was removed while generation was running: ${fp.assetId}`);
+    const path=await assertExistingRelativeProjectPath(current.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
+    if(await sha256File(path)!==fp.sha256)throw new Error(`A keyframe input asset changed while generation was running: ${asset.name}`);
+  }
+  if(checkRuntime){
+    const runtime=await fingerprintRuntime(machine,profile);
+    if(runtime.environmentSha256!==baseline.runtimeFingerprint)throw new Error('The local AI runtime changed before keyframe submission. Revalidate the profile and generate again.');
+  }
+}
+
 export async function generateKeyframe(projects:ProjectService,machine:AppMachineSettings,request:KeyframeRequest,signal?:AbortSignal):Promise<FilmProject>{
-  throwIfAborted(signal);const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');if(project.rootPath!==request.projectRoot)throw new Error('Keyframe request does not match the open project.');
-  const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');const inputSignature=shotKeyframeInputKey(shot,request.role),profile=chooseProfile(project,request.workflowProfileId);
+  throwIfAborted(signal);
+  const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');if(project.rootPath!==request.projectRoot)throw new Error('Keyframe request does not match the open project.');
+  const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');
+  const profile=chooseProfile(project,request.workflowProfileId),inputSignature=keyframeProjectInputKey(project,shot,request.role,profile);
   const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
   if(!profile.validation?.sourceSha256)throw new Error('Keyframe profile has no validated source fingerprint. Revalidate it first.');
-  if(await sha256File(workflowPath)!==profile.validation.sourceSha256)throw new Error('Keyframe profile changed after validation. Revalidate it first.');
+  const workflowSha256=await sha256File(workflowPath);
+  if(workflowSha256!==profile.validation.sourceSha256)throw new Error('Keyframe profile changed after validation. Revalidate it first.');
   if(!profile.validation.runtimeFingerprint)throw new Error('Keyframe profile has no validated runtime fingerprint. Revalidate it on this workstation.');
   const currentRuntime=await fingerprintRuntime(machine,profile);
   if(currentRuntime.environmentSha256!==profile.validation.runtimeFingerprint)throw new Error('Local AI runtime changed after keyframe profile validation. Revalidate it before generating keyframes.');
 
+  const assetFingerprints=new Map<string,KeyframeAssetFingerprint>();
   const values:WorkflowValues={prompt:keyframePrompt(shot,request.role),negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:1,fps:1,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed+(request.role==='end'?1:0),filenamePrefix:`cineforge/keyframes/${shot.id}/${request.role}`};
-  const assetPath=async(id:string)=>{const asset=project.assets.find(item=>item.id===id);if(!asset)throw new Error(`Referenced asset not found: ${id}`);return assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);};
+  const assetPath=async(id:string)=>{
+    const asset=project.assets.find(item=>item.id===id);if(!asset)throw new Error(`Referenced asset not found: ${id}`);
+    const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
+    if(!assetFingerprints.has(id))assetFingerprints.set(id,{assetId:id,projectPath:asset.projectPath,sha256:await sha256File(path)});
+    return path;
+  };
   const plan=planShotReferences(shot,profile);
   if(plan.locationId)values.locationImage=await assetPath(plan.locationId);
-  for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{[`characterImage${index+1}`]:await assetPath(id)});
-  for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{[`propImage${index+1}`]:await assetPath(id)});
+  for(const[index,id]of plan.characterIds.entries())if(id)Object.assign(values,{`characterImage${index+1}`:await assetPath(id)});
+  for(const[index,id]of plan.propIds.entries())if(id)Object.assign(values,{`propImage${index+1}`:await assetPath(id)});
   const genericPaths=await Promise.all(plan.genericIds.map(id=>assetPath(id)));
   if(plan.genericArray)values.referenceImages=genericPaths;
   else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
@@ -52,30 +87,58 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   if(request.role==='end'&&shot.startFrameAssetId){
     const startPath=await assetPath(shot.startFrameAssetId),keys=new Set(profile.bindings.map(binding=>binding.key));
     if(profile.mode==='i2i'&&keys.has('startImage'))values.startImage=startPath;
-    else if(plan.genericArray){
-      values.referenceImages=[startPath,...(values.referenceImages??[])].slice(0,plan.genericCapacity);
-    }else if(plan.genericBindingKeys.length){
+    else if(plan.genericArray)values.referenceImages=[startPath,...(values.referenceImages??[])].slice(0,plan.genericCapacity);
+    else if(plan.genericBindingKeys.length){
       const shifted=[startPath,...genericPaths].slice(0,plan.genericBindingKeys.length);
       for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:shifted[index]});
     }
   }
 
+  const baseline={projectId:project.id,rootPath:project.rootPath,shotId:shot.id,role:request.role,profileId:profile.id,inputSignature,workflowSha256,runtimeFingerprint:currentRuntime.environmentSha256,assetFingerprints};
+  const assertCurrent=(checkRuntime=true)=>assertKeyframeSnapshotCurrent(projects,machine,baseline,checkRuntime);
   const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
   let generatedPath:string;
-  if(runtime==='wangp')generatedPath=await generateWithWanGp(project,machine,profile,values,shot,request.role,signal);
-  else generatedPath=await generateWithComfy(project,machine,profile,values,shot,request.role,signal);
+  if(runtime==='wangp')generatedPath=await generateWithWanGp(project,machine,profile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
+  else generatedPath=await generateWithComfy(project,machine,profile,values,shot,request.role,assertCurrent,signal);
   throwIfAborted(signal);
 
-  const current=projects.getCurrent(),currentShot=current?.shots.find(item=>item.id===shot.id);
-  if(!current||current.id!==project.id||current.rootPath!==project.rootPath||!currentShot||shotKeyframeInputKey(currentShot,request.role)!==inputSignature){
-    await rm(generatedPath,{force:true}).catch(()=>undefined);
-    throw new Error('The project or keyframe-relevant shot inputs changed while generation was running. The generated staging file was discarded safely.');
-  }
+  try{await assertCurrent(false);}
+  catch(error){await rm(generatedPath,{force:true}).catch(()=>undefined);throw error;}
   const assetId=randomUUID(),extension=extname(generatedPath)||'.png',relativePath=join('assets','keyframe',`${shot.id}-${request.role}-${assetId}${extension}`);
   const target=await assertSafeWritePath(join(project.rootPath,'assets'),join(project.rootPath,relativePath),'generated keyframe');
   await mkdir(join(project.rootPath,'assets','keyframe'),{recursive:true});await copyFile(generatedPath,target);await rm(generatedPath,{force:true}).catch(()=>undefined);
   const asset:Asset={id:assetId,kind:'keyframe',name:`${shot.title} ${request.role} keyframe`,sourcePath:`generated-${request.role}${extension}`,projectPath:relativePath,tags:['generated','keyframe',request.role,profile.modelFamily],notes:`Generated locally with profile ${profile.name}.`,createdAt:new Date().toISOString()};
-  return projects.mutate(p=>{p.assets.push(asset);const targetShot=p.shots.find(s=>s.id===shot.id);if(!targetShot)return;if(request.role==='start')targetShot.startFrameAssetId=asset.id;else targetShot.endFrameAssetId=asset.id;if(targetShot.status==='draft')targetShot.status='ready';});
+  try{
+    return await projects.mutate(p=>{
+      const targetShot=p.shots.find(s=>s.id===shot.id),targetProfile=p.settings.workflowProfiles.find(item=>item.id===profile.id);
+      if(!targetShot||!targetProfile||keyframeProjectInputKey(p,targetShot,request.role,targetProfile)!==inputSignature)throw new Error('The shot or keyframe workflow changed before the generated frame could be attached.');
+      p.assets.push(asset);
+      if(request.role==='start')targetShot.startFrameAssetId=asset.id;else targetShot.endFrameAssetId=asset.id;
+      if(targetShot.status==='draft')targetShot.status='ready';
+    });
+  }catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
+}
+
+async function stageWanGpKeyframeInputs(project:FilmProject,values:WorkflowValues,root:string,fingerprints:Map<string,KeyframeAssetFingerprint>):Promise<void>{
+  const expectedByPath=new Map<string,string>();
+  for(const fp of fingerprints.values()){
+    const asset=project.assets.find(item=>item.id===fp.assetId);if(!asset)throw new Error(`Referenced asset not found: ${fp.assetId}`);
+    const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
+    expectedByPath.set(path,fp.sha256);
+  }
+  await mkdir(root,{recursive:true});
+  const staged=new Map<string,string>();let index=0;
+  const stage=async(source:string)=>{
+    const cached=staged.get(source);if(cached)return cached;
+    const expected=expectedByPath.get(source);if(!expected)throw new Error(`Keyframe input is not covered by the immutable asset snapshot: ${source}`);
+    const target=await assertSafeWritePath(root,join(root,`${String(index++).padStart(2,'0')}-${basename(source).replace(/[^a-zA-Z0-9._-]+/g,'_')||'input.bin'}`),'keyframe immutable input');
+    await copyFile(source,target);
+    if(await sha256File(target)!==expected)throw new Error(`Keyframe input changed while staging: ${basename(source)}`);
+    staged.set(source,target);return target;
+  };
+  const scalarKeys=['startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const;
+  for(const key of scalarKeys){const value=values[key];if(typeof value==='string'&&value)(values as any)[key]=await stage(value);}
+  if(values.referenceImages)values.referenceImages=await Promise.all(values.referenceImages.map(stage));
 }
 
 async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',signal?:AbortSignal):Promise<string>{
