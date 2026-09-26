@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings, RuntimeBackend, WanGpExecutionMode } from '../../shared/types';
-import { ComfyClient, cineforgePromptIdentitiesByMetadata } from './comfy-client';
+import { ComfyClient, cineforgePromptIdentitiesByMetadata, type CineforgeComfyPromptIdentity } from './comfy-client';
 import { waitForComfyPromptRelease } from './comfy-runner';
 import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './process-utils';
 import { isWanGpDockerRunning, stopWanGpDocker } from './wangp-runner';
@@ -56,12 +56,13 @@ export async function recoverOrphanedKeyframeLease(store:KeyframeLeaseStore,mach
   if(lease.phase==='prepared'){await store.clear();return;}
   if(lease.runtime==='comfyui'){
     const client=new ComfyClient(lease.comfyUrl||machine.comfy.url,true);
-    let matches;
-    while(true){
+    let matches:CineforgeComfyPromptIdentity[]=[],emptyScans=0;
+    while(emptyScans<3){
       try{
         const[queue,history]=await Promise.all([client.queue(),client.historyAll()]);
         matches=cineforgePromptIdentitiesByMetadata(queue,history,{purpose:'keyframe',submissionId:lease.id});
-        break;
+        if(matches.length)break;
+        emptyScans+=1;if(emptyScans<3)await new Promise(resolve=>setTimeout(resolve,500));
       }catch(error){throw new Error(`Cannot verify the stale ComfyUI keyframe lease. Keep CineForge closed until the dedicated ComfyUI instance is reachable or its GPU work is stopped: ${error instanceof Error?error.message:String(error)}`);}
     }
     for(const match of matches.filter(item=>item.state!=='history')){
