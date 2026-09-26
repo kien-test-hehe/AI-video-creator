@@ -21,6 +21,7 @@ import { prepareCapCutHandoff } from './services/capcut-handoff';
 import { assertTrustedIpcSender } from './services/ipc-security';
 import { validateAndRecordProfile } from './services/profile-validation';
 import { writeCodexMachineContext } from './services/machine-context';
+import type { KeyframeLeaseStore } from './services/keyframe-lease';
 import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/wangp-catalog-service';
 
 type Handler = (...args: any[]) => any;
@@ -38,7 +39,7 @@ export async function shutdownForegroundOperations():Promise<void>{
   if(pending.length)await Promise.allSettled(pending);
 }
 
-export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
+export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,keyframeLeases:KeyframeLeaseStore,trustedRendererUrl:string): void {
   let keyframeBusy = false;
   let directorBusy = false;
   let workflowValidationBusy = false;
@@ -193,7 +194,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
   handle(IPC.keyframeGenerate,async(request:KeyframeRequest)=>{
     assertGpuGenerationAvailable();keyframeBusy=true;activeKeyframeAbortController=new AbortController();
-    const task=generateKeyframe(projects,settings.get(),request,activeKeyframeAbortController.signal);activeKeyframePromise=task;
+    const task=generateKeyframe(projects,settings.get(),request,keyframeLeases,activeKeyframeAbortController.signal);activeKeyframePromise=task;
     try{return await task;}
     finally{keyframeBusy=false;activeKeyframeAbortController=null;activeKeyframePromise=null;}
   });
