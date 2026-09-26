@@ -3,7 +3,7 @@ import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import type { AppMachineSettings, Asset, FilmProject, KeyframeRequest, Shot, WorkflowProfile } from '../../shared/types';
 import { ProjectService } from './project-service';
-import { ComfyClient, cineforgePromptIdentitiesByMetadata } from './comfy-client';
+import { ComfyClient, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts } from './comfy-client';
 import { compileProfile, type WorkflowValues } from './workflow-engine';
 import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
@@ -223,6 +223,7 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
             throw new Error('Multiple ComfyUI prompts matched one keyframe submission; active duplicates were stopped. Retry the keyframe explicitly.');
           }
           if(matches.length===1){queued={prompt_id:matches[0].promptId};break;}
+          if(hasActiveComfyPrompts(queue)){emptyScans=0;await new Promise(resolve=>setTimeout(resolve,2000));continue;}
           emptyScans+=1;if(emptyScans<3)await new Promise(resolve=>setTimeout(resolve,500));
         }catch(discoveryError){
           if(discoveryError instanceof Error&&/Multiple ComfyUI prompts/.test(discoveryError.message))throw discoveryError;
