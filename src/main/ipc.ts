@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
@@ -116,7 +117,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     if (result.canceled || !result.filePaths[0]) return null;
     const source=result.filePaths[0];
     await readWorkflow(source);
-    const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-${basename(source)}`),'workflow import target');
+    const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${randomUUID()}-${basename(source)}`),'workflow import target');
     await copyFile(source,target);
     let rawWorkflow:any,format:'api'|'ui';
     try{rawWorkflow=await readWorkflow(target);format=detectWorkflowFormat(rawWorkflow);}
@@ -140,7 +141,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     if(result.canceled||!result.filePaths[0])return null;
     const source=result.filePaths[0];
     await inspectWanGpSettings(source);
-    const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-wangp-${basename(source)}`),'WanGP settings import');
+    const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${randomUUID()}-wangp-${basename(source)}`),'WanGP settings import');
     await copyFile(source,target);
     try{
       const inspected=await inspectWanGpSettings(target);
