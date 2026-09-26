@@ -107,10 +107,10 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
   return {
     costPolicy: {
       mode: 'codex-capcut-only',
-      allowCapcutAiCredits: Boolean(source.costPolicy?.allowCapcutAiCredits)
+      allowCapcutAiCredits: source.costPolicy?.allowCapcutAiCredits===true
     },
     capcut: {
-      enabled: source.capcut?.enabled !== false,
+      enabled: typeof source.capcut?.enabled==='boolean'?source.capcut.enabled:true,
       pro: source.capcut?.pro === true
     },
     defaultFps: clampInt(source.defaultFps, 1, 120, 24),
@@ -134,7 +134,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
     bindings: array(source.bindings).map(sanitizeBinding),
-    enabled: Boolean(source.enabled),
+    enabled: source.enabled===true,
     notes: str(source.notes, '', 20_000) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
     validation: {
@@ -163,7 +163,7 @@ function sanitizeBinding(value: unknown): WorkflowBinding {
     input: str(source.input, '', 256) || undefined,
     jsonPath: str(source.jsonPath, '', 1024) || undefined,
     transform: ['integer','float','boolean','string'].includes(source.transform) ? source.transform : 'identity',
-    required: Boolean(source.required)
+    required: source.required===true
   } as WorkflowBinding;
 }
 
@@ -248,7 +248,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
       cfg: generationSource.cfg == null ? defaults.cfg : clampNumber(generationSource.cfg,0,100,defaults.cfg ?? 1),
       seed: clampInt(generationSource.seed,0,2_147_483_647,Math.floor(Math.random()*2_147_483_647)),
       negativePrompt: str(generationSource.negativePrompt,'',100_000),
-      includeAudio: Boolean(generationSource.includeAudio),
+      includeAudio: typeof generationSource.includeAudio==='boolean'?generationSource.includeAudio:(defaults.includeAudio??false),
       workflowProfileId: typeof generationSource.workflowProfileId === 'string' ? generationSource.workflowProfileId : undefined
     },
     latestRenderId: typeof source.latestRenderId === 'string' ? source.latestRenderId : undefined
@@ -336,7 +336,7 @@ function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
   const source=value as Record<string,unknown>;
   return{
     checkedAt:iso(source.checkedAt,new Date().toISOString()),
-    passed:Boolean(source.passed),
+    passed:source.passed===true,
     durationSec:finiteOptional(source.durationSec,0,1_000_000),
     width:intOptional(source.width,1,16384),
     height:intOptional(source.height,1,16384),
