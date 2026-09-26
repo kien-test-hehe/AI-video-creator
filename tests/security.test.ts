@@ -110,6 +110,20 @@ describe('signed journal filesystem boundary',()=>{
   });
 });
 
+describe('signed journal file boundary',()=>{
+  it('refuses to treat a symlinked journal file as a missing/invalid record',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-journal-file-project-')),outside=await mkdtemp(join(tmpdir(),'cineforge-journal-file-outside-'));
+    try{
+      const jobs=join(root,'.cineforge','jobs');await mkdir(jobs,{recursive:true});
+      const external=join(outside,'job-1.json');await writeFile(external,'{}','utf8');
+      await symlink(external,join(jobs,'job-1.json'));
+      const journal=new JobJournal(randomBytes(32));
+      await expect(journal.readAll(root,['job-1'])).rejects.toThrow(/symlink escape|outside/i);
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
+
 describe('signed journal recovery directory boundary',()=>{
   it('refuses to read signed journals through a symlinked jobs directory',async()=>{
     if(process.platform==='win32')return;
