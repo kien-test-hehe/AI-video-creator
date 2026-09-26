@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readJsonFileLimited } from './json-file';
 import type { WorkflowBinding, WorkflowBindingKey, WorkflowProfile } from '../../shared/types';
 
 export type ApiWorkflow = Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
@@ -40,8 +40,7 @@ export function detectWorkflowFormat(value: any): 'api' | 'ui' {
 }
 
 export async function readWorkflow(path: string): Promise<any> {
-  const raw = await readFile(path, 'utf8');
-  return JSON.parse(raw);
+  return readJsonFileLimited(path,'ComfyUI workflow JSON');
 }
 
 function transformValue(value: unknown, transform: WorkflowBinding['transform']): unknown {
