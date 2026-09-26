@@ -36,6 +36,7 @@ export class RenderQueueService extends EventEmitter {
   private pending:string[]=[];
   private recoveryPending:string[]=[];
   private runningJobId?:string;
+  private recoveryBlockedError?:string;
   private cancelled=new Set<string>();
   private wanGpProcesses=new Map<string,ChildProcess>();
   private comfyCancelPromises=new Map<string,Promise<void>>();
@@ -56,10 +57,10 @@ export class RenderQueueService extends EventEmitter {
     return{runningJobId:this.runningJobId,jobs};
   }
 
-  isBusy():boolean{return Boolean(this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
+  isBusy():boolean{return Boolean(this.recoveryBlockedError||this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
 
   async enqueue(request:RenderRequest):Promise<QueueSnapshot>{
-    const project=this.requireProject();
+    this.assertRecoveryOperational();const project=this.requireProject();
     if(project.rootPath!==request.projectRoot)throw new Error('Render request does not match the open project.');
     const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');
     if(this.hasActiveJobForShot(shot.id))throw new Error(`An active render already exists for ${shot.title}.`);
@@ -71,7 +72,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{
-    const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
+    this.assertRecoveryOperational();const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
     const jobs:RenderJob[]=[];
     const machine=this.settings.get(),probe=await probeSystem(project,machine),runtimeFingerprints=new Map<string,Promise<RenderRuntimeFingerprint>>();
     const fingerprintFor=(profile:WorkflowProfile)=>{
@@ -91,7 +92,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   async retry(jobId:string):Promise<QueueSnapshot>{
-    const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
+    this.assertRecoveryOperational();const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
     if(ACTIVE.has(prior.status))throw new Error('Cannot retry an active job.');
     if(!prior.spec)return this.enqueue({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
     const project=this.requireProject(),machine=this.settings.get(),probe=await probeSystem(project,machine);
@@ -103,7 +104,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   async cancel(jobId:string):Promise<QueueSnapshot>{
-    this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
+    this.assertRecoveryOperational();this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
     const wasRunning=this.runningJobId===jobId;
     if(this.recoveryPending.includes(jobId))throw new Error('This backend-active job is waiting for serialized recovery. Let it become the active recovery job before cancelling so CineForge can confirm the backend stop safely.');
     const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
@@ -145,8 +146,10 @@ export class RenderQueueService extends EventEmitter {
   }
 
   async reconcileAfterProjectOpen():Promise<void>{
-    this.pending=[];this.recoveryPending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
-    const project=this.projects.getCurrent();if(!project)return;
+    this.recoveryBlockedError=undefined;
+    try{
+      this.pending=[];this.recoveryPending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
+      const project=this.projects.getCurrent();if(!project)return;
     const activeLease=await this.renderLeases.read();
     if(activeLease&&(activeLease.projectId!==project.id||activeLease.projectRoot!==project.rootPath))throw new Error('A signed active-render lease belongs to a different project. Open/recover that project before starting any new GPU work.');
     if(activeLease&&!project.renderJobs.some(job=>job.id===activeLease.jobId))throw new Error(`Signed active-render lease references missing job ${activeLease.jobId}. GPU ownership is uncertain; do not start new generation until the prior backend work is stopped and the lease is cleared deliberately.`);
@@ -190,8 +193,13 @@ export class RenderQueueService extends EventEmitter {
       await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
       this.pending.push(job.id);
     }
-    if(!this.runningJobId&&activeLease)await this.releaseRenderLease(activeLease.jobId);
-    this.emitSnapshot();if(!this.runningJobId)void this.pump();
+      if(!this.runningJobId&&activeLease)await this.releaseRenderLease(activeLease.jobId);
+      this.emitSnapshot();if(!this.runningJobId)void this.pump();
+    }catch(error){
+      this.recoveryBlockedError=error instanceof Error?error.message:String(error);
+      this.emitSnapshot();
+      throw error;
+    }
   }
 
   private async recoverActiveJob(jobId:string):Promise<void>{
@@ -368,6 +376,10 @@ export class RenderQueueService extends EventEmitter {
     }
   }
 
+  private assertRecoveryOperational():void{
+    if(this.recoveryBlockedError)throw new Error(`Render recovery is blocked and GPU ownership is uncertain: ${this.recoveryBlockedError}. Resolve the recovery problem and restart/reopen the project before queueing, retrying, or cancelling renders.`);
+  }
+
   private requireProject():FilmProject{const project=this.projects.getCurrent();if(!project)throw new Error('Open a project first.');return project;}
 
   private hasActiveJobForShot(shotId:string):boolean{return this.snapshot().jobs.some(j=>j.shotId===shotId&&ACTIVE.has(j.status));}
@@ -491,7 +503,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async pump():Promise<void>{
-    if(this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
+    if(this.recoveryBlockedError||this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
     const jobId=this.pending.shift()!;if(this.cancelled.has(jobId)){this.cancelled.delete(jobId);return void this.pump();}
     const project=this.requireProject();await this.acquireRenderLease(project,jobId);
     this.runningJobId=jobId;this.emitSnapshot();
