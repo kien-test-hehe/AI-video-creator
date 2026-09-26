@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings } from '../../shared/types';
 import { DEFAULT_APP_MACHINE_SETTINGS } from './machine-defaults';
@@ -23,10 +23,12 @@ export class AppSettingsService {
     catch(primaryError:any){
       try{
         const raw=await readJsonFileLimited(backup,'CineForge machine-settings backup',4*1024*1024);this.current=sanitizeMachineSettings(raw);await copyFile(backup,file);
-      }catch{
+      }catch(backupError:any){
+        if(primaryError?.code!=='ENOENT'||backupError?.code!=='ENOENT'){
+          throw new Error(`CineForge machine settings could not be recovered without risking data loss. Primary: ${primaryError instanceof Error?primaryError.message:String(primaryError)}. Backup: ${backupError instanceof Error?backupError.message:String(backupError)}`);
+        }
         const bootstrapped=await this.loadBootstrapSettings();
         this.current=bootstrapped??structuredClone(DEFAULT_APP_MACHINE_SETTINGS);
-        if(primaryError?.code!=='ENOENT')console.warn('Machine settings could not be loaded; recovered bootstrap/default settings because no valid backup was available.',primaryError);
         await this.persistUnlocked(this.current);
       }
     }
@@ -59,7 +61,10 @@ export class AppSettingsService {
     }catch(error:any){
       if(error?.code!=='ENOENT')throw new Error(`CineForge cannot safely recover render journals because the installation signing key is unreadable or invalid: ${error instanceof Error?error.message:String(error)}`);
     }
-    const existingInstall=await Promise.all([SETTINGS_FILE,SETTINGS_BACKUP_FILE].map(async name=>{try{await readFile(join(this.userDataDir,name),'utf8');return true;}catch{return false;}})).then(values=>values.some(Boolean));
+    const existingInstall=await Promise.all([SETTINGS_FILE,SETTINGS_BACKUP_FILE].map(async name=>{
+      try{await stat(join(this.userDataDir,name));return true;}
+      catch(error:any){if(error?.code==='ENOENT')return false;throw new Error(`Could not verify whether existing CineForge settings are present before creating a new journal signing key: ${error instanceof Error?error.message:String(error)}`);}
+    })).then(values=>values.some(Boolean));
     if(existingInstall)throw new Error('CineForge render-journal signing key is missing on an existing installation. Restore journal-hmac.key or move aside the existing machine settings after confirming no local AI backend job is still running.');
     const key=randomBytes(32);await writeFile(path,key.toString('hex'),{encoding:'utf8',mode:0o600,flag:'wx'});return key;
   }
