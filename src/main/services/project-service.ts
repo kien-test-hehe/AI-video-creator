@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { dialog } from 'electron';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
@@ -8,6 +8,7 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { loadPortableProject } from './project-schema';
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
+import { readJsonFileLimited } from './json-file';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -68,15 +69,11 @@ export class ProjectService {
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
     let raw: unknown;
     try {
-      const info=await stat(file);
-      if(info.size>50*1024*1024)throw new Error('Project file exceeds the 50 MB safety limit.');
-      raw = JSON.parse(await readFile(file, 'utf8'));
+      raw=await readJsonFileLimited(file,'CineForge project file',50*1024*1024);
     }
     catch (primaryError) {
       try {
-        const backupInfo=await stat(backup);
-        if(backupInfo.size>50*1024*1024)throw new Error('Backup project file exceeds the 50 MB safety limit.');
-        raw = JSON.parse(await readFile(backup, 'utf8'));
+        raw=await readJsonFileLimited(backup,'CineForge backup project file',50*1024*1024);
         await copyFile(backup, file);
         console.warn('Recovered CineForge project from backup after the primary project file could not be parsed.', primaryError);
       } catch { throw primaryError; }
