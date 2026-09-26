@@ -6,7 +6,7 @@ import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '
 import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject } from './project-schema';
-import { shotProjectRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
 
 const PROJECT_FILE = 'cineforge.project.json';
@@ -118,11 +118,7 @@ export class ProjectService {
         }
       }
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
-      incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>{
-        const current=currentProfiles.get(profile.id);if(!current)return{...profile,validation:{structuralStatus:'unvalidated',lastError:'New workflow profiles must be validated by the main process before use.'}};
-        if(workflowExecutionKey(profile)!==workflowExecutionKey(current))return{...profile,validation:{structuralStatus:'unvalidated',lastError:'Profile execution configuration changed. Validate it again before rendering.'}};
-        return{...profile,validation:structuredClone(current.validation)};
-      });
+      incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>preserveTrustedProfileValidation(currentProfiles.get(profile.id),profile));
       await this.validateStoragePaths(incoming);
       return this.persistUnlocked(incoming);
     });
