@@ -211,3 +211,8 @@ export function cineforgePromptIdentitiesByMetadata(queue:unknown,history:unknow
 export function cineforgePromptIdentities(queue:unknown,history:unknown,jobId:string):CineforgeComfyPromptIdentity[]{
   return cineforgePromptIdentitiesByMetadata(queue,history,{jobId});
 }
+
+export function hasActiveComfyPrompts(queue:unknown):boolean{
+  const q=queue as any;
+  return (Array.isArray(q?.queue_running)&&q.queue_running.length>0)||(Array.isArray(q?.queue_pending)&&q.queue_pending.length>0);
+}
