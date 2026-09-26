@@ -85,10 +85,9 @@ export class ProjectService {
 
     await this.ensureFolders(project.rootPath);
     await this.validateStoragePaths(project);
-    this.current = project;
-    await this.persistUnlocked(project);
+    const committed=await this.persistUnlocked(project);
     if (loaded.migrationNotes.length) console.warn(loaded.migrationNotes.join('\n'));
-    return structuredClone(project);
+    return committed;
   }
 
   async saveFromRenderer(project: FilmProject): Promise<FilmProject> {
