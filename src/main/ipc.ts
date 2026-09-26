@@ -109,10 +109,10 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const result = await dialog.showOpenDialog({ title: 'Import ComfyUI workflow JSON', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
     if (result.canceled || !result.filePaths[0]) return null;
     const source=result.filePaths[0];
+    const rawWorkflow=await readWorkflow(source);
+    const format=detectWorkflowFormat(rawWorkflow);
     const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-${basename(source)}`),'workflow import target');
     await copyFile(source,target);
-    const rawWorkflow=await readWorkflow(target);
-    const format=detectWorkflowFormat(rawWorkflow);
     if(format==='api'){const inspected=await inspectWorkflow(target);return{path:target,...inspected,warnings:[]};}
     const machine=settings.get();
     const client=new ComfyClient(machine.comfy.url,true);
@@ -131,9 +131,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const result=await dialog.showOpenDialog({title:'Import WanGP exported settings JSON',properties:['openFile'],filters:[{name:'WanGP settings',extensions:['json']}]});
     if(result.canceled||!result.filePaths[0])return null;
     const source=result.filePaths[0];
+    const inspected=await inspectWanGpSettings(source);
     const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-wangp-${basename(source)}`),'WanGP settings import');
     await copyFile(source,target);
-    const inspected=await inspectWanGpSettings(target);
     return{path:target,...inspected,warnings:inspected.warnings};
   });
 
