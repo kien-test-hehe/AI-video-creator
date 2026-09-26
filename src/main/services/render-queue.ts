@@ -21,7 +21,7 @@ import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { JobJournal } from './job-journal';
 import { technicalQcVideo } from './technical-qc';
-import { findExpectedProcessPids, isExpectedProcess, isProcessAlive, killProcessTree } from './process-utils';
+import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './process-utils';
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
 import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
@@ -116,10 +116,11 @@ export class RenderQueueService extends EventEmitter {
           await stopWanGpDocker(machine,job.id);
           if(child?.pid&&isProcessAlive(child.pid))await killProcessTree(child.pid);
         }else if(child?.pid&&isProcessAlive(child.pid))await killProcessTree(child.pid);
-        else if(job.backendPid&&isProcessAlive(job.backendPid)){
-          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');
-          await killProcessTree(job.backendPid);
-        }else throw new Error('WanGP process is no longer running; wait for output finalization instead of marking the job cancelled.');
+        else{
+          const matches=await findExpectedProcessPids([job.id,'wgp.py']);
+          if(!matches.length)throw new Error('WanGP process is no longer running; wait for output finalization instead of marking the job cancelled.');
+          for(const pid of matches)if(isProcessAlive(pid))await killProcessTree(pid);
+        }
         this.cancelled.add(jobId);
       }else{
         const machine=this.settings.get(),client=new ComfyClient(machine.comfy.url,true);
@@ -214,36 +215,46 @@ export class RenderQueueService extends EventEmitter {
       return;
     }
     if(machine.wangp.executionMode==='docker'){
-      while(await isWanGpDockerRunning(machine,job.id)){try{await stopWanGpDocker(machine,job.id);}catch{await sleep(2000);}}
-      return;
+      while(true){
+        try{if(!await isWanGpDockerRunning(machine,job.id))return;await stopWanGpDocker(machine,job.id);}
+        catch(error){await this.updateJob(job.id,{status:'stalled',message:`WanGP Docker cleanup is unconfirmed; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
+      }
     }
-    const pids=new Set<number>();
-    if(job.backendPid&&isProcessAlive(job.backendPid)&&await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))pids.add(job.backendPid);
-    for(const pid of await findExpectedProcessPids([job.id,'wgp.py']))pids.add(pid);
-    for(const pid of pids)while(isProcessAlive(pid)){try{await killProcessTree(pid);}catch{await sleep(2000);}}
-
+    let pids:number[];
+    while(true){
+      try{pids=await findExpectedProcessPids([job.id,'wgp.py']);break;}
+      catch(error){await this.updateJob(job.id,{status:'stalled',message:`WanGP process discovery is unavailable; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
+    }
+    for(const pid of pids)while(isProcessAlive(pid)){
+      try{await killProcessTree(pid);}
+      catch(error){await this.updateJob(job.id,{status:'stalled',message:`WanGP process stop is unconfirmed for PID ${pid}; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
+    }
   }
 
   private async recoverWanGp(project:FilmProject,job:RenderJob):Promise<void>{
     const outputDir=join(project.rootPath,'renders',job.shotId,job.id),machine=this.settings.get();
     const started=Date.now();let stalled=false;
     if(machine.wangp.executionMode==='docker'){
-      while(await isWanGpDockerRunning(machine,job.id)){
+      while(true){
+        let running:boolean;
+        try{running=await isWanGpDockerRunning(machine,job.id);}
+        catch(error){await this.updateJob(job.id,{status:'stalled',message:`Cannot inspect recovered WanGP Docker state; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(5000);continue;}
+        if(!running)break;
         if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
         if(Date.now()-started>12*60*60_000&&!stalled){stalled=true;await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP Docker job has exceeded 12 hours; GPU slot remains reserved until it ends or is cancelled.'},true,true);}
         if(!stalled)await this.updateJob(job.id,{status:'recovering',progress:Math.max(job.progress,0.35),message:'WanGP Docker container is still running · recovered by container identity',lastHeartbeatAt:new Date().toISOString()},false);
         await sleep(5000);
       }
     }else{
-      let pid=job.backendPid;
-      if(!pid||!isProcessAlive(pid)){
-        const matches=await findExpectedProcessPids([job.id,'wgp.py']);
-        if(matches.length>1)throw new Error(`Multiple WanGP processes match recovered job ${job.id}; refusing ambiguous attachment.`);
-        pid=matches[0];
-        if(pid)await this.persistBackendIdentity(job.id,{backendPid:pid,status:'recovering',message:'Recovered WanGP process by command-line run identity'});
+      let matches:number[]=[];
+      while(true){
+        try{matches=await findExpectedProcessPids([job.id,'wgp.py']);break;}
+        catch(error){await this.updateJob(job.id,{status:'stalled',message:`Cannot inspect recovered WanGP process state; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(5000);}
       }
-      if(pid&&isProcessAlive(pid)){
-        if(!await isExpectedProcess(pid,[job.id,'wgp.py']))throw new Error('Recovered PID exists but no longer matches this WanGP job command line.');
+      if(matches.length>1)throw new Error(`Multiple WanGP processes match recovered job ${job.id}; refusing ambiguous attachment.`);
+      const pid=matches[0];
+      if(pid){
+        await this.persistBackendIdentity(job.id,{backendPid:pid,status:'recovering',message:'Recovered WanGP process by command-line run identity'});
         while(isProcessAlive(pid)){
           if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
           if(Date.now()-started>12*60*60_000&&!stalled){stalled=true;await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP process has exceeded 12 hours; GPU slot remains reserved until it ends or is cancelled.'},true,true);}
