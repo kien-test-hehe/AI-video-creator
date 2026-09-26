@@ -69,15 +69,15 @@ export class ProjectService {
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
     await this.assertProjectStateFileNotSymlink(file,'CineForge project file');
     await this.assertProjectStateFileNotSymlink(backup,'CineForge backup project file');
-    let raw: unknown;
+    let raw: unknown,recoveredFromBackup=false,primaryFailure:unknown;
     try {
       raw=await readJsonFileLimited(file,'CineForge project file',50*1024*1024);
     }
     catch (primaryError) {
+      primaryFailure=primaryError;
       try {
         raw=await readJsonFileLimited(backup,'CineForge backup project file',50*1024*1024);
-        await copyFile(backup, file);
-        console.warn('Recovered CineForge project from backup after the primary project file could not be parsed.', primaryError);
+        recoveredFromBackup=true;
       } catch (backupError) {
         throw new Error(`CineForge project could not be loaded from primary or backup. Primary: ${primaryError instanceof Error?primaryError.message:String(primaryError)}. Backup: ${backupError instanceof Error?backupError.message:String(backupError)}`);
       }
@@ -91,6 +91,7 @@ export class ProjectService {
     await this.ensureFolders(project.rootPath);
     await this.validateStoragePaths(project);
     const committed=await this.persistUnlocked(project);
+    if(recoveredFromBackup)console.warn('Recovered CineForge project from backup after the primary project file failed validation.',primaryFailure);
     if (loaded.migrationNotes.length) console.warn(loaded.migrationNotes.join('\n'));
     return committed;
   }
@@ -296,8 +297,8 @@ export class ProjectService {
       try{await writeFile(backupFile,backupPayload,{encoding:'utf8',mode:0o600});}
       catch(error){throw new Error(`Could not create trusted project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
     }else{
-      try{await writeFile(backupFile,payload,{encoding:'utf8',mode:0o600,flag:'wx'});}
-      catch(error:any){if(error?.code!=='EEXIST')throw new Error(`Could not initialize trusted project backup: ${error instanceof Error?error.message:String(error)}`);}
+      try{await writeFile(backupFile,payload,{encoding:'utf8',mode:0o600});}
+      catch(error){throw new Error(`Could not initialize or repair trusted project backup: ${error instanceof Error?error.message:String(error)}`);}
     }
     await writeFile(tempFile, payload, {encoding:'utf8',flag:'wx'});
     try { await rename(tempFile, projectFile); }
