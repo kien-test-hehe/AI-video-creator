@@ -246,6 +246,16 @@ describe('machine settings bootstrap import',()=>{
     }
   });
 });
+describe('render journal signing key safety',()=>{
+  it('refuses to rotate a corrupt signing key on an existing installation',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-journal-key-safety-'));
+    try{
+      const first=new AppSettingsService(root);await first.load();
+      await writeFile(join(root,'journal-hmac.key'),'corrupt-key','utf8');
+      await expect(new AppSettingsService(root).load()).rejects.toThrow(/signing key/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('machine settings persistence recovery',()=>{
   it('recovers the previous valid machine settings from backup after primary corruption',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-settings-'));
