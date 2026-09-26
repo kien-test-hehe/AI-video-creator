@@ -89,3 +89,10 @@ export function shotProjectRenderInputKey(project:FilmProject,shot:Shot):string{
   })).sort((a,b)=>a.id.localeCompare(b.id));
   return JSON.stringify({shot:shotRenderInputKey(shot),promptAssets,workflow:workflowExecutionKey(effectiveWorkflowProfile(project,shot))});
 }
+
+
+export function preserveTrustedProfileValidation(current:WorkflowProfile|undefined,incoming:WorkflowProfile):WorkflowProfile{
+  if(!current)return{...structuredClone(incoming),validation:{structuralStatus:'unvalidated',lastError:'New workflow profiles must be validated by the main process before use.'}};
+  if(workflowExecutionKey(incoming)!==workflowExecutionKey(current))return{...structuredClone(incoming),validation:{structuralStatus:'unvalidated',lastError:'Profile execution configuration changed. Validate it again before rendering.'}};
+  return{...structuredClone(incoming),validation:structuredClone(current.validation)};
+}
