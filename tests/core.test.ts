@@ -11,7 +11,7 @@ import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveSt
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, historyWasInterrupted, promptQueueState } from '../src/main/services/comfy-client';
-import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
+import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
@@ -116,6 +116,16 @@ describe('Studio workflow routing and timeline drag',()=>{
    const project={timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},{id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},{id:'c',shotId:'s3',renderOutputId:'o3',track:0,order:2,trimInSec:0,volume:1}]} as unknown as FilmProject;
    expect(reorderTimeline(project,'c','a')).toBe(true);expect(project.timeline.map(clip=>clip.id)).toEqual(['c','a','b']);expect(project.timeline.map(clip=>clip.order)).toEqual([0,1,2]);
  });
+});
+describe('workflow validation authority',()=>{
+  it('preserves main validation for metadata-only edits and resets it for execution changes or new profiles',()=>{
+    const current:WorkflowProfile={id:'wf',runtime:'wangp',purpose:'video',name:'Old',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings',bindings:[{key:'prompt',jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime-a'}};
+    const renamed=structuredClone(current);renamed.name='Renamed';renamed.notes='metadata only';renamed.validation={structuralStatus:'invalid'};
+    expect(preserveTrustedProfileValidation(current,renamed).validation?.structuralStatus).toBe('valid');
+    const changed=structuredClone(current);changed.bindings=[{key:'prompt',jsonPath:'generation.prompt'}];changed.validation={structuralStatus:'valid',sourceSha256:'forged'};
+    expect(preserveTrustedProfileValidation(current,changed).validation?.structuralStatus).toBe('unvalidated');
+    expect(preserveTrustedProfileValidation(undefined,current).validation?.structuralStatus).toBe('unvalidated');
+  });
 });
 describe('stale creative result guards',()=>{
   const shot=():Shot=>({id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'p',camera:'locked',action:'walk',dialogue:'',continuityNotes:'keep coat',characterAssetIds:['char'],locationAssetId:'loc',propAssetIds:[],referenceAssetIds:[],status:'rendered',latestRenderId:'old',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}});
