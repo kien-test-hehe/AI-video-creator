@@ -51,8 +51,16 @@ export class AppSettingsService {
 
   private async loadOrCreateJournalKey():Promise<Buffer>{
     const path=join(this.userDataDir,JOURNAL_KEY_FILE);
-    try{const value=Buffer.from((await readFile(path,'utf8')).trim(),'hex');if(value.length===32)return value;}catch{}
-    const key=randomBytes(32);await writeFile(path,key.toString('hex'),{encoding:'utf8',mode:0o600});return key;
+    try{
+      const raw=(await readFile(path,'utf8')).trim();
+      if(!/^[0-9a-fA-F]{64}$/.test(raw))throw new Error('Journal signing key is malformed.');
+      return Buffer.from(raw,'hex');
+    }catch(error:any){
+      if(error?.code!=='ENOENT')throw new Error(`CineForge cannot safely recover render journals because the installation signing key is unreadable or invalid: ${error instanceof Error?error.message:String(error)}`);
+    }
+    const existingInstall=await Promise.all([SETTINGS_FILE,SETTINGS_BACKUP_FILE].map(async name=>{try{await readFile(join(this.userDataDir,name),'utf8');return true;}catch{return false;}})).then(values=>values.some(Boolean));
+    if(existingInstall)throw new Error('CineForge render-journal signing key is missing on an existing installation. Restore journal-hmac.key or move aside the existing machine settings after confirming no local AI backend job is still running.');
+    const key=randomBytes(32);await writeFile(path,key.toString('hex'),{encoding:'utf8',mode:0o600,flag:'wx'});return key;
   }
 
   private async persistUnlocked(value:AppMachineSettings):Promise<void>{
