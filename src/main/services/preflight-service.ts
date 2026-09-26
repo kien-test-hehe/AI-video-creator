@@ -50,7 +50,7 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
   if(needsWanGp&&machine.wangp.executionMode==='docker'){
     if(!probe.docker?.available)issues.push({level:'error',code:'DOCKER_UNAVAILABLE',message:`WanGP Docker mode is selected but Docker is unavailable: ${probe.docker?.error||'unknown error'}`});
     if(!machine.wangp.docker.image.trim())issues.push({level:'error',code:'WANGP_DOCKER_IMAGE',message:'WanGP Docker mode requires a configured image tag/digest.'});
-    if(probe.docker?.gpuAccessible===false)issues.push({level:'error',code:'DOCKER_GPU_RUNTIME',message:'Docker did not report an NVIDIA runtime. Verify NVIDIA Container Toolkit / --gpus support before rendering.'});
+    if(probe.docker?.gpuAccessible!==true)issues.push({level:'error',code:'DOCKER_GPU_RUNTIME',message:'Docker NVIDIA GPU runtime is not confirmed. Verify NVIDIA Container Toolkit / --gpus support before rendering.'});
   }
 
   if(!probe.ffmpeg.available)issues.push({level:'error',code:'FFMPEG_MISSING',message:'FFmpeg is unavailable. Technical QC and timeline export require FFmpeg.'});
