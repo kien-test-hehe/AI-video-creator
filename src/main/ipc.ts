@@ -31,12 +31,13 @@ let activeKeyframeAbortController:AbortController|null=null;
 let activeExportPromise:Promise<unknown>|null=null;
 let activeKeyframePromise:Promise<unknown>|null=null;
 let activeDirectorPromise:Promise<unknown>|null=null;
+let activeWorkflowMaintenancePromise:Promise<unknown>|null=null;
 let activeHandoffPromise:Promise<unknown>|null=null;
 
 export async function shutdownForegroundOperations():Promise<void>{
   activeExportAbortController?.abort();
   activeKeyframeAbortController?.abort();
-  const pending=[activeExportPromise,activeKeyframePromise,activeDirectorPromise,activeHandoffPromise].filter((value):value is Promise<unknown>=>Boolean(value));
+  const pending=[activeExportPromise,activeKeyframePromise,activeDirectorPromise,activeWorkflowMaintenancePromise,activeHandoffPromise].filter((value):value is Promise<unknown>=>Boolean(value));
   if(pending.length)await Promise.allSettled(pending);
 }
 
@@ -57,7 +58,11 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   const assertGpuGenerationAvailable=()=>{assertProjectStable();if(activeExportAbortController)throw new Error('Wait for the GPU-assisted timeline export to finish or cancel it before starting generation.');if(workflowValidationBusy)throw new Error('Wait for workflow validation/provisioning to finish before starting GPU generation.');if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
   const assertDirectorAvailable=()=>{assertProjectStable();if(activeExportAbortController)throw new Error('Wait for the timeline export to finish or cancel it before using the local Director.');if(workflowValidationBusy)throw new Error('Wait for workflow validation/provisioning to finish before using the local Director.');if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
   const assertWorkflowMaintenanceAvailable=()=>{assertProjectStable();if(activeExportAbortController||queue.isBusy()||keyframeBusy||directorBusy)throw new Error('Finish or cancel active timeline export, render, keyframe, or Director work before validating or provisioning workflow profiles.');};
-  const withWorkflowValidationLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{if(workflowValidationBusy)throw new Error('A workflow validation/provisioning task is already running.');workflowValidationBusy=true;try{return await operation();}finally{workflowValidationBusy=false;}};
+  const withWorkflowValidationLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{
+    if(workflowValidationBusy)throw new Error('A workflow validation/provisioning task is already running.');
+    workflowValidationBusy=true;const task=operation();activeWorkflowMaintenancePromise=task;
+    try{return await task;}finally{workflowValidationBusy=false;activeWorkflowMaintenancePromise=null;}
+  };
   const withProjectSwitchLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{assertProjectSwitchAllowed();projectSwitchBusy=true;try{return await operation();}finally{projectSwitchBusy=false;}};
   const runPostSwitchStep=async(operation:()=>Promise<unknown>):Promise<string|undefined>=>{try{await operation();return undefined;}catch(error){const message=error instanceof Error?error.message:String(error);console.warn('Post-switch project task failed:',message);return message;}};
   const showPostSwitchWarning=(label:string,message:string)=>{void dialog.showMessageBox({type:'warning',title:'CineForge project warning',message:`Project opened, but ${label} did not complete.`,detail:`${message}\n\nReview System / Preflight before rendering.`}).catch(()=>undefined);};
