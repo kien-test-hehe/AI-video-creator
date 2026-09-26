@@ -10,6 +10,8 @@ import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
 import type { WorkflowProfile } from '../src/shared/types';
 import { stageWorkflowProfileSnapshot } from '../src/main/services/workflow-snapshot';
 import { sha256File } from '../src/main/services/runtime-fingerprint';
+import { JobJournal } from '../src/main/services/job-journal';
+import { randomBytes } from 'node:crypto';
 
 describe('portable project trust boundary',()=>{
   it('migrates v1 but discards executable paths and external endpoint settings',()=>{
@@ -94,6 +96,19 @@ describe('canonical filesystem containment',()=>{
   });
 });
 
+
+describe('signed journal filesystem boundary',()=>{
+  it('refuses to write through a symlinked .cineforge directory',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-journal-project-')),outside=await mkdtemp(join(tmpdir(),'cineforge-journal-outside-'));
+    try{
+      await symlink(outside,join(root,'.cineforge'),'dir');
+      const journal=new JobJournal(randomBytes(32)),now=new Date().toISOString();
+      await expect(journal.write(root,{id:'job-1',shotId:'shot-1',createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:'ltx-2.5-fast',outputs:[]})).rejects.toThrow(/outside|symlink/i);
+      await expect(import('node:fs/promises').then(fs=>fs.stat(join(outside,'jobs','job-1.json')))).rejects.toThrow();
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
 
 describe('project media protocol scope',()=>{
   it('serves only files below assets/ or renders/ and blocks project internals',async()=>{
