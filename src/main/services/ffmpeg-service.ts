@@ -40,7 +40,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
       normalized.push(target);
     }
     const listPath=join(cacheDir,'concat.txt');
-    await writeFile(listPath,normalized.map(path=>`file '${path.replace(/\\/g,'/').replace(/'/g,"'\\''")}'`).join('\n'),'utf8');
+    await writeFile(listPath,normalized.map(ffmpegConcatFileLine).join('\n'),'utf8');
     const safeName=project.name.replace(/[^a-zA-Z0-9_-]+/g,'_')||'cineforge';
     const outputPath=await assertSafeWritePath(exportDir,join(exportDir,`${safeName}-${Date.now()}.${project.settings.outputContainer}`),'master export');
 
@@ -122,4 +122,8 @@ function runCapture(command:string,args:string[],timeoutMs:number,signal?:AbortS
     child.on('error',error=>finish(error));child.on('close',code=>stopping?finish(stopReason??new Error('FFprobe stopped.')):code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-2000)}`)));
   });
 }
+export function ffmpegConcatFileLine(path:string):string{
+  return `file '${path.replace(/\\/g,'/').replace(/'/g,"'\\''")}'`;
+}
+
 function throwIfAborted(signal?:AbortSignal):void{if(signal?.aborted)throw new Error('Timeline export cancelled.');}
