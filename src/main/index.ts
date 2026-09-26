@@ -1,4 +1,4 @@
-import { app, BrowserWindow, net, protocol, session } from 'electron';
+import { app, BrowserWindow, dialog, net, protocol, session } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { registerIpc, shutdownForegroundOperations } from './ipc';
@@ -7,6 +7,7 @@ import { assertExistingProjectMediaPath } from './services/path-safety';
 import { ProjectService } from './services/project-service';
 import { RenderQueueService } from './services/render-queue';
 import { lockDownWebContents } from './services/ipc-security';
+import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from './services/keyframe-lease';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'cineforge-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
@@ -15,6 +16,7 @@ protocol.registerSchemesAsPrivileged([
 let projects: ProjectService;
 let queue: RenderQueueService;
 let machineSettings: AppSettingsService;
+let keyframeLeases:KeyframeLeaseStore;
 let mainWindow: BrowserWindow | null = null;
 let ipcRegistered = false;
 let trustedRendererUrl = '';
@@ -66,6 +68,12 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   trustedRendererUrl=process.env.ELECTRON_RENDERER_URL||pathToFileURL(join(__dirname,'../renderer/index.html')).toString();
   machineSettings = new AppSettingsService(app.getPath('userData'));
   await machineSettings.load();
+  keyframeLeases=new KeyframeLeaseStore(app.getPath('userData'),machineSettings.getJournalKey());
+  try{await recoverOrphanedKeyframeLease(keyframeLeases,machineSettings.get());}
+  catch(error){
+    dialog.showErrorBox('CineForge GPU recovery blocked',error instanceof Error?error.message:String(error));
+    app.quit();return;
+  }
   projects = new ProjectService();
   queue = new RenderQueueService(projects, machineSettings);
 
@@ -74,7 +82,7 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler(() => false);
 
   if (!ipcRegistered) {
-    registerIpc(projects, queue, machineSettings,trustedRendererUrl);
+    registerIpc(projects, queue, machineSettings,keyframeLeases,trustedRendererUrl);
     ipcRegistered = true;
   }
   createWindow();
