@@ -14,9 +14,9 @@ let projectEditRevision=0,busyCount=0;
 
 export const useAppStore=create<AppState>((set,get)=>({
   project:null,machine:null,activeView:'studio',queue:{jobs:[]},busy:false,projectDirty:false,machineDirty:false,
-  setProject:project=>{clearTimeout(projectTimer);projectTimer=undefined;projectEditRevision+=1;set({project,projectDirty:false});},
+  setProject:project=>{clearTimeout(projectTimer);projectTimer=undefined;projectEditRevision+=1;set({project,projectDirty:false,selectedShotId:undefined,probe:undefined});},
   syncRuntime:mainProject=>set(state=>{
-    const current=state.project;if(!current||current.id!==mainProject.id)return{project:mainProject,projectDirty:false};
+    const current=state.project;if(!current||current.id!==mainProject.id)return{project:mainProject,projectDirty:false,selectedShotId:undefined,probe:undefined};
     const next=structuredClone(current);
     next.renderJobs=structuredClone(mainProject.renderJobs);next.renderOutputs=structuredClone(mainProject.renderOutputs);
     const runtime=new Map(mainProject.shots.map(shot=>[shot.id,shot]));
