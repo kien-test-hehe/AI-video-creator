@@ -71,6 +71,7 @@ export class ComfyClient {
     if (!res.ok || payload.error) {
       throw new Error(`ComfyUI rejected prompt (${res.status}): ${JSON.stringify(payload).slice(0,4000)}`);
     }
+    if(typeof payload.prompt_id!=='string'||!payload.prompt_id)throw new Error(`ComfyUI /prompt returned success without a prompt_id: ${JSON.stringify(payload).slice(0,2000)}`);
     return payload as ComfyPromptResult;
   }
 
@@ -195,7 +196,8 @@ export function cineforgePromptIdentities(queue:unknown,history:unknown,jobId:st
     const promptId=typeof record[1]==='string'?record[1]:fallbackId;
     const extra=record[3] as any;
     if(!promptId||extra?.cineforge?.jobId!==jobId)return;
-    found.set(promptId,{promptId,state});
+    const prior=found.get(promptId);
+    if(!prior||prior.state==='history'||state==='running')found.set(promptId,{promptId,state});
   };
   const q=queue as any;
   for(const item of Array.isArray(q?.queue_running)?q.queue_running:[])add(item,'running');
