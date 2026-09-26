@@ -116,10 +116,19 @@ export class ComfyClient {
     const modern=await this.request(`/api/jobs/${encodeURIComponent(promptId)}/cancel`,{method:'POST'},10_000).catch(()=>undefined);
     if(modern&&modern.status!==404&&modern.status!==405){
       if(!modern.ok)throw new Error(`ComfyUI targeted cancel failed: ${modern.status} ${(await readResponseTextLimited(modern,'ComfyUI targeted cancel error',1024*1024)).slice(0,1000)}`);
-      const payload=await readResponseJsonLimited<{cancelled?:boolean}>(modern,'ComfyUI targeted cancel',1024*1024);
-      if(payload.cancelled===true)return;
-      if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} finished before cancellation could be applied.`);
-      throw new Error(`ComfyUI did not confirm targeted cancellation for ${promptId}.`);
+      const raw=await readResponseTextLimited(modern,'ComfyUI targeted cancel',1024*1024);
+      if(raw.trim()){
+        let payload:any;
+        try{payload=JSON.parse(raw);}catch{payload=undefined;}
+        if(payload?.cancelled===true)return;
+      }
+      const state=promptQueueState(await this.queue(),promptId);
+      if(state==='absent'){
+        const history=await this.history(promptId);
+        if(!history||historyWasInterrupted(history))return;
+        throw new Error(`ComfyUI prompt ${promptId} finished before cancellation could be confirmed.`);
+      }
+      throw new Error(`ComfyUI did not confirm targeted cancellation for ${promptId}; prompt is still ${state}.`);
     }
 
     const before=await this.queue();
