@@ -286,17 +286,17 @@ export class ProjectService {
     const serializable = structuredClone(project);
     const projectFile = join(project.rootPath, PROJECT_FILE);
     const backupFile = join(project.rootPath, PROJECT_BACKUP_FILE);
-    const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${process.pid}.tmp`);
+    const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${randomUUID()}.tmp`);
     await this.assertProjectStateFileNotSymlink(projectFile,'CineForge project file');
     await this.assertProjectStateFileNotSymlink(backupFile,'CineForge backup project file');
     const payload = JSON.stringify(serializable, null, 2);
     try { await copyFile(projectFile, backupFile); }
     catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
-    await writeFile(tempFile, payload, 'utf8');
+    await writeFile(tempFile, payload, {encoding:'utf8',flag:'wx'});
     try { await rename(tempFile, projectFile); }
     catch (error: any) {
       if (!['EEXIST','EPERM','EACCES'].includes(error?.code)){await rm(tempFile,{force:true}).catch(()=>undefined);throw error;}
-      try{await writeFile(projectFile, payload, 'utf8');}
+      try{await this.assertProjectStateFileNotSymlink(projectFile,'CineForge project file');await writeFile(projectFile, payload, 'utf8');}
       finally{await rm(tempFile, { force: true }).catch(() => undefined);}
     }
     this.current = serializable;
@@ -315,6 +315,7 @@ export class ProjectService {
     try{
       const info=await lstat(path);
       if(info.isSymbolicLink())throw new Error(`${label} must not be a symbolic link.`);
+      if(!info.isFile())throw new Error(`${label} is not a regular file.`);
     }catch(error:any){if(error?.code!=='ENOENT')throw error;}
   }
 
