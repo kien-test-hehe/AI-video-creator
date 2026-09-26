@@ -206,28 +206,37 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async cleanupRejectedRecovery(job:RenderJob):Promise<void>{
-    const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),machine=this.settings.get();
+    const latest=this.snapshot().jobs.find(item=>item.id===job.id)??job;
+    const runtime=latest.spec?.workflowProfile.runtime??(latest.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),machine=this.settings.get();
     if(runtime==='comfyui'){
-      if(!job.comfyPromptId)return;
+      let promptId=latest.comfyPromptId;
+      if(!promptId){
+        const client=new ComfyClient(machine.comfy.url,true);
+        promptId=await this.resolveComfyPromptIdentity(latest,client);
+        if(!promptId)return;
+        try{await this.confirmComfyCancellation(latest.id,client,promptId);}
+        catch{await waitForComfyPromptRelease(client,promptId,{onTick:message=>this.updateJob(latest.id,{status:'stalled',message},false).catch(()=>undefined)});}
+        return;
+      }
       const client=new ComfyClient(machine.comfy.url,true);
-      try{await this.confirmComfyCancellation(job.id,client,job.comfyPromptId);}
-      catch{await waitForComfyPromptRelease(client,job.comfyPromptId,{onTick:message=>this.updateJob(job.id,{status:'stalled',message},false).catch(()=>undefined)});}
+      try{await this.confirmComfyCancellation(latest.id,client,promptId);}
+      catch{await waitForComfyPromptRelease(client,promptId,{onTick:message=>this.updateJob(latest.id,{status:'stalled',message},false).catch(()=>undefined)});}
       return;
     }
     if(machine.wangp.executionMode==='docker'){
       while(true){
-        try{if(!await isWanGpDockerRunning(machine,job.id))return;await stopWanGpDocker(machine,job.id);}
+        try{if(!await isWanGpDockerRunning(machine,latest.id))return;await stopWanGpDocker(machine,latest.id);}
         catch(error){await this.updateJob(job.id,{status:'stalled',message:`WanGP Docker cleanup is unconfirmed; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
       }
     }
     let pids:number[];
     while(true){
-      try{pids=await findExpectedProcessPids([job.id,'wgp.py']);break;}
-      catch(error){await this.updateJob(job.id,{status:'stalled',message:`WanGP process discovery is unavailable; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
+      try{pids=await findExpectedProcessPids([latest.id,'wgp.py']);break;}
+      catch(error){await this.updateJob(latest.id,{status:'stalled',message:`WanGP process discovery is unavailable; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
     }
     for(const pid of pids)while(isProcessAlive(pid)){
       try{await killProcessTree(pid);}
-      catch(error){await this.updateJob(job.id,{status:'stalled',message:`WanGP process stop is unconfirmed for PID ${pid}; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
+      catch(error){await this.updateJob(latest.id,{status:'stalled',message:`WanGP process stop is unconfirmed for PID ${pid}; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
     }
   }
 
