@@ -1,5 +1,5 @@
 import { basename, join } from 'node:path';
-import { copyFile, writeFile } from 'node:fs/promises';
+import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../shared/ipc';
 import type { AppMachineSettings, AssetKind, FilmProject, KeyframeRequest, RenderBatchRequest, RenderRequest } from '../shared/types';
@@ -109,10 +109,12 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const result = await dialog.showOpenDialog({ title: 'Import ComfyUI workflow JSON', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
     if (result.canceled || !result.filePaths[0]) return null;
     const source=result.filePaths[0];
+    await readWorkflow(source);
     const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-${basename(source)}`),'workflow import target');
     await copyFile(source,target);
-    const rawWorkflow=await readWorkflow(target);
-    const format=detectWorkflowFormat(rawWorkflow);
+    let rawWorkflow:any,format:'api'|'ui';
+    try{rawWorkflow=await readWorkflow(target);format=detectWorkflowFormat(rawWorkflow);}
+    catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
     if(format==='api'){const inspected=await inspectWorkflow(target);return{path:target,...inspected,warnings:[]};}
     const machine=settings.get();
     const client=new ComfyClient(machine.comfy.url,true);
@@ -131,10 +133,13 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const result=await dialog.showOpenDialog({title:'Import WanGP exported settings JSON',properties:['openFile'],filters:[{name:'WanGP settings',extensions:['json']}]});
     if(result.canceled||!result.filePaths[0])return null;
     const source=result.filePaths[0];
+    await inspectWanGpSettings(source);
     const target=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',`${Date.now()}-wangp-${basename(source)}`),'WanGP settings import');
     await copyFile(source,target);
-    const inspected=await inspectWanGpSettings(target);
-    return{path:target,...inspected,warnings:inspected.warnings};
+    try{
+      const inspected=await inspectWanGpSettings(target);
+      return{path:target,...inspected,warnings:inspected.warnings};
+    }catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
   });
 
   handle(IPC.workflowInspect, async (path:string)=>{

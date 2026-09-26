@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readJsonFileLimited } from './json-file';
 import type { WorkflowBinding,WorkflowBindingKey,WorkflowProfile } from '../../shared/types';
 import type { WorkflowValues } from './workflow-engine';
 
@@ -31,12 +31,12 @@ export function analyzeWanGpBindings(settings:any):{bindings:WorkflowBinding[];w
 export function suggestWanGpBindings(settings:any):WorkflowBinding[]{return analyzeWanGpBindings(settings).bindings;}
 
 export async function inspectWanGpSettings(path:string):Promise<{format:'wangp-settings';suggestedBindings:WorkflowBinding[];warnings:string[]}>{
-  const raw=JSON.parse(await readFile(path,'utf8'));if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('WanGP settings must be a JSON object exported from WanGP.');
+  const raw=await readJsonFileLimited<any>(path,'WanGP settings JSON');if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('WanGP settings must be a JSON object exported from WanGP.');
   const analyzed=analyzeWanGpBindings(raw);return{format:'wangp-settings',suggestedBindings:analyzed.bindings,warnings:analyzed.warnings};
 }
 
 export async function validateWanGpProfile(profile:WorkflowProfile):Promise<string[]>{
-  const raw=JSON.parse(await readFile(profile.workflowPath,'utf8'));const issues:string[]=[];
+  const raw=await readJsonFileLimited<any>(profile.workflowPath,'WanGP settings JSON');const issues:string[]=[];
   for(const binding of profile.bindings){
     if(!binding.jsonPath){issues.push(`${binding.key}: missing jsonPath for WanGP runtime.`);continue;}
     if(!hasPath(raw,binding.jsonPath))issues.push(`${binding.key}: JSON path “${binding.jsonPath}” does not exist in exported settings.`);
@@ -47,7 +47,7 @@ export async function validateWanGpProfile(profile:WorkflowProfile):Promise<stri
 }
 
 export async function compileWanGpProfile(profile:WorkflowProfile,values:WorkflowValues):Promise<Record<string,unknown>>{
-  const raw=JSON.parse(await readFile(profile.workflowPath,'utf8')),output=structuredClone(raw);
+  const raw=await readJsonFileLimited<any>(profile.workflowPath,'WanGP settings JSON'),output=structuredClone(raw);
   for(const binding of profile.bindings){
     const value=values[binding.key];if(value===undefined||value===null||value===''||(Array.isArray(value)&&value.length===0)){if(binding.required)throw new Error(`Required WanGP binding is missing: ${binding.key}`);continue;}
     if(!binding.jsonPath){if(binding.required)throw new Error(`Required WanGP binding has no jsonPath: ${binding.key}`);continue;}
