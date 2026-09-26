@@ -68,6 +68,7 @@ export class AppSettingsService {
       const info=await lstat(path);
       if(info.isSymbolicLink())throw new Error('Journal signing key must not be a symbolic link.');
       if(!info.isFile())throw new Error('Journal signing key is not a regular file.');
+      if(info.size>4096)throw new Error('Journal signing key file exceeds the safety limit.');
       const raw=(await readFile(path,'utf8')).trim();
       if(!/^[0-9a-fA-F]{64}$/.test(raw))throw new Error('Journal signing key is malformed.');
       return Buffer.from(raw,'hex');
