@@ -95,6 +95,23 @@ describe('portable project trust boundary',()=>{
     expect(shot.referenceAssetIds).toEqual(['look']);
   });
 
+  it('never coerces truthy strings into trusted boolean project state',()=>{
+    const loaded=loadPortableProject({
+      schemaVersion:2,id:'bools',name:'Booleans',story:{title:'B',logline:'',script:'',notes:''},
+      scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['shot']}],assets:[],
+      shots:[{id:'shot',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],status:'rendered',generation:{modelFamily:'hunyuan-video-1.5',mode:'i2v',quality:'hero',width:832,height:480,frames:97,fps:24,steps:30,cfg:6,seed:1,negativePrompt:'',includeAudio:'true'},latestRenderId:'out'}],
+      renderJobs:[{id:'job',shotId:'shot',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',status:'done',progress:1,message:'done',modelFamily:'hunyuan-video-1.5',outputs:[]}],
+      renderOutputs:[{id:'out',jobId:'job',shotId:'shot',path:'/safe/project/renders/out.mp4',filename:'out.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:'true',issues:[],warnings:[]}}],
+      timeline:[],
+      settings:{costPolicy:{allowCapcutAiCredits:'true'},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[{id:'wf',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'hunyuan-video-1.5',mode:'i2v',workflowPath:'/safe/project/workflows/wf.json',workflowFormat:'wangp-settings',bindings:[{key:'prompt',jsonPath:'prompt',required:'true'}],enabled:'true'}]}
+    },'/safe/project').project;
+    expect(loaded.settings.costPolicy.allowCapcutAiCredits).toBe(false);
+    const profile=loaded.settings.workflowProfiles.find(item=>item.id==='wf')!;
+    expect(profile.enabled).toBe(false);expect(profile.bindings[0].required).toBe(false);
+    expect(loaded.shots[0].generation.includeAudio).toBe(false);
+    expect(loaded.renderOutputs[0].technicalQc?.passed).toBe(false);
+  });
+
   it('rejects oversized or invalid semantic references at schema level',()=>{
     expect(()=>loadPortableProject({
       schemaVersion:2,id:'p',name:'x',story:{},scenes:[],assets:[],shots:[{id:'s',sceneId:'missing',generation:{}}],renderJobs:[],renderOutputs:[],timeline:[],
