@@ -3,7 +3,7 @@ import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import type { AppMachineSettings, Asset, FilmProject, KeyframeRequest, Shot, WorkflowProfile } from '../../shared/types';
 import { ProjectService } from './project-service';
-import { ComfyClient } from './comfy-client';
+import { ComfyClient, cineforgePromptIdentitiesByMetadata } from './comfy-client';
 import { compileProfile, type WorkflowValues } from './workflow-engine';
 import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
@@ -196,7 +196,32 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     for(const key of scalarKeys){const value=values[key];if(typeof value==='string'&&value)(values as any)[key]=await stageImage(value);}
     if(values.referenceImages?.length)values.referenceImages=await Promise.all(values.referenceImages.map(stageImage));
     throwIfAborted(signal);
-    const workflow=await compileProfile(profile,values);await assertCurrent(true);const queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role}});
+    const workflow=await compileProfile(profile,values);await assertCurrent(true);
+    const submissionId=randomUUID();
+    let queued:{prompt_id:string}|undefined;
+    try{queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role,submissionId}});}
+    catch(submitError){
+      let emptyScans=0;
+      while(!queued&&emptyScans<3){
+        try{
+          const [queue,history]=await Promise.all([client.queue(),client.historyAll()]);
+          const matches=cineforgePromptIdentitiesByMetadata(queue,history,{purpose:'keyframe',submissionId});
+          if(matches.length>1){
+            for(const match of matches.filter(item=>item.state!=='history')){
+              try{await client.cancelPrompt(match.promptId);}
+              catch{await waitForComfyPromptRelease(client,match.promptId);}
+            }
+            throw new Error('Multiple ComfyUI prompts matched one keyframe submission; active duplicates were stopped. Retry the keyframe explicitly.');
+          }
+          if(matches.length===1){queued={prompt_id:matches[0].promptId};break;}
+          emptyScans+=1;if(emptyScans<3)await new Promise(resolve=>setTimeout(resolve,500));
+        }catch(discoveryError){
+          if(discoveryError instanceof Error&&/Multiple ComfyUI prompts/.test(discoveryError.message))throw discoveryError;
+          await new Promise(resolve=>setTimeout(resolve,2000));
+        }
+      }
+      if(!queued)throw submitError;
+    }
     let cancelPromise:Promise<void>|undefined;
     const requestCancel=()=>cancelPromise??=client.cancelPrompt(queued.prompt_id);
     const onAbort=()=>{void requestCancel().catch(()=>undefined);};signal?.addEventListener('abort',onAbort,{once:true});
