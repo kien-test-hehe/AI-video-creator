@@ -23,7 +23,9 @@ export class JobJournal {
   }
 
   async readAll(projectRoot:string,jobIds:Iterable<string>):Promise<RenderJob[]>{
-    const dir=join(projectRoot,'.cineforge','jobs'),jobs:RenderJob[]=[];
+    const candidate=join(projectRoot,'.cineforge','jobs'),jobs:RenderJob[]=[];let dir:string;
+    try{dir=await assertExistingPathInside(projectRoot,candidate,'job journal directory');}
+    catch(error:any){if(error?.code==='ENOENT')return[];throw error;}
     for(const id of new Set(jobIds)){
       try{
         const file=await assertExistingPathInside(dir,join(dir,`${id}.json`),'job journal');
