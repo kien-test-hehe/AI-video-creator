@@ -68,5 +68,5 @@ export async function findExpectedProcessPids(markers:string[]):Promise<number[]
       if(pid!==process.pid&&wanted.every(marker=>command.includes(marker)))matches.push(pid);
     }
     return matches;
-  }catch{return[];}
+  }catch(error){throw new Error(`Could not inspect local process table: ${error instanceof Error?error.message:String(error)}`);}
 }
