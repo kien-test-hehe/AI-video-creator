@@ -6,7 +6,7 @@ import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '
 import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject } from './project-schema';
-import { shotProjectRenderInputKey } from '../../shared/shot-signature';
+import { shotProjectRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
 
 const PROJECT_FILE = 'cineforge.project.json';
@@ -119,8 +119,8 @@ export class ProjectService {
       }
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
       incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>{
-        const current=currentProfiles.get(profile.id);if(!current)return profile;
-        if(profileConfigKey(profile)!==profileConfigKey(current))return profile;
+        const current=currentProfiles.get(profile.id);if(!current)return{...profile,validation:{structuralStatus:'unvalidated',lastError:'New workflow profiles must be validated by the main process before use.'}};
+        if(workflowExecutionKey(profile)!==workflowExecutionKey(current))return{...profile,validation:{structuralStatus:'unvalidated',lastError:'Profile execution configuration changed. Validate it again before rendering.'}};
         return{...profile,validation:structuredClone(current.validation)};
       });
       await this.validateStoragePaths(incoming);
@@ -320,13 +320,6 @@ export class ProjectService {
   }
 }
 
-function profileConfigKey(profile:FilmProject['settings']['workflowProfiles'][number]):string{
-  return JSON.stringify({
-    runtime:profile.runtime,purpose:profile.purpose,name:profile.name,modelFamily:profile.modelFamily,mode:profile.mode,
-    workflowPath:profile.workflowPath,workflowFormat:profile.workflowFormat,bindings:profile.bindings,enabled:profile.enabled,
-    notes:profile.notes,modelFingerprint:profile.modelFingerprint
-  });
-}
 
 function assetImportFilters(kind:AssetKind):Array<{name:string;extensions:string[]}>{
   if(kind==='video')return[{name:'Video',extensions:['mp4','mov','webm','mkv','avi']}];
