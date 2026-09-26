@@ -62,7 +62,10 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
 
   handle(IPC.projectCreate, (name?: string) => withProjectSwitchLock(async()=>{
     const created=await projects.createWithDialog(name);
-    if(created){const warning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(warning){console.warn('WanGP auto-provision warning:',warning);showPostSwitchWarning('WanGP auto-provisioning',warning);}}
+    if(created){
+      const provisionWarning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(provisionWarning){console.warn('WanGP auto-provision warning:',provisionWarning);showPostSwitchWarning('WanGP auto-provisioning',provisionWarning);}
+      const queueWarning=await runPostSwitchStep(()=>queue.reconcileAfterProjectOpen());if(queueWarning){console.warn('Queue reset warning:',queueWarning);showPostSwitchWarning('render queue reset',queueWarning);}
+    }
     return projects.getCurrent();
   }));
   handle(IPC.projectOpen, () => withProjectSwitchLock(async()=>{
