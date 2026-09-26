@@ -59,7 +59,7 @@ function spawnWithLogs(command:string,args:string[],options:{cwd?:string;onLog?:
 export async function waitWanGp(child:ChildProcess):Promise<void>{await new Promise<void>((resolvePromise,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>code===0?resolvePromise():reject(new Error(`WanGP exited with code ${code??'null'}${signal?` (${signal})`:''}.`)));});}
 
 const MEDIA_EXT=new Set(['.mp4','.mov','.webm','.mkv','.avi','.png','.jpg','.jpeg','.webp','.wav','.mp3','.flac','.m4a','.aac']);
-export async function collectWanGpOutputs(root:string):Promise<string[]>{const out:string[]=[];const walk=async(dir:string)=>{for(const entry of await readdir(dir,{withFileTypes:true})){const path=join(dir,entry.name);if(entry.isDirectory())await walk(path);else{const lower=entry.name.toLowerCase(),dot=lower.lastIndexOf('.');if(dot>=0&&MEDIA_EXT.has(lower.slice(dot)))out.push(path);}}};await walk(root).catch(()=>undefined);return out.sort();}
+export async function collectWanGpOutputs(root:string):Promise<string[]>{const out:string[]=[];const walk=async(dir:string)=>{for(const entry of await readdir(dir,{withFileTypes:true})){const path=join(dir,entry.name);if(entry.isDirectory())await walk(path);else{const lower=entry.name.toLowerCase(),dot=lower.lastIndexOf('.');if(dot>=0&&MEDIA_EXT.has(lower.slice(dot)))out.push(path);}}};await walk(root);return out.sort();}
 export function outputMediaType(path:string):'video'|'image'|'audio'|'unknown'{const ext=basename(path).toLowerCase().split('.').pop()||'';if(['mp4','mov','webm','mkv','avi'].includes(ext))return'video';if(['png','jpg','jpeg','webp'].includes(ext))return'image';if(['wav','mp3','flac','m4a','aac'].includes(ext))return'audio';return'unknown';}
 
 
