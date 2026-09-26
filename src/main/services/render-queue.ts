@@ -54,7 +54,7 @@ export class RenderQueueService extends EventEmitter {
     const jobs=(project?.renderJobs??[]).map(job=>structuredClone(this.liveJobs.get(job.id)??job));
     for(const live of this.liveJobs.values())if(!jobs.some(j=>j.id===live.id))jobs.push(structuredClone(live));
     jobs.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
-    return{runningJobId:this.runningJobId,jobs};
+    return{runningJobId:this.runningJobId,blockedReason:this.recoveryBlockedError,jobs};
   }
 
   isBusy():boolean{return Boolean(this.recoveryBlockedError||this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
