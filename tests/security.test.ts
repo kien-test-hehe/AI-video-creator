@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadPortableProject } from '../src/main/services/project-schema';
@@ -162,6 +162,15 @@ describe('immutable workflow staging',()=>{
       await writeFile(source,'{"prompt":"changed"}','utf8');
       await expect(stageWorkflowProfileSnapshot(root,profile,expected,join(root,'cache','wf2'))).rejects.toThrow(/changed while staging/i);
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+describe('renderer content security policy',()=>{
+  it('does not let renderer code connect directly to arbitrary loopback AI services',async()=>{
+    const html=await readFile(join(process.cwd(),'src','renderer','index.html'),'utf8');
+    const csp=html.match(/Content-Security-Policy" content="([^"]+)"/)?.[1]||'';
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).not.toMatch(/127\.0\.0\.1|localhost|ws:\/\//i);
   });
 });
 
