@@ -269,6 +269,26 @@ describe('rendered take QC policy',()=>{
     expect(latestPassingVideoTake([failingNew])).toBeUndefined();
   });
 });
+describe('machine settings persistence trust',()=>{
+  it('uses strict booleans and backs up trusted memory instead of tampered disk bytes',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-settings-trust-')),bootstrap=join(root,'bootstrap.json'),userdata=join(root,'userdata'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,JSON.stringify({schemaVersion:1,diagnostics:{persistVerboseLogs:'true'}}),'utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      const service=new AppSettingsService(userdata);await service.load();
+      expect(service.get().diagnostics.persistVerboseLogs).toBe(false);
+      const trusted=service.get();trusted.director.model='trusted-a';await service.save(trusted);
+      await writeFile(join(userdata,'machine-settings.v1.json'),JSON.stringify({schemaVersion:1,director:{model:'tampered'}}),'utf8');
+      const next=service.get();next.director.model='trusted-b';await service.save(next);
+      const backup=JSON.parse(await readFile(join(userdata,'machine-settings.v1.backup.json'),'utf8'));
+      const primary=JSON.parse(await readFile(join(userdata,'machine-settings.v1.json'),'utf8'));
+      expect(backup.director.model).toBe('trusted-a');expect(primary.director.model).toBe('trusted-b');
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+});
 describe('machine settings bootstrap import',()=>{
   it('imports explicit bootstrap machine settings on first load and then persists them',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-bootstrap-settings-'));
