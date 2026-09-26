@@ -87,6 +87,9 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   }
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+}).catch(error=>{
+  dialog.showErrorBox('CineForge startup blocked',error instanceof Error?error.message:String(error));
+  app.quit();
 });
 if(ownsSingleInstanceLock)app.on('second-instance',()=>{
   if(!mainWindow||mainWindow.isDestroyed())return;
