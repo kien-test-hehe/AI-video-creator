@@ -17,10 +17,11 @@ import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessa
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob } from '../src/shared/recovery-policy';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../src/shared/timeline-policy';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
+import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
 import { tmpdir } from 'node:os';
@@ -244,6 +245,25 @@ describe('machine settings bootstrap import',()=>{
       if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
       await rm(root,{recursive:true,force:true});
     }
+  });
+});
+describe('keyframe crash recovery lease',()=>{
+  it('signs the machine-local lease and clears prepared work without touching a backend',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-keyframe-lease-')),key=Buffer.alloc(32,7),store=new KeyframeLeaseStore(root,key);
+    try{
+      const lease={version:1 as const,id:'lease-1',projectId:'project-1',runtime:'comfyui' as const,runId:'keyframe-lease-1',phase:'prepared' as const,comfyUrl:'http://127.0.0.1:8188',createdAt:'2026-01-01T00:00:00.000Z'};
+      await store.write(lease);expect((await store.read())?.id).toBe('lease-1');
+      await recoverOrphanedKeyframeLease(store,{} as AppMachineSettings);
+      expect(await store.read()).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+  it('rejects a tampered submitted lease instead of trusting backend identity from disk',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-keyframe-lease-tamper-')),key=Buffer.alloc(32,9),store=new KeyframeLeaseStore(root,key);
+    try{
+      await store.write({version:1,id:'lease-a',projectId:'project-1',runtime:'wangp',runId:'keyframe-lease-a',phase:'submitting',wanGpExecutionMode:'native',createdAt:'2026-01-01T00:00:00.000Z'});
+      const path=join(root,'active-keyframe.v1.json'),envelope=JSON.parse(await readFile(path,'utf8'));envelope.lease.runId='keyframe-forged';await writeFile(path,JSON.stringify(envelope),'utf8');
+      await expect(store.read()).rejects.toThrow(/signature/i);
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
 describe('render journal signing key safety',()=>{
