@@ -19,14 +19,15 @@ import { selectRecoveryJob } from '../src/shared/recovery-policy';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../src/shared/timeline-policy';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { comfyNodeCatalogFingerprint } from '../src/main/services/runtime-fingerprint';
+import { comfyNodeCatalogFingerprint, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
 import { tmpdir } from 'node:os';
-import { readJsonFileLimited } from '../src/main/services/json-file';
+import { createHash } from 'node:crypto';
+import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
 
 const api: ApiWorkflow = {
@@ -34,6 +35,17 @@ const api: ApiWorkflow = {
   '2': { class_type: 'KSampler', inputs: { seed: 1, steps: 20, cfg: 1 } }
 };
 
+describe('streamed large-file primitives',()=>{
+  it('streams SHA-256 fingerprints and bounds buffered file reads',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-stream-hash-')),path=join(root,'asset.bin');
+    try{
+      const payload=Buffer.alloc(1024*1024+17,0x5a);await writeFile(path,payload);
+      expect(await sha256File(path)).toBe(createHash('sha256').update(payload).digest('hex'));
+      expect((await readFileBufferLimited(path,'test asset',payload.length)).length).toBe(payload.length);
+      await expect(readFileBufferLimited(path,'test asset',payload.length-1)).rejects.toThrow(/too large|safety limit/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('bounded workflow JSON reads',()=>{
   it('parses valid JSON and rejects files that exceed the caller safety limit',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-json-limit-')),small=join(root,'small.json'),large=join(root,'large.json');
