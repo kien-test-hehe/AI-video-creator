@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings } from '../../shared/types';
 import { DEFAULT_APP_MACHINE_SETTINGS } from './machine-defaults';
@@ -19,6 +19,8 @@ export class AppSettingsService {
     await mkdir(this.userDataDir,{recursive:true});
     this.journalKey=await this.loadOrCreateJournalKey();
     const file=join(this.userDataDir,SETTINGS_FILE),backup=join(this.userDataDir,SETTINGS_BACKUP_FILE);
+    await this.assertStateFileNotSymlink(file,'CineForge machine settings');
+    await this.assertStateFileNotSymlink(backup,'CineForge machine-settings backup');
     try{const raw=await readJsonFileLimited(file,'CineForge machine settings',4*1024*1024);this.current=sanitizeMachineSettings(raw);}
     catch(primaryError:any){
       try{
@@ -38,6 +40,13 @@ export class AppSettingsService {
   get():AppMachineSettings{return structuredClone(this.current);}
   getJournalKey():Buffer{return Buffer.from(this.journalKey);}
 
+  private async assertStateFileNotSymlink(path:string,label:string):Promise<void>{
+    try{
+      const info=await lstat(path);
+      if(info.isSymbolicLink())throw new Error(`${label} must not be a symbolic link.`);
+    }catch(error:any){if(error?.code!=='ENOENT')throw error;}
+  }
+
   private async loadBootstrapSettings():Promise<AppMachineSettings|undefined>{
     const candidates=[
       process.env.CINEFORGE_BOOTSTRAP_SETTINGS,
@@ -55,6 +64,9 @@ export class AppSettingsService {
   private async loadOrCreateJournalKey():Promise<Buffer>{
     const path=join(this.userDataDir,JOURNAL_KEY_FILE);
     try{
+      const info=await lstat(path);
+      if(info.isSymbolicLink())throw new Error('Journal signing key must not be a symbolic link.');
+      if(!info.isFile())throw new Error('Journal signing key is not a regular file.');
       const raw=(await readFile(path,'utf8')).trim();
       if(!/^[0-9a-fA-F]{64}$/.test(raw))throw new Error('Journal signing key is malformed.');
       return Buffer.from(raw,'hex');
@@ -62,8 +74,11 @@ export class AppSettingsService {
       if(error?.code!=='ENOENT')throw new Error(`CineForge cannot safely recover render journals because the installation signing key is unreadable or invalid: ${error instanceof Error?error.message:String(error)}`);
     }
     const existingInstall=await Promise.all([SETTINGS_FILE,SETTINGS_BACKUP_FILE].map(async name=>{
-      try{await stat(join(this.userDataDir,name));return true;}
-      catch(error:any){if(error?.code==='ENOENT')return false;throw new Error(`Could not verify whether existing CineForge settings are present before creating a new journal signing key: ${error instanceof Error?error.message:String(error)}`);}
+      try{
+        const info=await lstat(join(this.userDataDir,name));
+        if(info.isSymbolicLink())throw new Error(`${name} must not be a symbolic link.`);
+        return true;
+      }catch(error:any){if(error?.code==='ENOENT')return false;throw new Error(`Could not verify whether existing CineForge settings are present before creating a new journal signing key: ${error instanceof Error?error.message:String(error)}`);}
     })).then(values=>values.some(Boolean));
     if(existingInstall)throw new Error('CineForge render-journal signing key is missing on an existing installation. Restore journal-hmac.key or move aside the existing machine settings after confirming no local AI backend job is still running.');
     const key=randomBytes(32);await writeFile(path,key.toString('hex'),{encoding:'utf8',mode:0o600,flag:'wx'});return key;
