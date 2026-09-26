@@ -27,15 +27,17 @@ export class JobJournal {
     try{dir=await assertExistingPathInside(projectRoot,candidate,'job journal directory');}
     catch(error:any){if(error?.code==='ENOENT')return[];throw error;}
     for(const id of new Set(jobIds)){
-      try{
-        const file=await assertExistingPathInside(dir,join(dir,`${id}.json`),'job journal');
-        const info=await stat(file);if(info.size>5*1024*1024)continue;
-        const envelope=JSON.parse(await readFile(file,'utf8')) as JournalEnvelope;
-        if(envelope?.version!==1||!envelope.job||envelope.job.id!==id||typeof envelope.mac!=='string')continue;
-        const expected=Buffer.from(sign(this.key,envelope.job),'hex'),actual=Buffer.from(envelope.mac,'hex');
-        if(expected.length!==actual.length||!timingSafeEqual(expected,actual))continue;
-        jobs.push(envelope.job);
-      }catch{}
+      let file:string;
+      try{file=await assertExistingPathInside(dir,join(dir,`${id}.json`),'job journal');}
+      catch(error:any){if(error?.code==='ENOENT')continue;throw error;}
+      const info=await stat(file);if(info.size>5*1024*1024)continue;
+      let envelope:JournalEnvelope;
+      try{envelope=JSON.parse(await readFile(file,'utf8')) as JournalEnvelope;}
+      catch(error){if(error instanceof SyntaxError)continue;throw error;}
+      if(envelope?.version!==1||!envelope.job||envelope.job.id!==id||typeof envelope.mac!=='string')continue;
+      const expected=Buffer.from(sign(this.key,envelope.job),'hex'),actual=Buffer.from(envelope.mac,'hex');
+      if(expected.length!==actual.length||!timingSafeEqual(expected,actual))continue;
+      jobs.push(envelope.job);
     }
     return jobs;
   }
