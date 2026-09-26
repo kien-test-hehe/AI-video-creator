@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { dialog } from 'electron';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
@@ -67,6 +67,8 @@ export class ProjectService {
     const openedRoot = resolve(rootPath);
     const file = join(openedRoot, PROJECT_FILE);
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
+    await this.assertProjectStateFileNotSymlink(file,'CineForge project file');
+    await this.assertProjectStateFileNotSymlink(backup,'CineForge backup project file');
     let raw: unknown;
     try {
       raw=await readJsonFileLimited(file,'CineForge project file',50*1024*1024);
@@ -76,7 +78,9 @@ export class ProjectService {
         raw=await readJsonFileLimited(backup,'CineForge backup project file',50*1024*1024);
         await copyFile(backup, file);
         console.warn('Recovered CineForge project from backup after the primary project file could not be parsed.', primaryError);
-      } catch { throw primaryError; }
+      } catch (backupError) {
+        throw new Error(`CineForge project could not be loaded from primary or backup. Primary: ${primaryError instanceof Error?primaryError.message:String(primaryError)}. Backup: ${backupError instanceof Error?backupError.message:String(backupError)}`);
+      }
     }
 
     const loaded = loadPortableProject(raw, openedRoot);
@@ -283,6 +287,8 @@ export class ProjectService {
     const projectFile = join(project.rootPath, PROJECT_FILE);
     const backupFile = join(project.rootPath, PROJECT_BACKUP_FILE);
     const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${process.pid}.tmp`);
+    await this.assertProjectStateFileNotSymlink(projectFile,'CineForge project file');
+    await this.assertProjectStateFileNotSymlink(backupFile,'CineForge backup project file');
     const payload = JSON.stringify(serializable, null, 2);
     try { await copyFile(projectFile, backupFile); }
     catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
@@ -303,6 +309,13 @@ export class ProjectService {
     this.gate = new Promise<void>(resolve => { release = resolve; });
     await previous;
     try { return await operation(); } finally { release(); }
+  }
+
+  private async assertProjectStateFileNotSymlink(path:string,label:string):Promise<void>{
+    try{
+      const info=await lstat(path);
+      if(info.isSymbolicLink())throw new Error(`${label} must not be a symbolic link.`);
+    }catch(error:any){if(error?.code!=='ENOENT')throw error;}
   }
 
   private async ensureFolders(rootPath: string): Promise<void> {
