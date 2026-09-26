@@ -12,6 +12,25 @@ import { stageWorkflowProfileSnapshot } from '../src/main/services/workflow-snap
 import { sha256File } from '../src/main/services/runtime-fingerprint';
 import { JobJournal } from '../src/main/services/job-journal';
 import { randomBytes } from 'node:crypto';
+import { AppSettingsService } from '../src/main/services/app-settings-service';
+
+describe('machine settings trust boundary',()=>{
+  it('rejects symlinked machine settings and journal signing keys',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-settings-symlink-')),outside=await mkdtemp(join(tmpdir(),'cineforge-settings-outside-'));
+    try{
+      const settingsTarget=join(outside,'settings.json'),keyTarget=join(outside,'key.txt');
+      await writeFile(settingsTarget,JSON.stringify({schemaVersion:1}),'utf8');
+      await writeFile(keyTarget,'a'.repeat(64),'utf8');
+      await symlink(keyTarget,join(root,'journal-hmac.key'));
+      await expect(new AppSettingsService(root).load()).rejects.toThrow(/symbolic link/i);
+      await rm(join(root,'journal-hmac.key'),{force:true});
+      await writeFile(join(root,'journal-hmac.key'),'b'.repeat(64),'utf8');
+      await symlink(settingsTarget,join(root,'machine-settings.v1.json'));
+      await expect(new AppSettingsService(root).load()).rejects.toThrow(/symbolic link/i);
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
 
 describe('portable project trust boundary',()=>{
   it('migrates v1 but discards executable paths and external endpoint settings',()=>{
