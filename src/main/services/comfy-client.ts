@@ -81,6 +81,14 @@ export class ComfyClient {
     return history[promptId] ?? null;
   }
 
+  async historyAll():Promise<Record<string,any>>{
+    const res=await this.request('/history',{},30_000);
+    if(!res.ok)throw new Error(`ComfyUI history list failed: ${res.status}`);
+    const history=await res.json();
+    if(!history||typeof history!=='object'||Array.isArray(history))throw new Error('ComfyUI history list returned an invalid payload.');
+    return history as Record<string,any>;
+  }
+
   async queue(): Promise<any> {
     const res = await this.request('/queue', {}, 15_000);
     if (!res.ok) throw new Error(`ComfyUI queue failed: ${res.status}`);
@@ -175,4 +183,25 @@ export function promptQueueState(queue:any,promptId:string):'running'|'pending'|
 export function historyWasInterrupted(history:unknown):boolean{
   const messages=(history as any)?.status?.messages;
   return Array.isArray(messages)&&messages.some((message:any)=>Array.isArray(message)&&message[0]==='execution_interrupted');
+}
+
+
+export interface CineforgeComfyPromptIdentity{promptId:string;state:'running'|'pending'|'history'}
+
+export function cineforgePromptIdentities(queue:unknown,history:unknown,jobId:string):CineforgeComfyPromptIdentity[]{
+  const found=new Map<string,CineforgeComfyPromptIdentity>();
+  const add=(record:unknown,state:CineforgeComfyPromptIdentity['state'],fallbackId?:string)=>{
+    if(!Array.isArray(record))return;
+    const promptId=typeof record[1]==='string'?record[1]:fallbackId;
+    const extra=record[3] as any;
+    if(!promptId||extra?.cineforge?.jobId!==jobId)return;
+    found.set(promptId,{promptId,state});
+  };
+  const q=queue as any;
+  for(const item of Array.isArray(q?.queue_running)?q.queue_running:[])add(item,'running');
+  for(const item of Array.isArray(q?.queue_pending)?q.queue_pending:[])add(item,'pending');
+  if(history&&typeof history==='object'&&!Array.isArray(history)){
+    for(const[id,entry]of Object.entries(history as Record<string,any>))add(entry?.prompt,'history',id);
+  }
+  return[...found.values()];
 }
