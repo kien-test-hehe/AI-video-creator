@@ -9,7 +9,7 @@ import type {
 } from '../../shared/types';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
-import { ComfyClient, cineforgePromptIdentities, historyWasInterrupted, promptQueueState } from './comfy-client';
+import { ComfyClient, cineforgePromptIdentities, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState } from './comfy-client';
 import { compileProfile, type WorkflowValues } from './workflow-engine';
 import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, isWanGpDockerRunning, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
@@ -306,6 +306,11 @@ export class RenderQueueService extends EventEmitter {
           const promptId=matches[0].promptId;
           await this.persistBackendIdentity(job.id,{comfyPromptId:promptId,status:'recovering',message:`Recovered ComfyUI prompt ${promptId} by CineForge job identity`});
           return promptId;
+        }
+        if(hasActiveComfyPrompts(queue)){
+          successfulEmptyScans=0;
+          await this.updateJob(job.id,{status:'stalled',message:'Dedicated ComfyUI still has active work but no exact CineForge prompt identity match yet; GPU slot remains reserved.',lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
+          await sleep(2000);continue;
         }
         successfulEmptyScans+=1;
         if(successfulEmptyScans<3)await sleep(500);
