@@ -11,16 +11,16 @@ export function inferMediaType(filename: string): RenderOutput['mediaType'] {
 }
 
 export function collectComfyFileRefs(value: unknown, out: ComfyFileRef[] = []): ComfyFileRef[] {
-  if (Array.isArray(value)) {
-    for (const item of value) collectComfyFileRefs(item, out);
-    return out;
+  const stack:unknown[]=[value];let visited=0;
+  while(stack.length){
+    if(++visited>200_000)throw new Error('ComfyUI output graph exceeds the traversal safety limit.');
+    const current=stack.pop();
+    if(Array.isArray(current)){for(let i=current.length-1;i>=0;i--)stack.push(current[i]);continue;}
+    if(!current||typeof current!=='object')continue;
+    const obj=current as Record<string,unknown>;
+    if(typeof obj.filename==='string')out.push({filename:obj.filename,subfolder:typeof obj.subfolder==='string'?obj.subfolder:undefined,type:typeof obj.type==='string'?obj.type:'output'});
+    for(const child of Object.values(obj))stack.push(child);
   }
-  if (!value || typeof value !== 'object') return out;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.filename === 'string') {
-    out.push({ filename: obj.filename, subfolder: typeof obj.subfolder === 'string' ? obj.subfolder : undefined, type: typeof obj.type === 'string' ? obj.type : 'output' });
-  }
-  for (const child of Object.values(obj)) collectComfyFileRefs(child, out);
   return out;
 }
 
