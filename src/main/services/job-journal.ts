@@ -1,8 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RenderJob } from '../../shared/types';
-import { assertSafeWritePath } from './path-safety';
+import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
 
 interface JournalEnvelope{version:1;job:RenderJob;mac:string}
 
@@ -13,7 +13,8 @@ export class JobJournal {
   async write(projectRoot:string,job:RenderJob):Promise<void>{
     const previous=this.gates.get(job.id)??Promise.resolve();let release!:()=>void;const latch=new Promise<void>(resolve=>{release=resolve;});const chained=previous.then(()=>latch);this.gates.set(job.id,chained);await previous;
     try{
-      const dir=join(projectRoot,'.cineforge','jobs');await mkdir(dir,{recursive:true});
+      const candidate=join(projectRoot,'.cineforge','jobs'),safeDir=await assertSafeWritePath(projectRoot,candidate,'job journal directory');await mkdir(safeDir,{recursive:true});
+      const dir=await assertExistingPathInside(projectRoot,safeDir,'job journal directory');
       const file=await assertSafeWritePath(dir,join(dir,`${job.id}.json`),'job journal'),temp=`${file}.${process.pid}.${Date.now()}.tmp`;
       const envelope:JournalEnvelope={version:1,job:structuredClone(job),mac:sign(this.key,job)};
       await writeFile(temp,JSON.stringify(envelope,null,2),'utf8');
@@ -21,14 +22,16 @@ export class JobJournal {
     }finally{release();if(this.gates.get(job.id)===chained)this.gates.delete(job.id);}
   }
 
-  async readAll(projectRoot:string):Promise<RenderJob[]>{
-    const dir=join(projectRoot,'.cineforge','jobs');let files:string[];
-    try{files=(await readdir(dir)).filter(name=>name.endsWith('.json'));}catch{return[];}
-    const jobs:RenderJob[]=[];
-    for(const name of files){
+  async readAll(projectRoot:string,jobIds:Iterable<string>):Promise<RenderJob[]>{
+    const candidate=join(projectRoot,'.cineforge','jobs'),jobs:RenderJob[]=[];let dir:string;
+    try{dir=await assertExistingPathInside(projectRoot,candidate,'job journal directory');}
+    catch(error:any){if(error?.code==='ENOENT')return[];throw error;}
+    for(const id of new Set(jobIds)){
       try{
-        const envelope=JSON.parse(await readFile(join(dir,name),'utf8')) as JournalEnvelope;
-        if(envelope?.version!==1||!envelope.job||typeof envelope.mac!=='string')continue;
+        const file=await assertExistingPathInside(dir,join(dir,`${id}.json`),'job journal');
+        const info=await stat(file);if(info.size>5*1024*1024)continue;
+        const envelope=JSON.parse(await readFile(file,'utf8')) as JournalEnvelope;
+        if(envelope?.version!==1||!envelope.job||envelope.job.id!==id||typeof envelope.mac!=='string')continue;
         const expected=Buffer.from(sign(this.key,envelope.job),'hex'),actual=Buffer.from(envelope.mac,'hex');
         if(expected.length!==actual.length||!timingSafeEqual(expected,actual))continue;
         jobs.push(envelope.job);

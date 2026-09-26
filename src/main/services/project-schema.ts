@@ -4,6 +4,7 @@ import type {
   RenderJobStatus, RenderOutput, Scene, Shot, ShotStatus, TimelineClip, WorkflowBinding, WorkflowProfile, WorkflowPurpose
 } from '../../shared/types';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
+import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 const MODEL_FAMILIES = new Set<ModelFamily>(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom']);
@@ -61,10 +62,10 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const shots = array(source.shots).slice(0,100_000).map(value => sanitizeShot(value, sceneIds, assetIds, assetKinds));
   const shotIds = new Set(shots.map(s=>s.id));
   const renderOutputs = array(source.renderOutputs).slice(0,100_000).map(value => sanitizeRenderOutput(value, shotIds));
-  const outputIds = new Set(renderOutputs.map(o=>o.id));
+  const outputById = new Map(renderOutputs.map(output=>[output.id,output] as const));
   const renderJobs = array(source.renderJobs).slice(0,100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds, assetKinds));
   const jobIds=new Set(renderJobs.map(job=>job.id));
-  const timeline = array(source.timeline).slice(0,100_000).map(value => sanitizeTimelineClip(value, shotIds, outputIds));
+  const timeline = array(source.timeline).slice(0,100_000).map(value => sanitizeTimelineClip(value, shotIds, outputById));
 
   assertUniqueIds('scene',scenes);
   assertUniqueIds('asset',assets);
@@ -72,6 +73,8 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   assertUniqueIds('render output',renderOutputs);
   assertUniqueIds('render job',renderJobs);
   assertUniqueIds('timeline clip',timeline);
+  const duplicateTimelineOrder=duplicateTimelineOrderKey(timeline);
+  if(duplicateTimelineOrder)throw new Error(`Duplicate timeline track/order slot: ${duplicateTimelineOrder}`);
 
   for (const scene of scenes) scene.shotIds = scene.shotIds.filter(shotId => shotIds.has(shotId));
   for(const shot of shots){
@@ -309,15 +312,15 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
   };
 }
 
-function sanitizeTimelineClip(value: unknown, shotIds: Set<string>, outputIds: Set<string>): TimelineClip {
+function sanitizeTimelineClip(value: unknown, shotIds: Set<string>, outputs: Map<string,RenderOutput>): TimelineClip {
   const source = asObject(value, 'timeline clip');
-  const shotId=safeId(source.shotId), renderOutputId=safeId(source.renderOutputId);
+  const id=safeId(source.id),shotId=safeId(source.shotId),renderOutputId=safeId(source.renderOutputId);
   if(!shotIds.has(shotId))throw new Error(`Timeline references unknown shot: ${shotId}`);
-  if(!outputIds.has(renderOutputId))throw new Error(`Timeline references unknown output: ${renderOutputId}`);
+  const issue=timelineOutputIssue({id,shotId,renderOutputId},outputs.get(renderOutputId));if(issue)throw new Error(issue);
   const trimIn=clampNumber(source.trimInSec,0,1_000_000,0);
   const trimOut=source.trimOutSec==null?undefined:clampNumber(source.trimOutSec,0,1_000_000,undefined as any);
   if(trimOut!=null&&trimOut<=trimIn)throw new Error('Timeline trimOutSec must be greater than trimInSec.');
-  return { id:safeId(source.id),shotId,renderOutputId,track:clampInt(source.track,0,128,0),order:clampInt(source.order,0,1_000_000,0),trimInSec:trimIn,trimOutSec:trimOut,volume:clampNumber(source.volume,0,8,1) };
+  return { id,shotId,renderOutputId,track:clampInt(source.track,0,128,0),order:clampInt(source.order,0,1_000_000,0),trimInSec:trimIn,trimOutSec:trimOut,volume:clampNumber(source.volume,0,8,1) };
 }
 
 function sanitizeComfyMeta(value:unknown):Record<string,unknown>|undefined{

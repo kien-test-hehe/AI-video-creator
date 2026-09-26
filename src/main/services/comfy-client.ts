@@ -71,6 +71,7 @@ export class ComfyClient {
     if (!res.ok || payload.error) {
       throw new Error(`ComfyUI rejected prompt (${res.status}): ${JSON.stringify(payload).slice(0,4000)}`);
     }
+    if(typeof payload.prompt_id!=='string'||!payload.prompt_id)throw new Error(`ComfyUI /prompt returned success without a prompt_id: ${JSON.stringify(payload).slice(0,2000)}`);
     return payload as ComfyPromptResult;
   }
 
@@ -79,6 +80,14 @@ export class ComfyClient {
     if (!res.ok) throw new Error(`ComfyUI history failed: ${res.status}`);
     const history = await res.json() as Record<string, any>;
     return history[promptId] ?? null;
+  }
+
+  async historyAll():Promise<Record<string,any>>{
+    const res=await this.request('/history',{},30_000);
+    if(!res.ok)throw new Error(`ComfyUI history list failed: ${res.status}`);
+    const history=await res.json();
+    if(!history||typeof history!=='object'||Array.isArray(history))throw new Error('ComfyUI history list returned an invalid payload.');
+    return history as Record<string,any>;
   }
 
   async queue(): Promise<any> {
@@ -112,15 +121,19 @@ export class ComfyClient {
     }
 
     const before=await this.queue();
-    const state=queueState(before,promptId);
+    const state=promptQueueState(before,promptId);
     if(state==='pending')await this.deleteQueued(promptId);
     else if(state==='running')await this.interrupt(promptId);
-    else if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} already finished.`);
-    else throw new Error(`ComfyUI prompt ${promptId} is no longer present in queue or history.`);
+    else{
+      const history=await this.history(promptId);
+      if(historyWasInterrupted(history))return;
+      if(history)throw new Error(`ComfyUI prompt ${promptId} already finished.`);
+      throw new Error(`ComfyUI prompt ${promptId} is no longer present in queue or history.`);
+    }
 
     const deadline=Date.now()+5000;
     while(Date.now()<deadline){
-      const now=queueState(await this.queue(),promptId);
+      const now=promptQueueState(await this.queue(),promptId);
       if(now==='absent'){
         const history=await this.history(promptId);
         if(!history)return;
@@ -159,7 +172,7 @@ export class ComfyClient {
   }
 }
 
-function queueState(queue:any,promptId:string):'running'|'pending'|'absent'{
+export function promptQueueState(queue:any,promptId:string):'running'|'pending'|'absent'{
   const running=Array.isArray(queue?.queue_running)?queue.queue_running:[];
   const pending=Array.isArray(queue?.queue_pending)?queue.queue_pending:[];
   if(running.some((item:any)=>Array.isArray(item)&&item[1]===promptId))return'running';
@@ -171,4 +184,35 @@ function queueState(queue:any,promptId:string):'running'|'pending'|'absent'{
 export function historyWasInterrupted(history:unknown):boolean{
   const messages=(history as any)?.status?.messages;
   return Array.isArray(messages)&&messages.some((message:any)=>Array.isArray(message)&&message[0]==='execution_interrupted');
+}
+
+
+export interface CineforgeComfyPromptIdentity{promptId:string;state:'running'|'pending'|'history'}
+
+export function cineforgePromptIdentitiesByMetadata(queue:unknown,history:unknown,metadata:Record<string,string>):CineforgeComfyPromptIdentity[]{
+  const found=new Map<string,CineforgeComfyPromptIdentity>();
+  const add=(record:unknown,state:CineforgeComfyPromptIdentity['state'],fallbackId?:string)=>{
+    if(!Array.isArray(record))return;
+    const promptId=typeof record[1]==='string'?record[1]:fallbackId;
+    const extra=(record[3] as any)?.cineforge;
+    if(!promptId||!extra||!Object.entries(metadata).every(([key,value])=>extra[key]===value))return;
+    const prior=found.get(promptId);
+    if(!prior||prior.state==='history'||state==='running')found.set(promptId,{promptId,state});
+  };
+  const q=queue as any;
+  for(const item of Array.isArray(q?.queue_running)?q.queue_running:[])add(item,'running');
+  for(const item of Array.isArray(q?.queue_pending)?q.queue_pending:[])add(item,'pending');
+  if(history&&typeof history==='object'&&!Array.isArray(history)){
+    for(const[id,entry]of Object.entries(history as Record<string,any>))add(entry?.prompt,'history',id);
+  }
+  return[...found.values()];
+}
+
+export function cineforgePromptIdentities(queue:unknown,history:unknown,jobId:string):CineforgeComfyPromptIdentity[]{
+  return cineforgePromptIdentitiesByMetadata(queue,history,{jobId});
+}
+
+export function hasActiveComfyPrompts(queue:unknown):boolean{
+  const q=queue as any;
+  return (Array.isArray(q?.queue_running)&&q.queue_running.length>0)||(Array.isArray(q?.queue_pending)&&q.queue_pending.length>0);
 }

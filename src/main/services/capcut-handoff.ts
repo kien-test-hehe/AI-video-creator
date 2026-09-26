@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { FilmProject } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath } from './path-safety';
+import { timelineOutputIssue } from '../../shared/timeline-policy';
 
 export interface CapCutHandoffResult{directory:string;manifestPath:string;taskPath:string;prompt:string}
 
@@ -17,7 +18,7 @@ export async function prepareCapCutHandoff(project:FilmProject):Promise<CapCutHa
     if(clip.trimOutSec!=null&&clip.trimOutSec<=clip.trimInSec)throw new Error(`Invalid trim on timeline clip ${clip.id}.`);
     if(!Number.isFinite(clip.volume)||clip.volume<0)throw new Error(`Invalid volume on timeline clip ${clip.id}.`);
     const shot=project.shots.find(s=>s.id===clip.shotId);if(!shot)throw new Error(`Timeline clip ${clip.id} references a missing shot.`);
-    const render=project.renderOutputs.find(r=>r.id===clip.renderOutputId);if(!render||render.mediaType!=='video')throw new Error(`Timeline clip ${clip.id} has no valid video render.`);
+    const render=project.renderOutputs.find(r=>r.id===clip.renderOutputId);const renderIssue=timelineOutputIssue(clip,render);if(renderIssue||!render)throw new Error(renderIssue||`Timeline clip ${clip.id} has no valid video render.`);
     const duration=render.technicalQc?.durationSec;
     if(duration!=null&&clip.trimInSec>=duration)throw new Error(`Timeline clip ${clip.id} starts at ${clip.trimInSec}s, beyond its measured ${duration.toFixed(3)}s source duration.`);
     if(duration!=null&&clip.trimOutSec!=null&&clip.trimOutSec>duration+0.02)throw new Error(`Timeline clip ${clip.id} ends at ${clip.trimOutSec}s, beyond its measured ${duration.toFixed(3)}s source duration.`);

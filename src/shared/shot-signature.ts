@@ -1,4 +1,4 @@
-import type { FilmProject, Shot, WorkflowProfile } from './types';
+import type { FilmProject, RenderJobSpec, Shot, WorkflowProfile } from './types';
 
 export function shotRenderInputKey(shot:Shot):string{
   return JSON.stringify({
@@ -67,6 +67,15 @@ export function workflowExecutionKey(profile:WorkflowProfile|undefined):string{
   });
 }
 
+export function canRefreshProfileValidationFromRender(profile:WorkflowProfile|undefined,spec:RenderJobSpec|undefined):boolean{
+  if(!profile||!spec)return false;
+  return workflowExecutionKey(profile)===workflowExecutionKey(spec.workflowProfile)
+    &&profile.validation?.structuralStatus==='valid'
+    &&profile.validation.sourceSha256===spec.workflowSha256
+    &&profile.validation.runtimeFingerprint===spec.runtimeFingerprint.environmentSha256
+    &&(profile.modelFingerprint||undefined)===(spec.modelFingerprint||undefined);
+}
+
 function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile|undefined{
   if(shot.generation.workflowProfileId)return project.settings.workflowProfiles.find(profile=>profile.id===shot.generation.workflowProfileId);
   const candidates=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&Boolean(profile.workflowPath));
@@ -79,4 +88,11 @@ export function shotProjectRenderInputKey(project:FilmProject,shot:Shot):string{
     id:asset!.id,kind:asset!.kind,name:asset!.name,notes:asset!.notes
   })).sort((a,b)=>a.id.localeCompare(b.id));
   return JSON.stringify({shot:shotRenderInputKey(shot),promptAssets,workflow:workflowExecutionKey(effectiveWorkflowProfile(project,shot))});
+}
+
+
+export function preserveTrustedProfileValidation(current:WorkflowProfile|undefined,incoming:WorkflowProfile):WorkflowProfile{
+  if(!current)return{...structuredClone(incoming),validation:{structuralStatus:'unvalidated',lastError:'New workflow profiles must be validated by the main process before use.'}};
+  if(workflowExecutionKey(incoming)!==workflowExecutionKey(current))return{...structuredClone(incoming),validation:{structuralStatus:'unvalidated',lastError:'Profile execution configuration changed. Validate it again before rendering.'}};
+  return{...structuredClone(incoming),validation:structuredClone(current.validation)};
 }

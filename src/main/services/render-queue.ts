@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type {
@@ -9,36 +9,41 @@ import type {
 } from '../../shared/types';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
-import { ComfyClient } from './comfy-client';
+import { ComfyClient, cineforgePromptIdentities, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState } from './comfy-client';
 import { compileProfile, type WorkflowValues } from './workflow-engine';
 import { compileWanGpProfile } from './wangp-engine';
 import { collectWanGpOutputs, isWanGpDockerRunning, outputMediaType, startWanGp, stopWanGpDocker, waitWanGp } from './wangp-runner';
 import { routeWorkflow } from './model-router';
-import { collectComfyFileRefs, inferMediaType, uniqueComfyFileRefs } from './comfy-output';
-import { waitForComfyCompletion } from './comfy-runner';
+import { collectComfyHistoryOutputRefs, inferMediaType } from './comfy-output';
+import { waitForComfyCompletion, waitForComfyPromptRelease } from './comfy-runner';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { JobJournal } from './job-journal';
 import { technicalQcVideo } from './technical-qc';
-import { isExpectedProcess, isProcessAlive, killProcessTree } from './process-utils';
+import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './process-utils';
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
-import { shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { selectRecoveryJob } from '../../shared/recovery-policy';
+import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
+import { RenderLeaseStore } from './render-lease';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
 
 export class RenderQueueService extends EventEmitter {
   private pending:string[]=[];
+  private recoveryPending:string[]=[];
   private runningJobId?:string;
   private cancelled=new Set<string>();
   private wanGpProcesses=new Map<string,ChildProcess>();
+  private comfyCancelPromises=new Map<string,Promise<void>>();
   private liveJobs=new Map<string,RenderJob>();
   private lastJournalWrite=new Map<string,number>();
   private journal:JobJournal;
 
-  constructor(private projects:ProjectService,private settings:AppSettingsService){
+  constructor(private projects:ProjectService,private settings:AppSettingsService,private renderLeases:RenderLeaseStore){
     super();
     this.journal=new JobJournal(settings.getJournalKey());
   }
@@ -51,7 +56,7 @@ export class RenderQueueService extends EventEmitter {
     return{runningJobId:this.runningJobId,jobs};
   }
 
-  isBusy():boolean{return Boolean(this.runningJobId||this.pending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
+  isBusy():boolean{return Boolean(this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
 
   async enqueue(request:RenderRequest):Promise<QueueSnapshot>{
     const project=this.requireProject();
@@ -100,26 +105,35 @@ export class RenderQueueService extends EventEmitter {
   async cancel(jobId:string):Promise<QueueSnapshot>{
     this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
     const wasRunning=this.runningJobId===jobId;
+    if(this.recoveryPending.includes(jobId))throw new Error('This backend-active job is waiting for serialized recovery. Let it become the active recovery job before cancelling so CineForge can confirm the backend stop safely.');
     const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(wasRunning&&runtime==='comfyui'&&!this.settings.get().comfy.dedicatedInstance)throw new Error('Safe cancellation is disabled for a shared ComfyUI instance. Configure a dedicated CineForge ComfyUI instance first.');
     this.pending=this.pending.filter(id=>id!==jobId);
     if(wasRunning){
       if(runtime==='wangp'){
-        this.cancelled.add(jobId);
         const machine=this.settings.get(),child=this.wanGpProcesses.get(jobId);
         if(machine.wangp.executionMode==='docker'){
+          if(!await isWanGpDockerRunning(machine,job.id))throw new Error('WanGP container is no longer running; wait for output finalization instead of marking the job cancelled.');
           await stopWanGpDocker(machine,job.id);
-          if(child?.pid)await killProcessTree(child.pid);
-        }else if(child?.pid)await killProcessTree(child.pid);
-        else if(job.backendPid){
-          if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py'])){this.cancelled.delete(jobId);throw new Error('Refusing to kill a recovered PID whose command line no longer matches this WanGP job.');}
-          await killProcessTree(job.backendPid);
+          if(child?.pid&&isProcessAlive(child.pid))await killProcessTree(child.pid);
+        }else if(child?.pid&&isProcessAlive(child.pid))await killProcessTree(child.pid);
+        else{
+          const matches=await findExpectedProcessPids([job.id,'wgp.py']);
+          if(!matches.length)throw new Error('WanGP process is no longer running; wait for output finalization instead of marking the job cancelled.');
+          for(const pid of matches)if(isProcessAlive(pid))await killProcessTree(pid);
         }
+        this.cancelled.add(jobId);
       }else{
-        if(job.comfyPromptId){
-          const machine=this.settings.get(),client=new ComfyClient(machine.comfy.url,true);
-          try{await client.cancelPrompt(job.comfyPromptId);}
-          catch(error){throw new Error(`ComfyUI did not confirm cancellation for ${job.comfyPromptId}: ${error instanceof Error?error.message:String(error)}`);}
+        const machine=this.settings.get(),client=new ComfyClient(machine.comfy.url,true);
+        let promptId=job.comfyPromptId;
+        if(!promptId){
+          this.cancelled.add(jobId);
+          try{promptId=await this.waitForComfyPromptOrExit(jobId);}
+          catch(error){this.cancelled.delete(jobId);throw error;}
+        }
+        if(promptId){
+          try{await this.confirmComfyCancellation(jobId,client,promptId);}
+          catch(error){this.cancelled.delete(jobId);throw new Error(`ComfyUI did not confirm cancellation for ${promptId}: ${error instanceof Error?error.message:String(error)}`);}
         }
         this.cancelled.add(jobId);
       }
@@ -131,16 +145,32 @@ export class RenderQueueService extends EventEmitter {
   }
 
   async reconcileAfterProjectOpen():Promise<void>{
-    this.pending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
+    this.pending=[];this.recoveryPending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
     const project=this.projects.getCurrent();if(!project)return;
-    const journals=await this.journal.readAll(project.rootPath);const byId=new Map(journals.map(j=>[j.id,j]));
-    const jobs=project.renderJobs.map(j=>byId.get(j.id)??j).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
+    const activeLease=await this.renderLeases.read();
+    if(activeLease&&(activeLease.projectId!==project.id||activeLease.projectRoot!==project.rootPath))throw new Error('A signed active-render lease belongs to a different project. Open/recover that project before starting any new GPU work.');
+    if(activeLease&&!project.renderJobs.some(job=>job.id===activeLease.jobId))throw new Error(`Signed active-render lease references missing job ${activeLease.jobId}. GPU ownership is uncertain; do not start new generation until the prior backend work is stopped and the lease is cleared deliberately.`);
+    const journals=await this.journal.readAll(project.rootPath,project.renderJobs.filter(job=>!TERMINAL.has(job.status)).map(job=>job.id));const byId=new Map(journals.map(j=>[j.id,j]));
+    const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id))).sort((a,b)=>{
+      if(activeLease){if(a.job.id===activeLease.jobId)return-1;if(b.job.id===activeLease.jobId)return 1;}
+      return a.job.createdAt.localeCompare(b.job.createdAt);
+    });
     let recoveryStarted=false;
-    for(const job of jobs){
-      const signed=byId.has(job.id);
+    for(const selection of selections){
+      const job=selection.job,signed=selection.signed;
       this.liveJobs.set(job.id,structuredClone(job));
-      if(TERMINAL.has(job.status))continue;
+      if(TERMINAL.has(job.status)){
+        if(selection.persistTerminal){
+          await this.projects.mutate(p=>{
+            const target=p.renderJobs.find(item=>item.id===job.id);if(target)Object.assign(target,structuredClone(job));
+            const shot=p.shots.find(item=>item.id===job.shotId);
+            if(shot&&['queued','rendering'].includes(shot.status))shot.status=shot.latestRenderId?'rendered':job.status==='failed'?'failed':'ready';
+          });
+        }
+        continue;
+      }
       if(!signed){
+        if(activeLease?.jobId===job.id)throw new Error(`Signed active-render lease exists for ${job.id}, but its signed project journal is missing or invalid. Recovery is blocked to avoid releasing an unknown GPU backend.`);
         await this.updateJob(job.id,{status:'orphaned',progress:0,message:'Untrusted runtime state was not resumed',error:'No valid installation-signed job journal exists for this active job. Queue a new render explicitly.'},true,false);
         continue;
       }
@@ -148,12 +178,19 @@ export class RenderQueueService extends EventEmitter {
         await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
         this.pending.push(job.id);continue;
       }
-      if(!recoveryStarted&&['submitted','running','recovering','stalled','downloading'].includes(job.status)){
-        recoveryStarted=true;this.runningJobId=job.id;void this.recoverActiveJob(job.id);continue;
+      if(['submitted','running','recovering','stalled','downloading'].includes(job.status)){
+        if(!recoveryStarted){
+          recoveryStarted=true;this.runningJobId=job.id;
+          await this.acquireRenderLease(project,job.id);
+          void this.recoverActiveJob(job.id);continue;
+        }
+        await this.updateJob(job.id,{status:'recovering',message:'Waiting for serialized backend recovery; no new GPU work will start before this backend identity is resolved.'},true,true);
+        this.recoveryPending.push(job.id);continue;
       }
-      await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · serialized behind the active job'},true,true);
+      await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
       this.pending.push(job.id);
     }
+    if(!this.runningJobId&&activeLease)await this.releaseRenderLease(activeLease.jobId);
     this.emitSnapshot();if(!this.runningJobId)void this.pump();
   }
 
@@ -167,59 +204,236 @@ export class RenderQueueService extends EventEmitter {
       if(runtime==='wangp')await this.recoverWanGp(project,job);
       else await this.recoverComfy(project,job);
     }catch(error){
-      if(recoveredJob)await this.cleanupRejectedRecovery(recoveredJob).catch(()=>undefined);
-      await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
+      if(this.cancelled.has(jobId))await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled',error:undefined},true,true);
+      else{
+        if(recoveredJob)await this.cleanupRejectedRecovery(recoveredJob);
+        await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
+      }
     }finally{
-      this.runningJobId=undefined;this.emitSnapshot();void this.pump();
+      await this.cleanupJobSnapshots(jobId);
+      this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;
+      const nextRecovery=this.recoveryPending.shift();
+      if(nextRecovery){
+        const project=this.requireProject();await this.acquireRenderLease(project,nextRecovery);
+        this.runningJobId=nextRecovery;this.emitSnapshot();void this.recoverActiveJob(nextRecovery);
+      }else{
+        await this.releaseRenderLease(jobId);
+        this.emitSnapshot();void this.pump();
+      }
     }
   }
 
   private async cleanupRejectedRecovery(job:RenderJob):Promise<void>{
-    const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
-    if(runtime!=='wangp')return;
-    const machine=this.settings.get();
-    if(machine.wangp.executionMode==='docker'){await stopWanGpDocker(machine,job.id);return;}
-    if(job.backendPid&&isProcessAlive(job.backendPid)&&await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))await killProcessTree(job.backendPid);
+    const latest=this.snapshot().jobs.find(item=>item.id===job.id)??job;
+    const runtime=latest.spec?.workflowProfile.runtime??(latest.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),machine=this.settings.get();
+    if(runtime==='comfyui'){
+      let promptId=latest.comfyPromptId;
+      if(!promptId){
+        const client=new ComfyClient(machine.comfy.url,true);
+        promptId=await this.resolveComfyPromptIdentity(latest,client);
+        if(!promptId)return;
+        try{await this.confirmComfyCancellation(latest.id,client,promptId);}
+        catch{await waitForComfyPromptRelease(client,promptId,{onTick:message=>this.updateJob(latest.id,{status:'stalled',message},false).catch(()=>undefined)});}
+        return;
+      }
+      const client=new ComfyClient(machine.comfy.url,true);
+      try{await this.confirmComfyCancellation(latest.id,client,promptId);}
+      catch{await waitForComfyPromptRelease(client,promptId,{onTick:message=>this.updateJob(latest.id,{status:'stalled',message},false).catch(()=>undefined)});}
+      return;
+    }
+    if(machine.wangp.executionMode==='docker'){
+      while(true){
+        try{if(!await isWanGpDockerRunning(machine,latest.id))return;await stopWanGpDocker(machine,latest.id);}
+        catch(error){await this.updateJob(job.id,{status:'stalled',message:`WanGP Docker cleanup is unconfirmed; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
+      }
+    }
+    let pids:number[];
+    while(true){
+      try{pids=await findExpectedProcessPids([latest.id,'wgp.py']);break;}
+      catch(error){await this.updateJob(latest.id,{status:'stalled',message:`WanGP process discovery is unavailable; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
+    }
+    for(const pid of pids)while(isProcessAlive(pid)){
+      try{await killProcessTree(pid);}
+      catch(error){await this.updateJob(latest.id,{status:'stalled',message:`WanGP process stop is unconfirmed for PID ${pid}; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(2000);}
+    }
   }
 
   private async recoverWanGp(project:FilmProject,job:RenderJob):Promise<void>{
     const outputDir=join(project.rootPath,'renders',job.shotId,job.id),machine=this.settings.get();
     const started=Date.now();let stalled=false;
     if(machine.wangp.executionMode==='docker'){
-      while(await isWanGpDockerRunning(machine,job.id)){
+      while(true){
+        let running:boolean;
+        try{running=await isWanGpDockerRunning(machine,job.id);}
+        catch(error){await this.updateJob(job.id,{status:'stalled',message:`Cannot inspect recovered WanGP Docker state; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(5000);continue;}
+        if(!running)break;
         if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
         if(Date.now()-started>12*60*60_000&&!stalled){stalled=true;await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP Docker job has exceeded 12 hours; GPU slot remains reserved until it ends or is cancelled.'},true,true);}
         if(!stalled)await this.updateJob(job.id,{status:'recovering',progress:Math.max(job.progress,0.35),message:'WanGP Docker container is still running · recovered by container identity',lastHeartbeatAt:new Date().toISOString()},false);
         await sleep(5000);
       }
-    }else if(job.backendPid&&isProcessAlive(job.backendPid)){
-      if(!await isExpectedProcess(job.backendPid,[job.id,'wgp.py']))throw new Error('Recovered PID exists but no longer matches this WanGP job command line.');
-      while(isProcessAlive(job.backendPid)){
-        if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
-        if(Date.now()-started>12*60*60_000&&!stalled){stalled=true;await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP process has exceeded 12 hours; GPU slot remains reserved until it ends or is cancelled.'},true,true);}
-        if(!stalled)await this.updateJob(job.id,{status:'recovering',progress:Math.max(job.progress,0.35),message:'WanGP process is still running · recovered by PID',lastHeartbeatAt:new Date().toISOString()},false);
-        await sleep(5000);
+    }else{
+      let matches:number[]=[];
+      while(true){
+        try{matches=await findExpectedProcessPids([job.id,'wgp.py']);break;}
+        catch(error){await this.updateJob(job.id,{status:'stalled',message:`Cannot inspect recovered WanGP process state; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);await sleep(5000);}
+      }
+      if(matches.length>1)throw new Error(`Multiple WanGP processes match recovered job ${job.id}; refusing ambiguous attachment.`);
+      const pid=matches[0];
+      if(pid){
+        await this.persistBackendIdentity(job.id,{backendPid:pid,status:'recovering',message:'Recovered WanGP process by command-line run identity'});
+        while(isProcessAlive(pid)){
+          if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
+          if(Date.now()-started>12*60*60_000&&!stalled){stalled=true;await this.updateJob(job.id,{status:'stalled',message:'Recovered WanGP process has exceeded 12 hours; GPU slot remains reserved until it ends or is cancelled.'},true,true);}
+          if(!stalled)await this.updateJob(job.id,{status:'recovering',progress:Math.max(job.progress,0.35),message:'WanGP process is still running · recovered by run identity',lastHeartbeatAt:new Date().toISOString()},false);
+          await sleep(5000);
+        }
       }
     }
-    const files=await collectWanGpOutputs(outputDir);if(!files.length)throw new Error('WanGP process ended but no media output was found.');
+    const files=await collectWanGpOutputs(outputDir);if(!files.length)throw new Error('WanGP process ended or was not found, and no media output was found.');
     await this.finalizeWanGpFiles(project,job,files);
   }
 
   private async recoverComfy(project:FilmProject,job:RenderJob):Promise<void>{
-    if(!job.comfyPromptId)throw new Error('Recovered ComfyUI job has no prompt id.');
     const client=new ComfyClient(this.settings.get().comfy.url,true);
-    let history=await client.history(job.comfyPromptId);
+    const promptId=job.comfyPromptId??await this.resolveComfyPromptIdentity(job,client);
+    if(!promptId)throw new Error('Recovered ComfyUI submission has no matching CineForge prompt in queue/history.');
+    let history=await client.history(promptId);
     if(!history){
       const queue=await client.queue();
-      if(!JSON.stringify(queue).includes(job.comfyPromptId))throw new Error('ComfyUI no longer has this prompt in history or queue.');
-      history=await waitForComfyCompletion(client,job.comfyPromptId,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:'recovering',message:`ComfyUI recovered · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});
+      if(promptQueueState(queue,promptId)==='absent')throw new Error('ComfyUI no longer has this prompt in history or queue.');
+      history=await this.waitForComfyWithSafeTimeout(client,job,promptId,true);
     }
-    await this.finalizeComfyHistory(project,job,client,history);
+    await this.finalizeComfyHistory(project,{...job,comfyPromptId:promptId},client,history);
+  }
+
+  private async resolveComfyPromptIdentity(job:RenderJob,client:ComfyClient):Promise<string|undefined>{
+    let successfulEmptyScans=0;
+    while(successfulEmptyScans<3){
+      try{
+        const [queue,history]=await Promise.all([client.queue(),client.historyAll()]);
+        const matches=cineforgePromptIdentities(queue,history,job.id);
+        if(matches.length>1){
+          for(const match of matches.filter(item=>item.state!=='history')){
+            try{await this.confirmComfyCancellation(job.id,client,match.promptId);}
+            catch{await waitForComfyPromptRelease(client,match.promptId,{onTick:message=>this.updateJob(job.id,{status:'stalled',message},false).catch(()=>undefined)});}
+          }
+          throw new Error(`Multiple ComfyUI prompts match CineForge job ${job.id}; active duplicates were stopped and the job requires explicit retry.`);
+        }
+        if(matches.length===1){
+          const promptId=matches[0].promptId;
+          await this.persistBackendIdentity(job.id,{comfyPromptId:promptId,status:'recovering',message:`Recovered ComfyUI prompt ${promptId} by CineForge job identity`});
+          return promptId;
+        }
+        if(hasActiveComfyPrompts(queue)){
+          successfulEmptyScans=0;
+          await this.updateJob(job.id,{status:'stalled',message:'Dedicated ComfyUI still has active work but no exact CineForge prompt identity match yet; GPU slot remains reserved.',lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
+          await sleep(2000);continue;
+        }
+        successfulEmptyScans+=1;
+        if(successfulEmptyScans<3)await sleep(500);
+      }catch(error){
+        if(error instanceof Error&&/Multiple ComfyUI prompts/.test(error.message))throw error;
+        await this.updateJob(job.id,{status:'stalled',message:`ComfyUI submission identity is unresolved; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
+        await sleep(2000);
+      }
+    }
+    return undefined;
+  }
+
+  private async persistBackendIdentity(jobId:string,patch:Partial<RenderJob>):Promise<void>{
+    while(true){
+      try{await this.updateJob(jobId,patch,true,true);return;}
+      catch(error){console.warn('Backend identity persistence failed; retaining GPU ownership until durable state is restored.',error);await sleep(2000);}
+    }
+  }
+
+  private async cleanupJobSnapshots(jobId:string):Promise<void>{
+    const project=this.projects.getCurrent();if(!project)return;
+    for(const path of [
+      join(project.rootPath,'cache','workflow-inputs',jobId),
+      join(project.rootPath,'cache','wangp-inputs',jobId),
+      join(project.rootPath,'cache','comfy-inputs',jobId)
+    ])await rm(path,{recursive:true,force:true}).catch(error=>console.warn(`Could not remove completed job cache: ${path}`,error));
+  }
+
+  private async acquireRenderLease(project:FilmProject,jobId:string):Promise<void>{
+    await this.renderLeases.write({version:1,projectId:project.id,projectRoot:project.rootPath,jobId,createdAt:new Date().toISOString()});
+  }
+
+  private async releaseRenderLease(jobId:string):Promise<void>{
+    while(true){
+      try{await this.renderLeases.clearIfJob(jobId);return;}
+      catch(error){console.warn('Active-render lease could not be cleared; GPU queue remains locked.',error);await sleep(2000);}
+    }
   }
 
   private requireProject():FilmProject{const project=this.projects.getCurrent();if(!project)throw new Error('Open a project first.');return project;}
 
   private hasActiveJobForShot(shotId:string):boolean{return this.snapshot().jobs.some(j=>j.shotId===shotId&&ACTIVE.has(j.status));}
+
+  private confirmComfyCancellation(jobId:string,client:ComfyClient,promptId:string):Promise<void>{
+    const existing=this.comfyCancelPromises.get(jobId);if(existing)return existing;
+    let pending:Promise<void>;
+    pending=client.cancelPrompt(promptId).catch(error=>{if(this.comfyCancelPromises.get(jobId)===pending)this.comfyCancelPromises.delete(jobId);throw error;});
+    this.comfyCancelPromises.set(jobId,pending);return pending;
+  }
+
+  private async waitForComfyPromptOrExit(jobId:string,timeoutMs=35_000):Promise<string|undefined>{
+    const deadline=Date.now()+timeoutMs;
+    while(Date.now()<deadline){
+      const live=this.snapshot().jobs.find(job=>job.id===jobId);
+      if(live?.comfyPromptId)return live.comfyPromptId;
+      if(this.runningJobId!==jobId)return undefined;
+      await sleep(100);
+    }
+    throw new Error('ComfyUI submission is still unresolved; cancellation was not confirmed, so the GPU slot remains reserved.');
+  }
+
+  private async waitForComfyWithSafeTimeout(client:ComfyClient,job:RenderJob,promptId:string,recovering:boolean):Promise<any>{
+    try{
+      return await waitForComfyCompletion(client,promptId,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:recovering?'recovering':'running',progress:recovering?Math.max(job.progress,.35):.35,message:`${recovering?'ComfyUI recovered':'ComfyUI'} · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false).catch(error=>console.warn('Comfy progress journal update failed; retaining GPU ownership.',error))});
+    }catch(error){
+      if(this.cancelled.has(job.id))throw error;
+      if(error instanceof Error&&/timed out/i.test(error.message)){
+        try{await this.confirmComfyCancellation(job.id,client,promptId);}
+        catch(cancelError){
+          await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timed out; cancellation is unconfirmed, so the GPU slot remains reserved · ${cancelError instanceof Error?cancelError.message:String(cancelError)}`,lastHeartbeatAt:new Date().toISOString()},true,true).catch(()=>undefined);
+          return this.waitForComfyResolutionAfterTimeout(client,job,promptId);
+        }
+        throw new Error(`${error.message} Backend cancellation was confirmed.`);
+      }
+      await this.updateJob(job.id,{status:'stalled',message:`ComfyUI polling failed; GPU slot remains reserved until backend release · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
+      await waitForComfyPromptRelease(client,promptId,{onTick:message=>this.updateJob(job.id,{status:'stalled',message},false).catch(()=>undefined)});
+      throw error;
+    }
+  }
+
+  private async waitForComfyResolutionAfterTimeout(client:ComfyClient,job:RenderJob,promptId:string):Promise<any>{
+    while(true){
+      if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
+      let history:any|null;
+      try{history=await client.history(promptId);}
+      catch(error){
+        await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timeout recovery cannot read history; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
+        await sleep(5000);continue;
+      }
+      if(history){
+        if(historyWasInterrupted(history))throw new Error('ComfyUI prompt was interrupted after timeout.');
+        if(history.status?.status_str==='error')throw new Error(`ComfyUI execution failed after timeout: ${JSON.stringify(history.status)}`);
+        if((history.outputs&&Object.keys(history.outputs).length>0)||history.status?.completed)return history;
+      }
+      let state:'running'|'pending'|'absent';
+      try{state=promptQueueState(await client.queue(),promptId);}
+      catch(error){
+        await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timeout recovery cannot read queue state; GPU slot remains reserved · ${error instanceof Error?error.message:String(error)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
+        await sleep(5000);continue;
+      }
+      if(state==='absent')throw new Error('ComfyUI prompt disappeared after timeout without terminal history; backend no longer owns the GPU slot.');
+      await this.updateJob(job.id,{status:'stalled',message:`ComfyUI timed out but prompt is still ${state}; GPU slot remains reserved`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
+      await sleep(5000);
+    }
+  }
 
   private async createJob(project:FilmProject,shot:Shot,profile:WorkflowProfile,machine:AppMachineSettings,knownRuntimeFingerprint?:RenderRuntimeFingerprint):Promise<RenderJob>{
     if(profile.validation?.structuralStatus!=='valid')throw new Error(`Profile “${profile.name}” must be validated in Settings before rendering.`);
@@ -269,15 +483,17 @@ export class RenderQueueService extends EventEmitter {
 
   private async commitQueuedJobs(jobs:RenderJob[]):Promise<void>{
     if(!jobs.length)return;
-    await this.projects.mutate(project=>{project.renderJobs.unshift(...[...jobs].reverse());for(const job of jobs){const shot=project.shots.find(s=>s.id===job.shotId);if(shot)shot.status='queued';}});
     const root=this.requireProject().rootPath;
-    for(const job of jobs){this.liveJobs.set(job.id,structuredClone(job));await this.journal.write(root,job);this.pending.push(job.id);}
+    for(const job of jobs)await this.journal.write(root,job);
+    await this.projects.mutate(project=>{project.renderJobs.unshift(...[...jobs].reverse());for(const job of jobs){const shot=project.shots.find(s=>s.id===job.shotId);if(shot)shot.status='queued';}});
+    for(const job of jobs){this.liveJobs.set(job.id,structuredClone(job));this.pending.push(job.id);}
     this.emitSnapshot();void this.pump();
   }
 
   private async pump():Promise<void>{
-    if(this.runningJobId||!this.pending.length)return;
+    if(this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
     const jobId=this.pending.shift()!;if(this.cancelled.has(jobId)){this.cancelled.delete(jobId);return void this.pump();}
+    const project=this.requireProject();await this.acquireRenderLease(project,jobId);
     this.runningJobId=jobId;this.emitSnapshot();
     try{await this.run(jobId);}
     catch(error){
@@ -289,7 +505,10 @@ export class RenderQueueService extends EventEmitter {
         if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
       }
     }finally{
-      this.wanGpProcesses.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
+      await this.cleanupJobSnapshots(jobId);
+      this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);
+      await this.releaseRenderLease(jobId);
+      this.runningJobId=undefined;this.emitSnapshot();void this.pump();
     }
   }
 
@@ -383,10 +602,11 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async runWanGp(project:FilmProject,job:RenderJob):Promise<void>{
-    const machine=this.settings.get(),shot=job.spec!.shot,profile=job.spec!.workflowProfile;
+    const machine=this.settings.get(),shot=job.spec!.shot,profile=job.spec!.workflowProfile,workflowSnapshotRoot=join(project.rootPath,'cache','workflow-inputs',job.id);
     await this.updateJob(job.id,{status:'preparing',progress:.05,message:`Preparing WanGP · ${profile.name}`},true,true);
     const values=this.baseValues(job);await this.populateLocalReferencePaths(project,shot,profile,values);await this.stageWanGpInputs(project,job,values);
-    let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
+    const snapshotProfile=await stageWorkflowProfileSnapshot(project.rootPath,profile,job.spec!.workflowSha256,workflowSnapshotRoot);
+    let compiled=await compileWanGpProfile(snapshotProfile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     await this.verifyImmutableSpec(this.requireProject(),job);
     const cacheDir=join(project.rootPath,'cache','wangp'),outputDir=join(project.rootPath,'renders',shot.id,job.id);
     await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(outputDir,{recursive:true})]);
@@ -394,19 +614,22 @@ export class RenderQueueService extends EventEmitter {
     await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
 
     if(machine.wangp.dryRunBeforeRender){
-      await this.updateJob(job.id,{status:'preparing',progress:.08,message:'WanGP dry-run validation'},true,true);
-      const dry=startWanGp(project,machine,{settingsPath,outputDir,dryRun:true,runId:job.id});if(dry.pid)await this.updateJob(job.id,{backendPid:dry.pid},false,true);
+      await this.updateJob(job.id,{status:'submitted',progress:.08,message:'Submitting WanGP dry-run',backendPid:undefined},true,true);
+      const dry=startWanGp(project,machine,{settingsPath,outputDir,dryRun:true,runId:job.id});if(dry.pid)await this.persistBackendIdentity(job.id,{backendPid:dry.pid,status:'submitted',message:'WanGP dry-run submitted'});
       await waitWanGp(dry);if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
+      await this.updateJob(job.id,{status:'preparing',progress:.1,message:'WanGP dry-run passed; preparing render',backendPid:undefined},true,true);
       await this.verifyImmutableSpec(this.requireProject(),job);
     }
 
     let lastLogAt=0;
+    await this.updateJob(job.id,{status:'submitted',progress:.12,message:'Submitting to WanGP',backendPid:undefined},true,true);
     const child=startWanGp(project,machine,{settingsPath,outputDir,runId:job.id,onLog:line=>{
       const now=Date.now();if(now-lastLogAt<1000)return;lastLogAt=now;
       void this.updateJob(job.id,{status:'running',progress:.35,message:`WanGP · ${line.slice(0,180)}`,lastHeartbeatAt:new Date().toISOString()},false).catch(()=>undefined);
     }});
     this.wanGpProcesses.set(job.id,child);
-    await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to WanGP',backendPid:child.pid,lastHeartbeatAt:new Date().toISOString()},true,true);
+    if(child.pid)await this.persistBackendIdentity(job.id,{status:'submitted',progress:.15,message:'Submitted to WanGP',backendPid:child.pid,lastHeartbeatAt:new Date().toISOString()});
+    else await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to WanGP; process id unavailable, recovery will use run identity',lastHeartbeatAt:new Date().toISOString()},true,true);
     await waitWanGp(child);if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
     await this.updateJob(job.id,{status:'downloading',progress:.92,message:'Indexing and QC-checking WanGP outputs'},true,true);
     const files=await collectWanGpOutputs(outputDir);if(!files.length)throw new Error(`WanGP completed but no media outputs were found in ${outputDir}.`);
@@ -429,7 +652,7 @@ export class RenderQueueService extends EventEmitter {
     const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable at ${machine.comfy.url}: ${ping.error||'unknown error'}`);
     const values=this.baseValues(job);await this.updateJob(job.id,{status:'uploading',progress:.1,message:'Staging continuity references'},true,true);
     const stagedImages=new Map<string,string>(),keys=new Set(profile.bindings.map(binding=>binding.key)),plan=planShotReferences(shot,profile);
-    const stageImage=async(id:string)=>{const cached=stagedImages.get(id);if(cached)return cached;const staged=await this.stageComfyAsset(project,id,client,'image');stagedImages.set(id,staged);return staged;};
+    const stageImage=async(id:string)=>{const cached=stagedImages.get(id);if(cached)return cached;const staged=await this.stageComfyAsset(project,job,id,client,'image');stagedImages.set(id,staged);return staged;};
     if(shot.startFrameAssetId&&keys.has('startImage'))values.startImage=await stageImage(shot.startFrameAssetId);
     if(shot.endFrameAssetId&&keys.has('endImage'))values.endImage=await stageImage(shot.endFrameAssetId);
     if(plan.locationId)values.locationImage=await stageImage(plan.locationId);
@@ -438,15 +661,31 @@ export class RenderQueueService extends EventEmitter {
     const genericPaths=await Promise.all(plan.genericIds.map(id=>stageImage(id)));
     if(plan.genericArray)values.referenceImages=genericPaths;
     else for(const[index,key]of plan.genericBindingKeys.entries())Object.assign(values,{[key]:genericPaths[index]});
-    if(shot.referenceVideoAssetId&&keys.has('inputVideo'))values.inputVideo=await this.stageComfyAsset(project,shot.referenceVideoAssetId,client,'file');
-    if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await this.stageComfyAsset(project,shot.audioAssetId,client,'file');
+    if(shot.referenceVideoAssetId&&keys.has('inputVideo'))values.inputVideo=await this.stageComfyAsset(project,job,shot.referenceVideoAssetId,client,'file');
+    if(shot.audioAssetId&&keys.has('inputAudio'))values.inputAudio=await this.stageComfyAsset(project,job,shot.audioAssetId,client,'file');
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
 
-    const prompt=await compileProfile(profile,values);await this.verifyImmutableSpec(this.requireProject(),job);const queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});
-    await this.updateJob(job.id,{status:'submitted',progress:.15,message:'Submitted to ComfyUI',comfyPromptId:queued.prompt_id,lastHeartbeatAt:new Date().toISOString()},true,true);
-    let history:any;
-    try{history=await waitForComfyCompletion(client,queued.prompt_id,{cancelled:()=>this.cancelled.has(job.id),onTick:elapsed=>this.updateJob(job.id,{status:'running',progress:.35,message:`ComfyUI · ${elapsed}s`,lastHeartbeatAt:new Date().toISOString()},false)});}
-    catch(error){if(error instanceof Error&&/timed out/i.test(error.message))await client.interrupt().catch(()=>undefined);throw error;}
+    const snapshotProfile=await stageWorkflowProfileSnapshot(project.rootPath,profile,job.spec!.workflowSha256,join(project.rootPath,'cache','workflow-inputs',job.id));
+    const prompt=await compileProfile(snapshotProfile,values);await this.verifyImmutableSpec(this.requireProject(),job);
+    await this.updateJob(job.id,{status:'submitted',progress:.12,message:'Submitting to ComfyUI; backend identity not confirmed yet',comfyPromptId:undefined},true,true);
+    let queued:{prompt_id:string};
+    try{queued=await client.queuePrompt(prompt,{cineforge:{projectId:project.id,shotId:shot.id,jobId:job.id,modelFamily:shot.generation.modelFamily}});}
+    catch(error){
+      await this.updateJob(job.id,{status:'stalled',message:`ComfyUI submission response was not confirmed; resolving exact job identity before releasing GPU · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);
+      const promptId=await this.resolveComfyPromptIdentity(job,client);
+      if(!promptId)throw error;
+      queued={prompt_id:promptId};
+    }
+    await this.persistBackendIdentity(job.id,{status:'submitted',progress:.15,message:'Submitted to ComfyUI',comfyPromptId:queued.prompt_id,lastHeartbeatAt:new Date().toISOString()});
+    if(this.cancelled.has(job.id)){
+      try{await this.confirmComfyCancellation(job.id,client,queued.prompt_id);}
+      catch(error){
+        this.cancelled.delete(job.id);
+        await this.updateJob(job.id,{status:'submitted',message:`Cancellation was not confirmed; render continues under the reserved GPU slot · ${error instanceof Error?error.message:String(error)}`},true,true);
+      }
+      if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
+    }
+    const history=await this.waitForComfyWithSafeTimeout(client,job,queued.prompt_id,false);
     if(this.cancelled.has(job.id))throw new Error('Job cancelled.');
     await this.finalizeComfyHistory(project,this.snapshot().jobs.find(j=>j.id===job.id)??job,client,history);
   }
@@ -454,7 +693,7 @@ export class RenderQueueService extends EventEmitter {
   private async finalizeComfyHistory(project:FilmProject,job:RenderJob,client:ComfyClient,history:any):Promise<void>{
     const machine=this.settings.get(),shot=job.spec!.shot;
     await this.updateJob(job.id,{status:'downloading',progress:.92,message:'Saving and QC-checking ComfyUI outputs'},true,true);
-    const refs=uniqueComfyFileRefs(collectComfyFileRefs(history?.outputs||history));if(!refs.length)throw new Error('ComfyUI finished but no downloadable output files were found in history.');
+    const refs=collectComfyHistoryOutputRefs(history);if(!refs.length)throw new Error('ComfyUI finished but no downloadable output files were found in history.outputs.');
     const outputDir=join(project.rootPath,'renders',shot.id,job.id);await mkdir(outputDir,{recursive:true});const outputs:RenderOutput[]=[];
     for(const ref of refs){
       const safeLeaf=ref.filename.replace(/[\\/]/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');const safeSub=(ref.subfolder||'').replace(/[\\/]+/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');
@@ -481,20 +720,34 @@ export class RenderQueueService extends EventEmitter {
       const currentSpec=Boolean(shot&&externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot));
       if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message=currentSpec?'Rendered but failed technical QC':'Historical snapshot rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message=currentSpec?'Done':'Done · shot changed after queue; take kept as historical output';target.error=undefined;}}
       if(shot){if(!currentSpec){if(shot.latestRenderId)shot.status='rendered';else if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
-      const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(profile&&!qcFailed){profile.validation={...(profile.validation??{structuralStatus:'valid'}),structuralStatus:'valid',sourceSha256:job.spec?.workflowSha256,lastSuccessfulRenderAt:now};}
+      const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(!qcFailed&&canRefreshProfileValidationFromRender(profile,job.spec)){profile!.validation={...profile!.validation!,lastSuccessfulRenderAt:now};}
     });
     const current=this.projects.getCurrent()?.renderJobs.find(j=>j.id===job.id);if(current){this.liveJobs.set(job.id,structuredClone(current));await this.journal.write(this.requireProject().rootPath,current);}
     this.emitSnapshot();
   }
 
-  private async stageComfyAsset(project:FilmProject,assetId:string,client:ComfyClient,kind:'image'|'file'):Promise<string>{
+  private async stageComfyAsset(project:FilmProject,job:RenderJob,assetId:string,client:ComfyClient,kind:'image'|'file'):Promise<string>{
     const asset=project.assets.find(a=>a.id===assetId);if(!asset)throw new Error(`Referenced asset not found: ${assetId}`);
+    const fingerprint=job.spec?.assetFingerprints.find(item=>item.assetId===assetId);
+    if(!fingerprint||fingerprint.projectPath!==asset.projectPath)throw new Error(`ComfyUI input is not covered by the queued immutable asset snapshot: ${asset.name}`);
     const absolute=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`),machine=this.settings.get();
+    const safeName=`${asset.id}-${basename(asset.projectPath).replace(/[^a-zA-Z0-9._-]+/g,'_')}`;
     if(machine.comfy.inputDir){
       const subfolder=join('cineforge',project.id),targetDir=join(machine.comfy.inputDir,subfolder);await mkdir(targetDir,{recursive:true});
-      const safeName=`${asset.id}-${basename(asset.projectPath).replace(/[^a-zA-Z0-9._-]+/g,'_')}`;await copyFile(absolute,join(targetDir,safeName));return`${subfolder.replace(/\\/g,'/')}/${safeName}`;
+      const target=await assertSafeWritePath(machine.comfy.inputDir,join(targetDir,safeName),'ComfyUI input staging');
+      await copyFile(absolute,target);
+      if(await sha256File(target)!==fingerprint.sha256){await rm(target,{force:true}).catch(()=>undefined);throw new Error(`Referenced asset changed while staging the immutable ComfyUI snapshot: ${asset.name}. Queue a new render.`);}
+      return`${subfolder.replace(/\\/g,'/')}/${safeName}`;
     }
-    if(kind==='image'){const uploaded=await client.uploadImage(absolute);return uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;}
+    if(kind==='image'){
+      const snapshotRoot=join(project.rootPath,'cache','comfy-inputs',job.id);await mkdir(snapshotRoot,{recursive:true});
+      const snapshot=await assertSafeWritePath(snapshotRoot,join(snapshotRoot,safeName),'ComfyUI immutable upload snapshot');
+      try{
+        await copyFile(absolute,snapshot);
+        if(await sha256File(snapshot)!==fingerprint.sha256)throw new Error(`Referenced asset changed while staging the immutable ComfyUI snapshot: ${asset.name}. Queue a new render.`);
+        const uploaded=await client.uploadImage(snapshot);return uploaded.subfolder?`${uploaded.subfolder}/${uploaded.filename}`:uploaded.filename;
+      }finally{await rm(snapshot,{force:true}).catch(()=>undefined);}
+    }
     throw new Error('Audio/video input requires the local ComfyUI input directory in Machine Settings.');
   }
 

@@ -16,13 +16,13 @@ describe('signed render journal',()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-journal-'));
     const journal=new JobJournal(randomBytes(32));
     await journal.write(root,job());
-    expect((await journal.readAll(root)).map(j=>j.id)).toEqual(['job-1']);
+    expect((await journal.readAll(root,['job-1'])).map(j=>j.id)).toEqual(['job-1']);
 
     const path=join(root,'.cineforge','jobs','job-1.json');
     const envelope=JSON.parse(await readFile(path,'utf8'));
     envelope.job.status='running';
     await writeFile(path,JSON.stringify(envelope),'utf8');
-    expect(await journal.readAll(root)).toEqual([]);
+    expect(await journal.readAll(root,['job-1'])).toEqual([]);
   });
 
   it('cannot be recovered by a different installation key',async()=>{
@@ -30,6 +30,6 @@ describe('signed render journal',()=>{
     const first=new JobJournal(randomBytes(32));
     await first.write(root,job());
     const second=new JobJournal(randomBytes(32));
-    expect(await second.readAll(root)).toEqual([]);
+    expect(await second.readAll(root,['job-1'])).toEqual([]);
   });
 });

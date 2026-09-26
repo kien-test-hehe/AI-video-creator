@@ -73,7 +73,11 @@ export async function isWanGpDockerRunning(machine:AppMachineSettings,runId:stri
   try{
     const{stdout}=await execFileAsync(machine.wangp.docker.command,['inspect','-f','{{.State.Running}}',name],{timeout:8000});
     return stdout.trim().toLowerCase()==='true';
-  }catch{return false;}
+  }catch(error:any){
+    const detail=`${error?.stderr??''} ${error?.message??''}`;
+    if(/no such (object|container)/i.test(detail))return false;
+    throw new Error(`Could not inspect WanGP Docker container ${name}: ${detail.trim()||String(error)}`);
+  }
 }
 
 export async function stopWanGpDocker(machine:AppMachineSettings,runId:string):Promise<void>{

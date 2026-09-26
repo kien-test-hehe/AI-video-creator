@@ -33,3 +33,9 @@ export function uniqueComfyFileRefs(refs: ComfyFileRef[]): ComfyFileRef[] {
     return true;
   });
 }
+
+
+export function collectComfyHistoryOutputRefs(history:unknown):ComfyFileRef[]{
+  const outputs=history&&typeof history==='object'&&!Array.isArray(history)?(history as Record<string,unknown>).outputs:undefined;
+  return uniqueComfyFileRefs(collectComfyFileRefs(outputs));
+}

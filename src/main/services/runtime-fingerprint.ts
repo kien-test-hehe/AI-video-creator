@@ -19,12 +19,18 @@ export function sha256Json(value: unknown): string {
 export async function fingerprintRuntime(machine: AppMachineSettings, profile: WorkflowProfile): Promise<RenderRuntimeFingerprint> {
   const backend = profile.runtime ?? (profile.workflowFormat === 'wangp-settings' ? 'wangp' : 'comfyui');
   if (backend === 'comfyui') {
-    const ping = await new ComfyClient(machine.comfy.url, true).ping();
+    const client=new ComfyClient(machine.comfy.url,true),ping=await client.ping();
     const runtimeVersion = ping.reachable ? extractComfyVersion(ping.systemStats) : 'offline';
+    let nodeCatalogSha256='offline';
+    if(ping.reachable){
+      try{nodeCatalogSha256=comfyNodeCatalogFingerprint(await client.objectInfo());}
+      catch{nodeCatalogSha256='unavailable';}
+    }
     const environmentSha256 = sha256Json({
       backend,
       url: new URL(machine.comfy.url).origin,
       runtimeVersion,
+      nodeCatalogSha256,
       stableSystem: stableComfySystem(ping.systemStats)
     });
     return { backend, runtimeVersion, environmentSha256 };
@@ -92,6 +98,11 @@ function extractComfyVersion(stats: unknown): string {
 function objectKeySorter(_key: string, value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   return Object.fromEntries(Object.entries(value as Record<string,unknown>).sort(([a],[b])=>a.localeCompare(b)));
+}
+
+export function comfyNodeCatalogFingerprint(objectInfo:unknown):string{
+  if(!objectInfo||typeof objectInfo!=='object'||Array.isArray(objectInfo))return'unavailable';
+  return sha256Json(objectInfo);
 }
 
 function stableComfySystem(stats:unknown):unknown{

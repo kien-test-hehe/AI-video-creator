@@ -5,18 +5,26 @@ import { assertLocalUrl } from '../src/main/services/local-url';
 import { assertPathInside, assertRelativeProjectPath } from '../src/main/services/path-safety';
 import { chooseModelForShot } from '../src/shared/routing';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
-import type { Asset, FilmProject, Shot } from '../src/shared/types';
+import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
-import { historyWasInterrupted } from '../src/main/services/comfy-client';
-import { keyframeProjectInputKey, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
-import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey } from '../src/shared/director-signature';
+import { cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState } from '../src/main/services/comfy-client';
+import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
+import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { selectRecoveryJob } from '../src/shared/recovery-policy';
+import { duplicateTimelineOrderKey, timelineOutputIssue } from '../src/shared/timeline-policy';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { comfyNodeCatalogFingerprint } from '../src/main/services/runtime-fingerprint';
+import { AppSettingsService } from '../src/main/services/app-settings-service';
+import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
+import { RenderLeaseStore } from '../src/main/services/render-lease';
+import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
+import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
 import { tmpdir } from 'node:os';
 
 const api: ApiWorkflow = {
@@ -110,6 +118,16 @@ describe('Studio workflow routing and timeline drag',()=>{
    expect(reorderTimeline(project,'c','a')).toBe(true);expect(project.timeline.map(clip=>clip.id)).toEqual(['c','a','b']);expect(project.timeline.map(clip=>clip.order)).toEqual([0,1,2]);
  });
 });
+describe('workflow validation authority',()=>{
+  it('preserves main validation for metadata-only edits and resets it for execution changes or new profiles',()=>{
+    const current:WorkflowProfile={id:'wf',runtime:'wangp',purpose:'video',name:'Old',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings',bindings:[{key:'prompt',jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime-a'}};
+    const renamed=structuredClone(current);renamed.name='Renamed';renamed.notes='metadata only';renamed.validation={structuralStatus:'invalid'};
+    expect(preserveTrustedProfileValidation(current,renamed).validation?.structuralStatus).toBe('valid');
+    const changed=structuredClone(current);changed.bindings=[{key:'prompt',jsonPath:'generation.prompt'}];changed.validation={structuralStatus:'valid',sourceSha256:'forged'};
+    expect(preserveTrustedProfileValidation(current,changed).validation?.structuralStatus).toBe('unvalidated');
+    expect(preserveTrustedProfileValidation(undefined,current).validation?.structuralStatus).toBe('unvalidated');
+  });
+});
 describe('stale creative result guards',()=>{
   const shot=():Shot=>({id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'p',camera:'locked',action:'walk',dialogue:'',continuityNotes:'keep coat',characterAssetIds:['char'],locationAssetId:'loc',propAssetIds:[],referenceAssetIds:[],status:'rendered',latestRenderId:'old',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}});
   it('changes render signatures for prompt/reference/generation edits but not runtime status',()=>{
@@ -124,6 +142,26 @@ describe('stale creative result guards',()=>{
     const beforeWorkflow=workflowExecutionKey(profile),before=shotProjectRenderInputKey(project,base);project.settings.workflowProfiles[0].bindings=[{key:'prompt',jsonPath:'generation.prompt'}];
     expect(shotProjectRenderInputKey(project,base)).not.toBe(before);
     expect(workflowExecutionKey(project.settings.workflowProfiles[0])).not.toBe(beforeWorkflow);
+  });
+  it('does not let an old successful render revalidate a changed workflow profile',()=>{
+    const profile:WorkflowProfile={id:'wf',runtime:'wangp',purpose:'video',name:'Workflow',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings',bindings:[{key:'prompt',jsonPath:'prompt'}],enabled:true,modelFingerprint:'model-a',validation:{structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime-a'}};
+    const spec={shot:shot(),workflowProfile:structuredClone(profile),effectivePrompt:'p',queuedProjectUpdatedAt:'2026-01-01T00:00:00.000Z',workflowSha256:'a'.repeat(64),assetFingerprints:[],runtimeFingerprint:{backend:'wangp',executionMode:'native',environmentSha256:'runtime-a'},modelFingerprint:'model-a'} satisfies RenderJobSpec;
+    expect(canRefreshProfileValidationFromRender(profile,spec)).toBe(true);
+    const changedBindings=structuredClone(profile);changedBindings.bindings=[{key:'prompt',jsonPath:'generation.prompt'}];
+    expect(canRefreshProfileValidationFromRender(changedBindings,spec)).toBe(false);
+    const revalidatedAgainstAnotherFile=structuredClone(profile);revalidatedAgainstAnotherFile.validation!.sourceSha256='b'.repeat(64);
+    expect(canRefreshProfileValidationFromRender(revalidatedAgainstAnotherFile,spec)).toBe(false);
+    const revalidatedAgainstAnotherRuntime=structuredClone(profile);revalidatedAgainstAnotherRuntime.validation!.runtimeFingerprint='runtime-b';
+    expect(canRefreshProfileValidationFromRender(revalidatedAgainstAnotherRuntime,spec)).toBe(false);
+  });
+  it('changes project render signatures when profile validation changes the auto-selected route',()=>{
+    const base=shot();base.generation.workflowProfileId=undefined;
+    const first={id:'a',runtime:'wangp' as const,purpose:'video' as const,name:'A',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/a.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'unvalidated' as const}};
+    const second={id:'b',runtime:'wangp' as const,purpose:'video' as const,name:'B',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/b.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'valid' as const}};
+    const project={assets:[{id:'char',kind:'character',name:'Hero',sourcePath:'',projectPath:'assets/char.png',tags:[],notes:'',createdAt:'x'},{id:'loc',kind:'location',name:'Room',sourcePath:'',projectPath:'assets/loc.png',tags:[],notes:'',createdAt:'x'}],settings:{workflowProfiles:[first,second]}} as unknown as FilmProject;
+    const before=shotProjectRenderInputKey(project,base);
+    project.settings.workflowProfiles[0].validation!.structuralStatus='valid';
+    expect(shotProjectRenderInputKey(project,base)).not.toBe(before);
   });
   it('changes keyframe project signatures when the workflow execution config changes',()=>{
     const base=shot();
@@ -161,6 +199,31 @@ describe('active render project guards',()=>{
     expect(removedActiveRenderShotIds({shots:[{id:'s1'},{id:'s3'}]} as unknown as FilmProject,jobs)).toEqual([]);
   });
 });
+describe('signed journal recovery policy',()=>{
+  const job=(status:any,updatedAt:string)=>({id:'j',shotId:'s',createdAt:'2026-01-01T00:00:00.000Z',updatedAt,status,progress:0,message:'',modelFamily:'ltx-2.5-fast',outputs:[]}) as any;
+  it('uses a newer signed active state but never resurrects a newer terminal project state',()=>{
+    expect(selectRecoveryJob(job('queued','2026-01-01T00:00:01.000Z'),job('running','2026-01-01T00:00:02.000Z')).job.status).toBe('running');
+    const terminal=selectRecoveryJob(job('cancelled','2026-01-01T00:00:03.000Z'),job('running','2026-01-01T00:00:02.000Z'));
+    expect(terminal.job.status).toBe('cancelled');expect(terminal.signed).toBe(false);
+  });
+  it('persists a newer signed terminal state over a stale active project summary',()=>{
+    const selected=selectRecoveryJob(job('running','2026-01-01T00:00:01.000Z'),job('cancelled','2026-01-01T00:00:02.000Z'));
+    expect(selected.job.status).toBe('cancelled');expect(selected.signed).toBe(true);expect(selected.persistTerminal).toBe(true);
+  });
+});
+describe('canonical timeline integrity',()=>{
+  const output=(id:string,shotId:string,mediaType:'video'|'image'='video')=>({id,jobId:'j',shotId,path:`/tmp/${id}`,filename:id,mediaType,createdAt:'2026-01-01T00:00:00.000Z'}) as any;
+  it('rejects cross-shot and non-video output references',()=>{
+    const clip={id:'c',shotId:'s1',renderOutputId:'o1'};
+    expect(timelineOutputIssue(clip,output('o1','s1'))).toBeUndefined();
+    expect(timelineOutputIssue(clip,output('o1','s2'))).toMatch(/belongs to shot s2/);
+    expect(timelineOutputIssue(clip,output('o1','s1','image'))).toMatch(/non-video/);
+  });
+  it('detects duplicate track/order slots',()=>{
+    expect(duplicateTimelineOrderKey([{track:0,order:0},{track:0,order:1}])).toBeUndefined();
+    expect(duplicateTimelineOrderKey([{track:0,order:0},{track:0,order:0}])).toBe('0:0');
+  });
+});
 describe('rendered take QC policy',()=>{
   const output=(technicalQc?:any)=>({id:'o',jobId:'j',shotId:'s',path:'/tmp/o.mp4',filename:'o.mp4',mediaType:'video' as const,createdAt:'x',technicalQc});
   it('requires confirmation for failed or unknown QC and not for passing takes',()=>{
@@ -174,6 +237,79 @@ describe('rendered take QC policy',()=>{
     const passingNew=output({passed:true,issues:[]});passingNew.id='pass-new';passingNew.createdAt='2026-01-02T00:00:00.000Z';
     expect(latestPassingVideoTake([passingOld,failingNew,passingNew])?.id).toBe('pass-new');
     expect(latestPassingVideoTake([failingNew])).toBeUndefined();
+  });
+});
+describe('machine settings bootstrap import',()=>{
+  it('imports explicit bootstrap machine settings on first load and then persists them',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-bootstrap-settings-'));
+    const bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,JSON.stringify({schemaVersion:1,wangp:{rootPath:'C:/CineForge/Wan2GP',pythonPath:'C:/CineForge/Wan2GP/venv/python.exe'},ffmpeg:{path:'C:/ffmpeg.exe',ffprobePath:'C:/ffprobe.exe'}}),'utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      const service=new AppSettingsService(join(root,'userdata'));await service.load();
+      expect(service.get().wangp.rootPath).toBe('C:/CineForge/Wan2GP');
+      expect(service.get().ffmpeg.path).toBe('C:/ffmpeg.exe');
+      delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+      const reloaded=new AppSettingsService(join(root,'userdata'));await reloaded.load();
+      expect(reloaded.get().wangp.rootPath).toBe('C:/CineForge/Wan2GP');
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+});
+describe('render GPU ownership lease',()=>{
+  it('persists a signed active render lease and refuses tampered ownership',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-render-lease-')),store=new RenderLeaseStore(root,Buffer.alloc(32,5));
+    try{
+      await store.write({version:1,projectId:'project-1',projectRoot:'/projects/one',jobId:'job-1',createdAt:'2026-01-01T00:00:00.000Z'});
+      expect((await store.read())?.jobId).toBe('job-1');
+      const path=join(root,'active-render.v1.json'),envelope=JSON.parse(await readFile(path,'utf8'));envelope.lease.jobId='job-forged';await writeFile(path,JSON.stringify(envelope),'utf8');
+      await expect(store.read()).rejects.toThrow(/signature/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+describe('keyframe crash recovery lease',()=>{
+  it('signs the machine-local lease and clears prepared work without touching a backend',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-keyframe-lease-')),key=Buffer.alloc(32,7),store=new KeyframeLeaseStore(root,key);
+    try{
+      const lease={version:1 as const,id:'lease-1',projectId:'project-1',runtime:'comfyui' as const,runId:'keyframe-lease-1',phase:'prepared' as const,comfyUrl:'http://127.0.0.1:8188',createdAt:'2026-01-01T00:00:00.000Z'};
+      await store.write(lease);expect((await store.read())?.id).toBe('lease-1');
+      await recoverOrphanedKeyframeLease(store,{} as AppMachineSettings);
+      expect(await store.read()).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+  it('rejects a tampered submitted lease instead of trusting backend identity from disk',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-keyframe-lease-tamper-')),key=Buffer.alloc(32,9),store=new KeyframeLeaseStore(root,key);
+    try{
+      await store.write({version:1,id:'lease-a',projectId:'project-1',runtime:'wangp',runId:'keyframe-lease-a',phase:'submitting',wanGpExecutionMode:'native',createdAt:'2026-01-01T00:00:00.000Z'});
+      const path=join(root,'active-keyframe.v1.json'),envelope=JSON.parse(await readFile(path,'utf8'));envelope.lease.runId='keyframe-forged';await writeFile(path,JSON.stringify(envelope),'utf8');
+      await expect(store.read()).rejects.toThrow(/signature/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('render journal signing key safety',()=>{
+  it('refuses to rotate a corrupt signing key on an existing installation',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-journal-key-safety-'));
+    try{
+      const first=new AppSettingsService(root);await first.load();
+      await writeFile(join(root,'journal-hmac.key'),'corrupt-key','utf8');
+      await expect(new AppSettingsService(root).load()).rejects.toThrow(/signing key/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('machine settings persistence recovery',()=>{
+  it('recovers the previous valid machine settings from backup after primary corruption',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-settings-'));
+    try{
+      const service=new AppSettingsService(root);await service.load();
+      const first=service.get();first.director.model='director-first';await service.save(first);
+      const second=service.get();second.director.model='director-second';await service.save(second);
+      await writeFile(join(root,'machine-settings.v1.json'),'{broken','utf8');
+      const recovered=new AppSettingsService(root);await recovered.load();
+      expect(recovered.get().director.model).toBe('director-first');
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
 describe('hardware advisor',()=>{
@@ -204,10 +340,72 @@ describe('WanGP compile media modes',()=>{
    }finally{await rm(root,{recursive:true,force:true});}
  });
 });
+describe('AI Director validated route selection',()=>{
+  it('returns the actual validated workflow mode for a model family',()=>{
+    const project={settings:{workflowProfiles:[
+      {id:'wf',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'t2v',workflowPath:'/tmp/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid'}}
+    ]}} as unknown as FilmProject;
+    const route=validatedVideoRouteForModel(project,'ltx-2.5-fast');
+    expect(route?.id).toBe('wf');expect(route?.mode).toBe('t2v');
+  });
+});
 describe('binding-aware continuity reference planning',()=>{
   const baseShot:Shot={id:'s',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:['c1','c2'],locationAssetId:'loc',propAssetIds:['p1'],referenceAssetIds:['look'],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}};
   it('does not duplicate assets already served by dedicated bindings into generic refs',()=>{const profile={id:'p',runtime:'wangp' as const,purpose:'video' as const,name:'p',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'x',workflowFormat:'wangp-settings' as const,enabled:true,bindings:[{key:'characterImage1' as const,jsonPath:'character'},{key:'locationImage' as const,jsonPath:'location'},{key:'referenceImages' as const,jsonPath:'image_refs'}]};const plan=planShotReferences(baseShot,profile);expect(plan.characterIds[0]).toBe('c1');expect(plan.locationId).toBe('loc');expect(plan.genericIds).toEqual(['c2','look','p1']);expect(plan.genericIds).not.toContain('c1');expect(plan.genericIds).not.toContain('loc');});
   it('maps fallback images to only the generic slots actually exposed',()=>{const profile={id:'p',runtime:'comfyui' as const,purpose:'video' as const,name:'p',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'x',workflowFormat:'api' as const,enabled:true,bindings:[{key:'referenceImage1' as const,selector:{nodeId:'1'},input:'image'},{key:'referenceImage3' as const,selector:{nodeId:'3'},input:'image'}]};const plan=planShotReferences(baseShot,profile);expect(plan.genericBindingKeys).toEqual(['referenceImage1','referenceImage3']);expect(plan.genericIds).toHaveLength(2);expect(plan.unservedIds.length).toBeGreaterThan(0);});
+});
+describe('Comfy runtime fingerprint inputs',()=>{
+  it('changes when node classes or node schemas change but not when object key order changes',()=>{
+    expect(comfyNodeCatalogFingerprint({B:{input:{required:{x:['INT']}}},A:{}})).toBe(comfyNodeCatalogFingerprint({A:{},B:{input:{required:{x:['INT']}}}}));
+    expect(comfyNodeCatalogFingerprint({A:{},B:{}})).not.toBe(comfyNodeCatalogFingerprint({A:{},C:{}}));
+    expect(comfyNodeCatalogFingerprint({A:{input:{required:{x:['INT']}}}})).not.toBe(comfyNodeCatalogFingerprint({A:{input:{required:{x:['FLOAT']}}}}));
+  });
+});
+describe('Comfy output identity',()=>{
+  it('collects filenames only from history.outputs and never from prompt/input metadata',()=>{
+    const completedWithoutOutputs={status:{completed:true},prompt:{inputs:{filename:'uploaded-input.png',type:'input'}}};
+    expect(collectComfyHistoryOutputRefs(completedWithoutOutputs)).toEqual([]);
+    const withOutput={outputs:{'7':{images:[{filename:'result.png',subfolder:'cineforge',type:'output'}]}},prompt:{filename:'uploaded-input.png'}};
+    expect(collectComfyHistoryOutputRefs(withOutput)).toEqual([{filename:'result.png',subfolder:'cineforge',type:'output'}]);
+  });
+});
+describe('Comfy submission recovery identity',()=>{
+  it('finds only exact CineForge job metadata across queue and history',()=>{
+    const queue={queue_running:[[1,'run-prompt',{}, {cineforge:{jobId:'job-a'}}]],queue_pending:[[2,'other-prompt',{}, {cineforge:{jobId:'job-b',note:'job-a'}}]]};
+    const history={'done-prompt':{prompt:[3,'done-prompt',{}, {cineforge:{jobId:'job-a'}}]},noise:{prompt:[4,'noise',{}, {cineforge:{jobId:'job-c',note:'job-a'}}]}};
+    expect(cineforgePromptIdentities(queue,history,'job-a')).toEqual([
+      {promptId:'run-prompt',state:'running'},
+      {promptId:'done-prompt',state:'history'}
+    ]);
+    const keyframeQueue={queue_running:[],queue_pending:[[5,'kf-prompt',{}, {cineforge:{purpose:'keyframe',submissionId:'sub-1'}}]]};
+    expect(cineforgePromptIdentitiesByMetadata(keyframeQueue,{}, {purpose:'keyframe',submissionId:'sub-1'})).toEqual([{promptId:'kf-prompt',state:'pending'}]);
+  });
+});
+describe('Comfy dedicated active-work detection',()=>{
+  it('treats either running or pending queue entries as active GPU work',()=>{
+    expect(hasActiveComfyPrompts({queue_running:[[1,'p',{}]],queue_pending:[]})).toBe(true);
+    expect(hasActiveComfyPrompts({queue_running:[],queue_pending:[[2,'q',{}]]})).toBe(true);
+    expect(hasActiveComfyPrompts({queue_running:[],queue_pending:[]})).toBe(false);
+  });
+});
+describe('Comfy queue identity',()=>{
+  it('matches prompt ids only in structured queue entries, not arbitrary metadata text',()=>{
+    const queue={queue_running:[[1,'running-id',{note:'target-id'}]],queue_pending:[[2,'pending-id',{prompt:'target-id'}]]};
+    expect(promptQueueState(queue,'running-id')).toBe('running');
+    expect(promptQueueState(queue,'pending-id')).toBe('pending');
+    expect(promptQueueState(queue,'target-id')).toBe('absent');
+  });
+});
+describe('Comfy prompt release safety',()=>{
+  it('does not release the GPU lock on a transient state error and waits for exact queue absence',async()=>{
+    let historyCalls=0,queueCalls=0;
+    const client={
+      history:async()=>{historyCalls+=1;if(historyCalls===1)throw new Error('temporary network error');return null;},
+      queue:async()=>{queueCalls+=1;return queueCalls===1?{queue_running:[[1,'p',{}]],queue_pending:[]}:{queue_running:[],queue_pending:[]};}
+    } as any;
+    await waitForComfyPromptRelease(client,'p',{intervalMs:1});
+    expect(historyCalls).toBeGreaterThanOrEqual(2);expect(queueCalls).toBeGreaterThanOrEqual(2);
+  });
 });
 describe('Comfy cancellation history',()=>{
   it('distinguishes interrupted history from normal terminal history',()=>{

@@ -6,7 +6,7 @@ import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '
 import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject } from './project-schema';
-import { shotProjectRenderInputKey } from '../../shared/shot-signature';
+import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
 
 const PROJECT_FILE = 'cineforge.project.json';
@@ -59,7 +59,11 @@ export class ProjectService {
   async openWithDialog(): Promise<FilmProject | null> {
     const result = await dialog.showOpenDialog({ title: 'Open CineForge project folder', properties: ['openDirectory'] });
     if (result.canceled || !result.filePaths[0]) return null;
-    const openedRoot = resolve(result.filePaths[0]);
+    return this.openAt(result.filePaths[0]);
+  }
+
+  async openAt(rootPath:string):Promise<FilmProject>{
+    const openedRoot = resolve(rootPath);
     const file = join(openedRoot, PROJECT_FILE);
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
     let raw: unknown;
@@ -85,10 +89,9 @@ export class ProjectService {
 
     await this.ensureFolders(project.rootPath);
     await this.validateStoragePaths(project);
-    this.current = project;
-    await this.persistUnlocked(project);
+    const committed=await this.persistUnlocked(project);
     if (loaded.migrationNotes.length) console.warn(loaded.migrationNotes.join('\n'));
-    return structuredClone(project);
+    return committed;
   }
 
   async saveFromRenderer(project: FilmProject): Promise<FilmProject> {
@@ -119,11 +122,7 @@ export class ProjectService {
         }
       }
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
-      incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>{
-        const current=currentProfiles.get(profile.id);if(!current)return profile;
-        if(profileConfigKey(profile)!==profileConfigKey(current))return profile;
-        return{...profile,validation:structuredClone(current.validation)};
-      });
+      incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>preserveTrustedProfileValidation(currentProfiles.get(profile.id),profile));
       await this.validateStoragePaths(incoming);
       return this.persistUnlocked(incoming);
     });
@@ -166,6 +165,7 @@ export class ProjectService {
     const asset=current.assets.find(item=>item.id===assetId);if(!asset)throw new Error('Asset not found.');
     const absolute=await assertExistingRelativeProjectPath(current.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`).catch(()=>undefined);
     const updated=await this.mutate(project=>{
+      const before=new Map(project.shots.map(shot=>[shot.id,shotProjectRenderInputKey(project,shot)]));
       project.assets=project.assets.filter(item=>item.id!==assetId);
       for(const shot of project.shots){
         shot.characterAssetIds=shot.characterAssetIds.filter(id=>id!==assetId);
@@ -176,6 +176,7 @@ export class ProjectService {
         if(shot.endFrameAssetId===assetId)shot.endFrameAssetId=undefined;
         if(shot.referenceVideoAssetId===assetId)shot.referenceVideoAssetId=undefined;
         if(shot.audioAssetId===assetId)shot.audioAssetId=undefined;
+        if(before.get(shot.id)!==shotProjectRenderInputKey(project,shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}
       }
     });
     if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete asset file after removing it from the project: ${absolute}`,error));
@@ -286,13 +287,14 @@ export class ProjectService {
     const backupFile = join(project.rootPath, PROJECT_BACKUP_FILE);
     const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${process.pid}.tmp`);
     const payload = JSON.stringify(serializable, null, 2);
-    try { await copyFile(projectFile, backupFile); } catch {}
+    try { await copyFile(projectFile, backupFile); }
+    catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
     await writeFile(tempFile, payload, 'utf8');
     try { await rename(tempFile, projectFile); }
     catch (error: any) {
-      if (!['EEXIST','EPERM','EACCES'].includes(error?.code)) throw error;
-      await writeFile(projectFile, payload, 'utf8');
-      await rm(tempFile, { force: true }).catch(() => undefined);
+      if (!['EEXIST','EPERM','EACCES'].includes(error?.code)){await rm(tempFile,{force:true}).catch(()=>undefined);throw error;}
+      try{await writeFile(projectFile, payload, 'utf8');}
+      finally{await rm(tempFile, { force: true }).catch(() => undefined);}
     }
     this.current = serializable;
     return structuredClone(serializable);
@@ -307,24 +309,24 @@ export class ProjectService {
   }
 
   private async ensureFolders(rootPath: string): Promise<void> {
-    await Promise.all([
-      mkdir(join(rootPath,'assets'),{recursive:true}), mkdir(join(rootPath,'renders'),{recursive:true}),
-      mkdir(join(rootPath,'exports'),{recursive:true}), mkdir(join(rootPath,'workflows'),{recursive:true}),
-      mkdir(join(rootPath,'cache'),{recursive:true}), mkdir(join(rootPath,'handoff','capcut'),{recursive:true}),
-      mkdir(join(rootPath,'.cineforge','jobs'),{recursive:true}), mkdir(join(rootPath,'.cineforge','logs'),{recursive:true})
-    ]);
-    try{await writeFile(join(rootPath,'.cineforge','.gitignore'),'*\n!.gitignore\n',{encoding:'utf8',flag:'wx'});}
+    await mkdir(rootPath,{recursive:true});
+    const managed=[
+      'assets','renders','exports','workflows','cache',
+      join('handoff','capcut'),'.cineforge',join('.cineforge','jobs'),join('.cineforge','logs')
+    ];
+    for(const relativePath of managed){
+      const candidate=join(rootPath,relativePath);
+      const safe=await assertSafeWritePath(rootPath,candidate,`managed project directory ${relativePath}`);
+      await mkdir(safe,{recursive:true});
+      await assertExistingPathInside(rootPath,safe,`managed project directory ${relativePath}`);
+    }
+    const cineforgeDir=await assertExistingPathInside(rootPath,join(rootPath,'.cineforge'),'CineForge metadata directory');
+    const gitignore=await assertSafeWritePath(cineforgeDir,join(cineforgeDir,'.gitignore'),'CineForge metadata gitignore');
+    try{await writeFile(gitignore,'*\n!.gitignore\n',{encoding:'utf8',flag:'wx'});}
     catch(error:any){if(error?.code!=='EEXIST')throw error;}
   }
 }
 
-function profileConfigKey(profile:FilmProject['settings']['workflowProfiles'][number]):string{
-  return JSON.stringify({
-    runtime:profile.runtime,purpose:profile.purpose,name:profile.name,modelFamily:profile.modelFamily,mode:profile.mode,
-    workflowPath:profile.workflowPath,workflowFormat:profile.workflowFormat,bindings:profile.bindings,enabled:profile.enabled,
-    notes:profile.notes,modelFingerprint:profile.modelFingerprint
-  });
-}
 
 function assetImportFilters(kind:AssetKind):Array<{name:string;extensions:string[]}>{
   if(kind==='video')return[{name:'Video',extensions:['mp4','mov','webm','mkv','avi']}];

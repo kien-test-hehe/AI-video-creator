@@ -21,6 +21,7 @@ import { prepareCapCutHandoff } from './services/capcut-handoff';
 import { assertTrustedIpcSender } from './services/ipc-security';
 import { validateAndRecordProfile } from './services/profile-validation';
 import { writeCodexMachineContext } from './services/machine-context';
+import type { KeyframeLeaseStore } from './services/keyframe-lease';
 import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/wangp-catalog-service';
 
 type Handler = (...args: any[]) => any;
@@ -38,9 +39,11 @@ export async function shutdownForegroundOperations():Promise<void>{
   if(pending.length)await Promise.allSettled(pending);
 }
 
-export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,trustedRendererUrl:string): void {
+export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,keyframeLeases:KeyframeLeaseStore,trustedRendererUrl:string): void {
   let keyframeBusy = false;
   let directorBusy = false;
+  let workflowValidationBusy = false;
+  let projectSwitchBusy = false;
   const handle = (channel: string, handler: Handler) => {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: any[]) => {
       assertTrustedIpcSender(event,trustedRendererUrl);
@@ -48,26 +51,34 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     });
   };
 
-  const assertProjectSwitchAllowed=()=>{if(queue.isBusy()||keyframeBusy||directorBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active renders, local Director work, keyframe generation, timeline export, or CapCut handoff before switching projects.');};
-  const assertGpuGenerationAvailable=()=>{if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
-  const assertDirectorAvailable=()=>{if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
+  const assertProjectStable=()=>{if(projectSwitchBusy)throw new Error('Wait for the current project open/create operation to finish.');};
+  const assertProjectSwitchAllowed=()=>{if(projectSwitchBusy||queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish the current project switch or cancel active renders, local Director work, keyframe generation, workflow validation/provisioning, timeline export, or CapCut handoff before switching projects.');};
+  const assertGpuGenerationAvailable=()=>{assertProjectStable();if(activeExportAbortController)throw new Error('Wait for the GPU-assisted timeline export to finish or cancel it before starting generation.');if(workflowValidationBusy)throw new Error('Wait for workflow validation/provisioning to finish before starting GPU generation.');if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
+  const assertDirectorAvailable=()=>{assertProjectStable();if(activeExportAbortController)throw new Error('Wait for the timeline export to finish or cancel it before using the local Director.');if(workflowValidationBusy)throw new Error('Wait for workflow validation/provisioning to finish before using the local Director.');if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
+  const assertWorkflowMaintenanceAvailable=()=>{assertProjectStable();if(activeExportAbortController||queue.isBusy()||keyframeBusy||directorBusy)throw new Error('Finish or cancel active timeline export, render, keyframe, or Director work before validating or provisioning workflow profiles.');};
+  const withWorkflowValidationLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{if(workflowValidationBusy)throw new Error('A workflow validation/provisioning task is already running.');workflowValidationBusy=true;try{return await operation();}finally{workflowValidationBusy=false;}};
+  const withProjectSwitchLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{assertProjectSwitchAllowed();projectSwitchBusy=true;try{return await operation();}finally{projectSwitchBusy=false;}};
+  const runPostSwitchStep=async(operation:()=>Promise<unknown>):Promise<string|undefined>=>{try{await operation();return undefined;}catch(error){const message=error instanceof Error?error.message:String(error);console.warn('Post-switch project task failed:',message);return message;}};
+  const showPostSwitchWarning=(label:string,message:string)=>{void dialog.showMessageBox({type:'warning',title:'CineForge project warning',message:`Project opened, but ${label} did not complete.`,detail:`${message}\n\nReview System / Preflight before rendering.`}).catch(()=>undefined);};
 
-  handle(IPC.projectCreate, async (name?: string) => {
-    assertProjectSwitchAllowed();
+  handle(IPC.projectCreate, (name?: string) => withProjectSwitchLock(async()=>{
     const created=await projects.createWithDialog(name);
-    if(created)await autoProvisionWanGpIfNeeded(projects,settings);
-    return projects.getCurrent();
-  });
-  handle(IPC.projectOpen, async () => {
-    assertProjectSwitchAllowed();
-    const opened = await projects.openWithDialog();
-    if (opened) {
-      await autoProvisionWanGpIfNeeded(projects,settings);
-      await queue.reconcileAfterProjectOpen();
+    if(created){
+      const provisionWarning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(provisionWarning){console.warn('WanGP auto-provision warning:',provisionWarning);showPostSwitchWarning('WanGP auto-provisioning',provisionWarning);}
+      const queueWarning=await runPostSwitchStep(()=>queue.reconcileAfterProjectOpen());if(queueWarning){console.warn('Queue reset warning:',queueWarning);showPostSwitchWarning('render queue reset',queueWarning);}
     }
     return projects.getCurrent();
-  });
+  }));
+  handle(IPC.projectOpen, () => withProjectSwitchLock(async()=>{
+    const opened = await projects.openWithDialog();
+    if (opened) {
+      const provisionWarning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(provisionWarning){console.warn('WanGP auto-provision warning:',provisionWarning);showPostSwitchWarning('WanGP auto-provisioning',provisionWarning);}
+      const recoveryWarning=await runPostSwitchStep(()=>queue.reconcileAfterProjectOpen());if(recoveryWarning){console.warn('Render recovery warning:',recoveryWarning);showPostSwitchWarning('render recovery',recoveryWarning);}
+    }
+    return projects.getCurrent();
+  }));
   handle(IPC.projectSave, (project: FilmProject) => {
+    assertProjectStable();
     const removedActive=removedActiveRenderShotIds(project,queue.snapshot().jobs);
     if(removedActive.length)throw new Error(`Cannot remove ${removedActive.length} shot(s) while their render jobs are active. Finish or cancel those renders before changing scene/shot structure.`);
     return projects.saveFromRenderer(project);
@@ -75,22 +86,25 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.projectGet, () => projects.getCurrent());
   handle(IPC.projectParseScript, (script: string) => parseScreenplay(script));
   handle(IPC.projectPreflight, async () => {
+    assertProjectStable();
     const project = requireProject(projects);
     return preflightProject(project, settings.get());
   });
-  handle(IPC.assetImport, (kind: AssetKind) => projects.importAsset(kind));
+  handle(IPC.assetImport, (kind: AssetKind) => {assertProjectStable();return projects.importAsset(kind);});
   handle(IPC.assetDelete, (assetId:string) => {
+    assertProjectStable();
     if(queue.isBusy()||keyframeBusy||directorBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active generation/Director/export/handoff before deleting project assets.');
     return projects.deleteAsset(assetId);
   });
 
   handle(IPC.settingsGet, () => settings.get());
   handle(IPC.settingsSave, async (next: AppMachineSettings) => {
-    if (queue.isBusy()||keyframeBusy||directorBusy) throw new Error('Machine runtime settings cannot change while render jobs, keyframe generation, or local Director work are active.');
+    if (queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy) throw new Error('Machine runtime settings cannot change while render jobs, keyframe generation, local Director work, or workflow validation/provisioning are active.');
     return settings.save(next);
   });
 
   handle(IPC.workflowImportComfy, async () => {
+    assertProjectStable();
     const project = requireProject(projects);
     const result = await dialog.showOpenDialog({ title: 'Import ComfyUI workflow JSON', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
     if (result.canceled || !result.filePaths[0]) return null;
@@ -112,6 +126,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
 
   handle(IPC.workflowImportWanGp, async () => {
+    assertProjectStable();
     const project=requireProject(projects);
     const result=await dialog.showOpenDialog({title:'Import WanGP exported settings JSON',properties:['openFile'],filters:[{name:'WanGP settings',extensions:['json']}]});
     if(result.canceled||!result.filePaths[0])return null;
@@ -123,13 +138,14 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
 
   handle(IPC.workflowInspect, async (path:string)=>{
+    assertProjectStable();
     const project=requireProject(projects);
     const safe=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),path,'workflow path'),'workflow path');
     try{return await inspectWorkflow(safe);}catch{return inspectWanGpSettings(safe);}
   });
-  handle(IPC.workflowValidate, (profileId:string) => validateAndRecordProfile(projects, settings.get(), profileId));
+  handle(IPC.workflowValidate, (profileId:string) => {assertWorkflowMaintenanceAvailable();return withWorkflowValidationLock(()=>validateAndRecordProfile(projects, settings.get(), profileId));});
   handle(IPC.workflowWanGpCatalog, () => listWanGpCatalog(settings.get()));
-  handle(IPC.workflowProvisionWanGp, () => provisionRecommendedWanGpProfiles(projects,settings));
+  handle(IPC.workflowProvisionWanGp, () => {assertWorkflowMaintenanceAvailable();return withWorkflowValidationLock(()=>provisionRecommendedWanGpProfiles(projects,settings));});
 
   handle(IPC.systemProbe, async()=>{
     const project=projects.getCurrent()??undefined,machine=settings.get(),probe=await probeSystem(project,machine);
@@ -147,12 +163,13 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     shell.showItemInFolder(safe);
   });
 
-  handle(IPC.renderEnqueue,(request:RenderRequest)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before queueing a video render.');return queue.enqueue(request);});
-  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before queueing video renders.');return queue.enqueueBatch(request);});
-  handle(IPC.renderRetry,(jobId:string)=>{if(keyframeBusy||directorBusy)throw new Error('Wait for active keyframe/Director work to finish before retrying a render.');return queue.retry(jobId);});
+  handle(IPC.renderEnqueue,(request:RenderRequest)=>{assertProjectStable();if(activeExportAbortController||workflowValidationBusy||keyframeBusy||directorBusy)throw new Error('Wait for active timeline export, workflow validation, keyframe, or Director work to finish before queueing a video render.');return queue.enqueue(request);});
+  handle(IPC.renderEnqueueBatch,(request:RenderBatchRequest)=>{assertProjectStable();if(activeExportAbortController||workflowValidationBusy||keyframeBusy||directorBusy)throw new Error('Wait for active timeline export, workflow validation, keyframe, or Director work to finish before queueing video renders.');return queue.enqueueBatch(request);});
+  handle(IPC.renderRetry,(jobId:string)=>{assertProjectStable();if(activeExportAbortController||workflowValidationBusy||keyframeBusy||directorBusy)throw new Error('Wait for active timeline export, workflow validation, keyframe, or Director work to finish before retrying a render.');return queue.retry(jobId);});
   handle(IPC.renderCancel,(jobId:string)=>queue.cancel(jobId));
   handle(IPC.renderSnapshot,()=>queue.snapshot());
   handle(IPC.renderOutputDelete,(outputId:string)=>{
+    assertProjectStable();
     if(activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel the active timeline export / CapCut handoff before deleting rendered takes.');
     return projects.deleteRenderOutput(outputId);
   });
@@ -177,7 +194,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
   handle(IPC.keyframeGenerate,async(request:KeyframeRequest)=>{
     assertGpuGenerationAvailable();keyframeBusy=true;activeKeyframeAbortController=new AbortController();
-    const task=generateKeyframe(projects,settings.get(),request,activeKeyframeAbortController.signal);activeKeyframePromise=task;
+    const task=generateKeyframe(projects,settings.get(),request,keyframeLeases,activeKeyframeAbortController.signal);activeKeyframePromise=task;
     try{return await task;}
     finally{keyframeBusy=false;activeKeyframeAbortController=null;activeKeyframePromise=null;}
   });
@@ -187,8 +204,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     return true;
   });
   handle(IPC.timelineExport,async()=>{
+    assertProjectStable();
     if(activeExportAbortController)throw new Error('A timeline export is already running.');
-    if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before exporting the timeline.');
+    if(queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy)throw new Error('Finish or cancel active render, keyframe, Director, or workflow maintenance work before starting the GPU-assisted timeline export.');
     activeExportAbortController=new AbortController();
     const task=exportTimeline(requireProject(projects),settings.get(),activeExportAbortController.signal);activeExportPromise=task;
     try{return{outputPath:await task};}
@@ -196,6 +214,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
   handle(IPC.timelineCancelExport,async()=>{activeExportAbortController?.abort();});
   handle(IPC.capcutPrepareHandoff,async()=>{
+    assertProjectStable();
     if(activeHandoffPromise)throw new Error('A CapCut handoff is already being prepared.');
     if(activeExportAbortController)throw new Error('Wait for the active timeline export to finish before preparing a CapCut handoff.');
     const task=prepareCapCutHandoff(requireProject(projects));activeHandoffPromise=task;
@@ -215,7 +234,7 @@ function requireProject(projects: ProjectService): FilmProject {
 async function autoProvisionWanGpIfNeeded(projects:ProjectService,settings:AppSettingsService):Promise<void>{
   const project=projects.getCurrent(),machine=settings.get();
   if(!project||machine.wangp.executionMode!=='native'||!machine.wangp.rootPath.trim())return;
-  const usable=project.settings.workflowProfiles.some(profile=>profile.enabled&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
+  const usable=project.settings.workflowProfiles.some(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   if(usable)return;
   try{await provisionRecommendedWanGpProfiles(projects,settings);}
   catch(error){console.warn('Automatic WanGP profile provisioning was skipped:',error);}

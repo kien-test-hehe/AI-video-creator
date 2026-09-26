@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadPortableProject } from '../src/main/services/project-schema';
-import { assertExistingPathInside } from '../src/main/services/path-safety';
+import { assertExistingPathInside, assertExistingProjectMediaPath } from '../src/main/services/path-safety';
 import { analyzeWanGpBindings } from '../src/main/services/wangp-engine';
 import { profileCompatibilityErrors } from '../src/main/services/profile-validation';
 import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
 import type { WorkflowProfile } from '../src/shared/types';
+import { stageWorkflowProfileSnapshot } from '../src/main/services/workflow-snapshot';
+import { sha256File } from '../src/main/services/runtime-fingerprint';
+import { JobJournal } from '../src/main/services/job-journal';
+import { randomBytes } from 'node:crypto';
 
 describe('portable project trust boundary',()=>{
   it('migrates v1 but discards executable paths and external endpoint settings',()=>{
@@ -92,6 +96,60 @@ describe('canonical filesystem containment',()=>{
   });
 });
 
+
+describe('signed journal filesystem boundary',()=>{
+  it('refuses to write through a symlinked .cineforge directory',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-journal-project-')),outside=await mkdtemp(join(tmpdir(),'cineforge-journal-outside-'));
+    try{
+      await symlink(outside,join(root,'.cineforge'),'dir');
+      const journal=new JobJournal(randomBytes(32)),now=new Date().toISOString();
+      await expect(journal.write(root,{id:'job-1',shotId:'shot-1',createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:'ltx-2.5-fast',outputs:[]})).rejects.toThrow(/outside|symlink/i);
+      await expect(import('node:fs/promises').then(fs=>fs.stat(join(outside,'jobs','job-1.json')))).rejects.toThrow();
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
+
+describe('signed journal recovery directory boundary',()=>{
+  it('refuses to read signed journals through a symlinked jobs directory',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-journal-read-project-')),outside=await mkdtemp(join(tmpdir(),'cineforge-journal-read-outside-'));
+    try{
+      await mkdir(join(root,'.cineforge'),{recursive:true});await symlink(outside,join(root,'.cineforge','jobs'),'dir');
+      const journal=new JobJournal(randomBytes(32));
+      await expect(journal.readAll(root,['job-1'])).rejects.toThrow(/outside|symlink/i);
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
+
+describe('project media protocol scope',()=>{
+  it('serves only files below assets/ or renders/ and blocks project internals',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-media-'));
+    try{
+      await mkdir(join(root,'assets'),{recursive:true});await mkdir(join(root,'renders'),{recursive:true});await mkdir(join(root,'.cineforge'),{recursive:true});
+      await writeFile(join(root,'assets','a.png'),'a');await writeFile(join(root,'renders','r.mp4'),'r');await writeFile(join(root,'.cineforge','jobs.json'),'secret');await writeFile(join(root,'cineforge.project.json'),'{}');
+      await expect(assertExistingProjectMediaPath(root,'assets/a.png')).resolves.toContain('a.png');
+      await expect(assertExistingProjectMediaPath(root,'renders/r.mp4')).resolves.toContain('r.mp4');
+      await expect(assertExistingProjectMediaPath(root,'.cineforge/jobs.json')).rejects.toThrow(/non-media/i);
+      await expect(assertExistingProjectMediaPath(root,'cineforge.project.json')).rejects.toThrow(/non-media/i);
+      await expect(assertExistingProjectMediaPath(root,'assets/../cineforge.project.json')).rejects.toThrow();
+    }finally{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));}
+  });
+});
+
+describe('immutable workflow staging',()=>{
+  it('copies the exact hashed workflow into project cache and rejects changed source bytes',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-workflow-snapshot-'));
+    try{
+      await mkdir(join(root,'workflows'),{recursive:true});const source=join(root,'workflows','wf.json');await writeFile(source,'{"prompt":"a"}','utf8');
+      const expected=await sha256File(source),profile={id:'p',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:source,workflowFormat:'wangp-settings',bindings:[],enabled:true} as WorkflowProfile;
+      const staged=await stageWorkflowProfileSnapshot(root,profile,expected,join(root,'cache','wf'));
+      expect(staged.workflowPath).toContain(join('cache','wf'));expect(await sha256File(staged.workflowPath)).toBe(expected);
+      await writeFile(source,'{"prompt":"changed"}','utf8');
+      await expect(stageWorkflowProfileSnapshot(root,profile,expected,join(root,'cache','wf2'))).rejects.toThrow(/changed while staging/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 
 describe('renderer navigation trust',()=>{
   it('accepts only the exact packaged renderer file in production mode',()=>{

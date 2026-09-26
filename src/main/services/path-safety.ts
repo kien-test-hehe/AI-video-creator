@@ -32,6 +32,14 @@ export async function assertExistingRelativeProjectPath(root: string, relativePa
   return assertExistingPathInside(resolve(root, scope), lexical, label);
 }
 
+
+export async function assertExistingProjectMediaPath(root:string,relativePath:string):Promise<string>{
+  if(!relativePath||isAbsolute(relativePath))throw new Error('Invalid media path: expected a project-relative asset/render path.');
+  const normalized=relativePath.replace(/\\/g,'/').replace(/^\/+/,''),scope=normalized.split('/')[0];
+  if(scope!=='assets'&&scope!=='renders')throw new Error(`Blocked non-media project scope: ${scope||'(root)'}`);
+  return assertExistingRelativeProjectPath(root,normalized,scope,'media path');
+}
+
 export async function assertSafeWritePath(root: string, candidate: string, label = 'write path'): Promise<string> {
   const lexical = assertPathInside(root, candidate, label);
   const realRoot = await realpath(resolve(root));
