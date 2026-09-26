@@ -1,8 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RenderJob } from '../../shared/types';
 import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
+import { readFileBufferLimited } from './json-file';
 
 interface JournalEnvelope{version:1;job:RenderJob;mac:string}
 
@@ -36,9 +37,8 @@ export class JobJournal {
       let file:string;
       try{file=await assertExistingPathInside(dir,join(dir,`${id}.json`),'job journal');}
       catch(error:any){if(error?.code==='ENOENT')continue;throw error;}
-      const info=await stat(file);if(info.size>5*1024*1024)continue;
       let envelope:JournalEnvelope;
-      try{envelope=JSON.parse(await readFile(file,'utf8')) as JournalEnvelope;}
+      try{envelope=JSON.parse((await readFileBufferLimited(file,'Signed render journal',5*1024*1024)).toString('utf8')) as JournalEnvelope;}
       catch(error){if(error instanceof SyntaxError)continue;throw error;}
       if(envelope?.version!==1||!envelope.job||envelope.job.id!==id||typeof envelope.mac!=='string')continue;
       const expected=Buffer.from(sign(this.key,envelope.job),'hex'),actual=Buffer.from(envelope.mac,'hex');
