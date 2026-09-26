@@ -42,10 +42,9 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
     const image = machine.wangp.docker.image.trim();
     let imageId = '';
     if (image) {
-      try {
-        const { stdout } = await execFileAsync(machine.wangp.docker.command, ['image','inspect','--format','{{.Id}}',image], { timeout: 10_000 });
-        imageId = stdout.trim();
-      } catch {}
+      const { stdout } = await execFileAsync(machine.wangp.docker.command, ['image','inspect','--format','{{.Id}}',image], { timeout: 10_000 });
+      imageId = stdout.trim();
+      if(!imageId)throw new Error(`Docker image inspect returned no immutable image ID for ${image}.`);
     }
     const runtimeVersion = image ? `docker:${image}${imageId ? `@${imageId}` : ''}` : 'docker:unconfigured';
     return {
