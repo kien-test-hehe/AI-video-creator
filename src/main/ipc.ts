@@ -30,12 +30,13 @@ let activeExportAbortController:AbortController|null=null;
 let activeKeyframeAbortController:AbortController|null=null;
 let activeExportPromise:Promise<unknown>|null=null;
 let activeKeyframePromise:Promise<unknown>|null=null;
+let activeDirectorPromise:Promise<unknown>|null=null;
 let activeHandoffPromise:Promise<unknown>|null=null;
 
 export async function shutdownForegroundOperations():Promise<void>{
   activeExportAbortController?.abort();
   activeKeyframeAbortController?.abort();
-  const pending=[activeExportPromise,activeKeyframePromise,activeHandoffPromise].filter((value):value is Promise<unknown>=>Boolean(value));
+  const pending=[activeExportPromise,activeKeyframePromise,activeDirectorPromise,activeHandoffPromise].filter((value):value is Promise<unknown>=>Boolean(value));
   if(pending.length)await Promise.allSettled(pending);
 }
 
@@ -181,21 +182,19 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
 
   handle(IPC.directorPlanScene,async(sceneId:string)=>{
     assertDirectorAvailable();directorBusy=true;
-    try{
-      const project=requireProject(projects);
-      const scene=project.scenes.find(s=>s.id===sceneId);
-      if(!scene)throw new Error('Scene not found.');
-      return await planSceneWithLocalDirector(project,scene,settings.get());
-    }finally{directorBusy=false;}
+    const project=requireProject(projects),scene=project.scenes.find(s=>s.id===sceneId);
+    if(!scene){directorBusy=false;throw new Error('Scene not found.');}
+    const task=planSceneWithLocalDirector(project,scene,settings.get());activeDirectorPromise=task;
+    try{return await task;}
+    finally{directorBusy=false;activeDirectorPromise=null;}
   });
   handle(IPC.directorReviewShot,async(shotId:string)=>{
     assertDirectorAvailable();directorBusy=true;
-    try{
-      const project=requireProject(projects);
-      const shot=project.shots.find(s=>s.id===shotId);
-      if(!shot)throw new Error('Shot not found.');
-      return await reviewShotWithLocalDirector(project,shot,settings.get());
-    }finally{directorBusy=false;}
+    const project=requireProject(projects),shot=project.shots.find(s=>s.id===shotId);
+    if(!shot){directorBusy=false;throw new Error('Shot not found.');}
+    const task=reviewShotWithLocalDirector(project,shot,settings.get());activeDirectorPromise=task;
+    try{return await task;}
+    finally{directorBusy=false;activeDirectorPromise=null;}
   });
   handle(IPC.keyframeGenerate,async(request:KeyframeRequest)=>{
     assertGpuGenerationAvailable();keyframeBusy=true;activeKeyframeAbortController=new AbortController();
