@@ -264,11 +264,12 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
 
 function sanitizeRenderOutput(value: unknown, shotIds: Set<string>): RenderOutput {
   const source = asObject(value, 'render output');
-  const shotId = safeId(source.shotId);
+  const shotId = safeId(source.shotId),path=str(source.path,'',4096);
   if (!shotIds.has(shotId)) throw new Error(`Render output references unknown shot: ${shotId}`);
+  if(!path)throw new Error('Render output path is required.');
   return {
     id:safeId(source.id), jobId:safeId(source.jobId), shotId,
-    path:str(source.path,'',4096), filename:str(source.filename,'output',2048),
+    path, filename:str(source.filename,'output',2048),
     mediaType:['video','image','audio'].includes(source.mediaType) ? source.mediaType : 'unknown',
     createdAt:iso(source.createdAt,new Date().toISOString()),
     comfyMeta:sanitizeComfyMeta(source.comfyMeta),
