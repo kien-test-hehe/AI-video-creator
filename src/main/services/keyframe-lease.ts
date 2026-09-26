@@ -15,6 +15,7 @@ export interface KeyframeLease{
   projectId:string;
   runtime:RuntimeBackend;
   runId:string;
+  phase:'prepared'|'submitting';
   comfyUrl?:string;
   wanGpExecutionMode?:WanGpExecutionMode;
   dockerCommand?:string;
@@ -52,6 +53,7 @@ export class KeyframeLeaseStore{
 
 export async function recoverOrphanedKeyframeLease(store:KeyframeLeaseStore,machine:AppMachineSettings):Promise<void>{
   const lease=await store.read();if(!lease)return;
+  if(lease.phase==='prepared'){await store.clear();return;}
   if(lease.runtime==='comfyui'){
     const client=new ComfyClient(lease.comfyUrl||machine.comfy.url,true);
     let matches;
