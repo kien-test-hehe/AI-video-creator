@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
+import { loadPortableProject } from '../src/main/services/project-schema';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -60,6 +61,28 @@ describe('bounded workflow JSON reads',()=>{
 describe('FFmpeg concat path formatting',()=>{
   it('normalizes Windows separators before writing concat-demuxer file entries',()=>{
     expect(ffmpegConcatFileLine(String.raw`C:\Projects\My Film\clip.mp4`)).toBe("file 'C:/Projects/My Film/clip.mp4'");
+  });
+});
+describe('project schema canonicalization',()=>{
+  const baseProject=()=>({
+    schemaVersion:2,id:'project-1',name:'Film',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Film',logline:'',script:'',notes:''},
+    scenes:[{id:'scene-1',index:1,heading:'INT. ROOM',body:'',shotIds:[]}],
+    assets:[],
+    shots:[{id:'shot-1',sceneId:'scene-1',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false},latestRenderId:'missing-output'}],
+    renderJobs:[],
+    renderOutputs:[{id:'passing-output',jobId:'missing-job',shotId:'shot-1',path:'/project/renders/take.mp4',filename:'take.mp4',mediaType:'video',createdAt:'2026-01-02T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-02T00:00:00.000Z',passed:true,issues:[],warnings:[]}}],
+    timeline:[],settings:{}
+  });
+  it('rebuilds scene shot membership and repairs an invalid preferred take from QC-passing history',()=>{
+    const loaded=loadPortableProject(baseProject(),'/project').project;
+    expect(loaded.scenes[0].shotIds).toEqual(['shot-1']);
+    expect(loaded.shots[0].latestRenderId).toBe('passing-output');
+    expect(loaded.shots[0].status).toBe('rendered');
+  });
+  it('rejects render outputs that do not have a durable path',()=>{
+    const raw=baseProject();raw.renderOutputs[0].path='';
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/render output path is required/i);
   });
 });
 describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
