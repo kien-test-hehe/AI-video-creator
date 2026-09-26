@@ -1,5 +1,5 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RenderJob } from '../../shared/types';
 import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
@@ -15,10 +15,16 @@ export class JobJournal {
     try{
       const candidate=join(projectRoot,'.cineforge','jobs'),safeDir=await assertSafeWritePath(projectRoot,candidate,'job journal directory');await mkdir(safeDir,{recursive:true});
       const dir=await assertExistingPathInside(projectRoot,safeDir,'job journal directory');
-      const file=await assertSafeWritePath(dir,join(dir,`${job.id}.json`),'job journal'),temp=`${file}.${process.pid}.${Date.now()}.tmp`;
+      const file=await assertSafeWritePath(dir,join(dir,`${job.id}.json`),'job journal'),temp=`${file}.${randomUUID()}.tmp`;
+      await assertJournalFileNotSymlink(file);
       const envelope:JournalEnvelope={version:1,job:structuredClone(job),mac:sign(this.key,job)};
-      await writeFile(temp,JSON.stringify(envelope,null,2),'utf8');
-      try{await rename(temp,file);}catch(error:any){if(!['EEXIST','EPERM','EACCES'].includes(error?.code))throw error;await writeFile(file,JSON.stringify(envelope,null,2),'utf8');await rm(temp,{force:true}).catch(()=>undefined);}
+      await writeFile(temp,JSON.stringify(envelope,null,2),{encoding:'utf8',flag:'wx',mode:0o600});
+      try{await rename(temp,file);}
+      catch(error:any){
+        if(!['EEXIST','EPERM','EACCES'].includes(error?.code)){await rm(temp,{force:true}).catch(()=>undefined);throw error;}
+        try{await assertJournalFileNotSymlink(file);await writeFile(file,JSON.stringify(envelope,null,2),'utf8');}
+        finally{await rm(temp,{force:true}).catch(()=>undefined);}
+      }
     }finally{release();if(this.gates.get(job.id)===chained)this.gates.delete(job.id);}
   }
 
@@ -44,3 +50,8 @@ export class JobJournal {
 }
 
 function sign(key:Buffer,job:RenderJob):string{return createHmac('sha256',key).update(JSON.stringify(job)).digest('hex');}
+
+async function assertJournalFileNotSymlink(path:string):Promise<void>{
+  try{const info=await lstat(path);if(info.isSymbolicLink())throw new Error('Job journal must not be a symbolic link.');if(!info.isFile())throw new Error('Job journal target is not a regular file.');}
+  catch(error:any){if(error?.code!=='ENOENT')throw error;}
+}
