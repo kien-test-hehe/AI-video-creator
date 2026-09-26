@@ -8,6 +8,7 @@ import { ProjectService } from './services/project-service';
 import { RenderQueueService } from './services/render-queue';
 import { lockDownWebContents } from './services/ipc-security';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from './services/keyframe-lease';
+import { RenderLeaseStore } from './services/render-lease';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'cineforge-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
@@ -17,6 +18,7 @@ let projects: ProjectService;
 let queue: RenderQueueService;
 let machineSettings: AppSettingsService;
 let keyframeLeases:KeyframeLeaseStore;
+let renderLeases:RenderLeaseStore;
 let mainWindow: BrowserWindow | null = null;
 let ipcRegistered = false;
 let trustedRendererUrl = '';
@@ -74,8 +76,16 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
     dialog.showErrorBox('CineForge GPU recovery blocked',error instanceof Error?error.message:String(error));
     app.quit();return;
   }
+  renderLeases=new RenderLeaseStore(app.getPath('userData'),machineSettings.getJournalKey());
   projects = new ProjectService();
-  queue = new RenderQueueService(projects, machineSettings);
+  queue = new RenderQueueService(projects, machineSettings,renderLeases);
+  const activeRenderLease=await renderLeases.read();
+  if(activeRenderLease){
+    const recoveredProject=await projects.openAt(activeRenderLease.projectRoot);
+    if(recoveredProject.id!==activeRenderLease.projectId)throw new Error('Active render recovery lease does not match the project stored at its recorded path.');
+    if(!recoveredProject.renderJobs.some(job=>job.id===activeRenderLease.jobId))throw new Error(`Active render recovery lease references missing project job ${activeRenderLease.jobId}. Stop the prior backend work before clearing the lease.`);
+    await queue.reconcileAfterProjectOpen();
+  }
 
   registerMediaProtocol();
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
