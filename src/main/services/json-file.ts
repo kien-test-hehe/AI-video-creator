@@ -1,4 +1,5 @@
-import { readFile, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 
 export const MAX_WORKFLOW_JSON_BYTES=64*1024*1024;
 
@@ -10,7 +11,16 @@ export async function readJsonFileLimited<T=unknown>(
   const info=await stat(path);
   if(!info.isFile())throw new Error(`${label} is not a regular file: ${path}`);
   if(info.size>maxBytes)throw new Error(`${label} is too large (${info.size} bytes; limit ${maxBytes} bytes).`);
-  const raw=await readFile(path,'utf8');
+
+  const chunks:Buffer[]=[];let total=0;
+  for await(const chunk of createReadStream(path,{highWaterMark:64*1024})){
+    const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);
+    total+=bytes.length;
+    if(total>maxBytes)throw new Error(`${label} grew beyond the ${maxBytes}-byte safety limit while being read.`);
+    chunks.push(bytes);
+  }
+
+  const raw=Buffer.concat(chunks,total).toString('utf8');
   try{return JSON.parse(raw) as T;}
   catch(error){throw new Error(`${label} is not valid JSON: ${error instanceof Error?error.message:String(error)}`);}
 }
