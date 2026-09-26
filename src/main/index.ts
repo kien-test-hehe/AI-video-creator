@@ -19,6 +19,8 @@ let mainWindow: BrowserWindow | null = null;
 let ipcRegistered = false;
 let trustedRendererUrl = '';
 let shutdownInProgress=false;
+const ownsSingleInstanceLock=app.requestSingleInstanceLock();
+if(!ownsSingleInstanceLock)app.quit();
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -60,7 +62,7 @@ function registerMediaProtocol(): void {
   });
 }
 
-app.whenReady().then(async () => {
+if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   trustedRendererUrl=process.env.ELECTRON_RENDERER_URL||pathToFileURL(join(__dirname,'../renderer/index.html')).toString();
   machineSettings = new AppSettingsService(app.getPath('userData'));
   await machineSettings.load();
@@ -77,6 +79,11 @@ app.whenReady().then(async () => {
   }
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
+if(ownsSingleInstanceLock)app.on('second-instance',()=>{
+  if(!mainWindow||mainWindow.isDestroyed())return;
+  if(mainWindow.isMinimized())mainWindow.restore();
+  mainWindow.show();mainWindow.focus();
 });
 
 app.on('before-quit',event=>{
