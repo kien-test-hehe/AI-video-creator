@@ -40,7 +40,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
       normalized.push(target);
     }
     const listPath=join(cacheDir,'concat.txt');
-    await writeFile(listPath,normalized.map(path=>`file '${path.replace(/'/g,"'\\''")}'`).join('\n'),'utf8');
+    await writeFile(listPath,normalized.map(path=>`file '${path.replace(/\\/g,'/').replace(/'/g,"'\\''")}'`).join('\n'),'utf8');
     const safeName=project.name.replace(/[^a-zA-Z0-9_-]+/g,'_')||'cineforge';
     const outputPath=await assertSafeWritePath(exportDir,join(exportDir,`${safeName}-${Date.now()}.${project.settings.outputContainer}`),'master export');
 
