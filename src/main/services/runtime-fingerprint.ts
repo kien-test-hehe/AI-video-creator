@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { AppMachineSettings, RenderRuntimeFingerprint, WorkflowProfile } from '../../shared/types';
@@ -9,7 +9,9 @@ import { ComfyClient } from './comfy-client';
 const execFileAsync = promisify(execFile);
 
 export async function sha256File(path: string): Promise<string> {
-  return createHash('sha256').update(await readFile(path)).digest('hex');
+  const hash=createHash('sha256');
+  for await(const chunk of createReadStream(path))hash.update(chunk as Buffer);
+  return hash.digest('hex');
 }
 
 export function sha256Json(value: unknown): string {
