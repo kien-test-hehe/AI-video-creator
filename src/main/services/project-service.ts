@@ -290,8 +290,12 @@ export class ProjectService {
     await this.assertProjectStateFileNotSymlink(projectFile,'CineForge project file');
     await this.assertProjectStateFileNotSymlink(backupFile,'CineForge backup project file');
     const payload = JSON.stringify(serializable, null, 2);
-    try { await copyFile(projectFile, backupFile); }
-    catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
+    const previous=this.current&&this.current.id===project.id&&this.current.rootPath===project.rootPath?structuredClone(this.current):undefined;
+    if(previous){
+      const backupPayload=JSON.stringify(previous,null,2);
+      try{await writeFile(backupFile,backupPayload,{encoding:'utf8',mode:0o600});}
+      catch(error){throw new Error(`Could not create trusted project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
+    }
     await writeFile(tempFile, payload, {encoding:'utf8',flag:'wx'});
     try { await rename(tempFile, projectFile); }
     catch (error: any) {
