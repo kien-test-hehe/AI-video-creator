@@ -295,6 +295,9 @@ export class ProjectService {
       const backupPayload=JSON.stringify(previous,null,2);
       try{await writeFile(backupFile,backupPayload,{encoding:'utf8',mode:0o600});}
       catch(error){throw new Error(`Could not create trusted project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
+    }else{
+      try{await writeFile(backupFile,payload,{encoding:'utf8',mode:0o600,flag:'wx'});}
+      catch(error:any){if(error?.code!=='EEXIST')throw new Error(`Could not initialize trusted project backup: ${error instanceof Error?error.message:String(error)}`);}
     }
     await writeFile(tempFile, payload, {encoding:'utf8',flag:'wx'});
     try { await rename(tempFile, projectFile); }
