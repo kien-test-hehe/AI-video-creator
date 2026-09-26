@@ -110,6 +110,18 @@ describe('signed journal filesystem boundary',()=>{
   });
 });
 
+describe('signed journal recovery directory boundary',()=>{
+  it('refuses to read signed journals through a symlinked jobs directory',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-journal-read-project-')),outside=await mkdtemp(join(tmpdir(),'cineforge-journal-read-outside-'));
+    try{
+      await mkdir(join(root,'.cineforge'),{recursive:true});await symlink(outside,join(root,'.cineforge','jobs'),'dir');
+      const journal=new JobJournal(randomBytes(32));
+      await expect(journal.readAll(root,['job-1'])).rejects.toThrow(/outside|symlink/i);
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
+
 describe('project media protocol scope',()=>{
   it('serves only files below assets/ or renders/ and blocks project internals',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-media-'));
