@@ -26,12 +26,30 @@ import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
 import { tmpdir } from 'node:os';
+import { readJsonFileLimited } from '../src/main/services/json-file';
+import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
   '2': { class_type: 'KSampler', inputs: { seed: 1, steps: 20, cfg: 1 } }
 };
 
+describe('bounded workflow JSON reads',()=>{
+  it('parses valid JSON and rejects files that exceed the caller safety limit',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-json-limit-')),small=join(root,'small.json'),large=join(root,'large.json');
+    try{
+      await writeFile(small,JSON.stringify({ok:true}),'utf8');
+      await writeFile(large,JSON.stringify({payload:'x'.repeat(256)}),'utf8');
+      expect(await readJsonFileLimited<{ok:boolean}>(small,'test JSON',128)).toEqual({ok:true});
+      await expect(readJsonFileLimited(large,'test JSON',64)).rejects.toThrow(/too large|safety limit/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('FFmpeg concat path formatting',()=>{
+  it('normalizes Windows separators before writing concat-demuxer file entries',()=>{
+    expect(ffmpegConcatFileLine(String.raw`C:\Projects\My Film\clip.mp4`)).toBe("file 'C:/Projects/My Film/clip.mp4'");
+  });
+});
 describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
 describe('workflow engine',()=>{
  it('detects and binds API workflow',()=>{expect(detectWorkflowFormat(api)).toBe('api');const suggestions=suggestBindings(api);expect(suggestions.some(b=>b.key==='prompt')).toBe(true);const out=applyBindings(api,[{key:'prompt',selector:{nodeId:'1'},input:'text',required:true}],{prompt:'new',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:2,filenamePrefix:'x'});expect(out['1'].inputs.text).toBe('new');expect(api['1'].inputs.text).toBe('old');});
