@@ -21,7 +21,7 @@ export class RenderLeaseStore{
   async write(lease:RenderLease):Promise<void>{
     await mkdir(this.userDataDir,{recursive:true});
     const file=join(this.userDataDir,LEASE_FILE),temp=`${file}.${process.pid}.${Date.now()}.tmp`;
-    await assertLeaseFileNotSymlink(file,'active render lease');
+    await assertLeaseFileNotSymlink(file,'active render lease').catch((error:any)=>{if(error?.code!=='ENOENT')throw error;});
     const envelope:LeaseEnvelope={version:1,lease:structuredClone(lease),mac:sign(this.key,lease)};
     await writeFile(temp,JSON.stringify(envelope,null,2),'utf8');
     try{await rename(temp,file);}
