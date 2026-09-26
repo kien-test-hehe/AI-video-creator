@@ -125,7 +125,7 @@ function runCapture(command:string,args:string[],timeoutMs:number,signal?:AbortS
     child.stdout?.on('data',(data:Buffer)=>{if(captureExceeded)return;stdoutBytes+=data.length;if(stdoutBytes>PROCESS_CAPTURE_BYTES){captureExceeded=true;void stop(new Error(`${command} output exceeded the ${PROCESS_CAPTURE_BYTES}-byte safety limit.`));return;}stdoutChunks.push(Buffer.from(data));});
     child.stderr?.on('data',d=>{stderr=appendTail(stderr,d);});
     signal?.addEventListener('abort',onAbort,{once:true});if(signal?.aborted){onAbort();return;}
-    child.on('error',error=>finish(error));child.on('close',code=>stopping?finish(stopReason??new Error('FFprobe stopped.')):code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-2000)}`)));
+    child.on('error',error=>finish(error));child.on('close',code=>captureExceeded?finish(stopReason??new Error(`${command} output exceeded the capture safety limit.`)):stopping?finish(stopReason??new Error('FFprobe stopped.')):code===0?finish():finish(new Error(`${command} exited ${code}: ${stderr.slice(-2000)}`)));
   });
 }
 export function ffmpegConcatFileLine(path:string):string{
