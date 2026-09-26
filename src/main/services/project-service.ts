@@ -305,13 +305,20 @@ export class ProjectService {
   }
 
   private async ensureFolders(rootPath: string): Promise<void> {
-    await Promise.all([
-      mkdir(join(rootPath,'assets'),{recursive:true}), mkdir(join(rootPath,'renders'),{recursive:true}),
-      mkdir(join(rootPath,'exports'),{recursive:true}), mkdir(join(rootPath,'workflows'),{recursive:true}),
-      mkdir(join(rootPath,'cache'),{recursive:true}), mkdir(join(rootPath,'handoff','capcut'),{recursive:true}),
-      mkdir(join(rootPath,'.cineforge','jobs'),{recursive:true}), mkdir(join(rootPath,'.cineforge','logs'),{recursive:true})
-    ]);
-    try{await writeFile(join(rootPath,'.cineforge','.gitignore'),'*\n!.gitignore\n',{encoding:'utf8',flag:'wx'});}
+    await mkdir(rootPath,{recursive:true});
+    const managed=[
+      'assets','renders','exports','workflows','cache',
+      join('handoff','capcut'),'.cineforge',join('.cineforge','jobs'),join('.cineforge','logs')
+    ];
+    for(const relativePath of managed){
+      const candidate=join(rootPath,relativePath);
+      const safe=await assertSafeWritePath(rootPath,candidate,`managed project directory ${relativePath}`);
+      await mkdir(safe,{recursive:true});
+      await assertExistingPathInside(rootPath,safe,`managed project directory ${relativePath}`);
+    }
+    const cineforgeDir=await assertExistingPathInside(rootPath,join(rootPath,'.cineforge'),'CineForge metadata directory');
+    const gitignore=await assertSafeWritePath(cineforgeDir,join(cineforgeDir,'.gitignore'),'CineForge metadata gitignore');
+    try{await writeFile(gitignore,'*\n!.gitignore\n',{encoding:'utf8',flag:'wx'});}
     catch(error:any){if(error?.code!=='EEXIST')throw error;}
   }
 }
