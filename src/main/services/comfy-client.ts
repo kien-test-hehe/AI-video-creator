@@ -53,7 +53,7 @@ export class ComfyClient {
   async uploadImage(path: string, overwrite = true): Promise<ComfyFileRef> {
     const bytes = await readFileBufferLimited(path,'ComfyUI image upload',128*1024*1024);
     const form = new FormData();
-    form.append('image', new Blob([bytes]), basename(path));
+    form.append('image', new Blob([Uint8Array.from(bytes)]), basename(path));
     form.append('type', 'input');
     form.append('overwrite', overwrite ? 'true' : 'false');
     const res = await this.request('/upload/image', { method: 'POST', body: form }, 120_000);
