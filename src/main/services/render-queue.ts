@@ -27,6 +27,7 @@ import { planShotReferences } from './reference-plan';
 import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
 import { selectRecoveryJob } from '../../shared/recovery-policy';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
+import { RenderLeaseStore } from './render-lease';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -42,7 +43,7 @@ export class RenderQueueService extends EventEmitter {
   private lastJournalWrite=new Map<string,number>();
   private journal:JobJournal;
 
-  constructor(private projects:ProjectService,private settings:AppSettingsService){
+  constructor(private projects:ProjectService,private settings:AppSettingsService,private renderLeases:RenderLeaseStore){
     super();
     this.journal=new JobJournal(settings.getJournalKey());
   }
@@ -146,8 +147,14 @@ export class RenderQueueService extends EventEmitter {
   async reconcileAfterProjectOpen():Promise<void>{
     this.pending=[];this.recoveryPending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
     const project=this.projects.getCurrent();if(!project)return;
+    const activeLease=await this.renderLeases.read();
+    if(activeLease&&(activeLease.projectId!==project.id||activeLease.projectRoot!==project.rootPath))throw new Error('A signed active-render lease belongs to a different project. Open/recover that project before starting any new GPU work.');
+    if(activeLease&&!project.renderJobs.some(job=>job.id===activeLease.jobId))throw new Error(`Signed active-render lease references missing job ${activeLease.jobId}. GPU ownership is uncertain; do not start new generation until the prior backend work is stopped and the lease is cleared deliberately.`);
     const journals=await this.journal.readAll(project.rootPath,project.renderJobs.filter(job=>!TERMINAL.has(job.status)).map(job=>job.id));const byId=new Map(journals.map(j=>[j.id,j]));
-    const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id))).sort((a,b)=>a.job.createdAt.localeCompare(b.job.createdAt));
+    const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id))).sort((a,b)=>{
+      if(activeLease){if(a.job.id===activeLease.jobId)return-1;if(b.job.id===activeLease.jobId)return 1;}
+      return a.job.createdAt.localeCompare(b.job.createdAt);
+    });
     let recoveryStarted=false;
     for(const selection of selections){
       const job=selection.job,signed=selection.signed;
@@ -163,6 +170,7 @@ export class RenderQueueService extends EventEmitter {
         continue;
       }
       if(!signed){
+        if(activeLease?.jobId===job.id)throw new Error(`Signed active-render lease exists for ${job.id}, but its signed project journal is missing or invalid. Recovery is blocked to avoid releasing an unknown GPU backend.`);
         await this.updateJob(job.id,{status:'orphaned',progress:0,message:'Untrusted runtime state was not resumed',error:'No valid installation-signed job journal exists for this active job. Queue a new render explicitly.'},true,false);
         continue;
       }
@@ -171,13 +179,18 @@ export class RenderQueueService extends EventEmitter {
         this.pending.push(job.id);continue;
       }
       if(['submitted','running','recovering','stalled','downloading'].includes(job.status)){
-        if(!recoveryStarted){recoveryStarted=true;this.runningJobId=job.id;void this.recoverActiveJob(job.id);continue;}
+        if(!recoveryStarted){
+          recoveryStarted=true;this.runningJobId=job.id;
+          await this.acquireRenderLease(project,job.id);
+          void this.recoverActiveJob(job.id);continue;
+        }
         await this.updateJob(job.id,{status:'recovering',message:'Waiting for serialized backend recovery; no new GPU work will start before this backend identity is resolved.'},true,true);
         this.recoveryPending.push(job.id);continue;
       }
       await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
       this.pending.push(job.id);
     }
+    if(!this.runningJobId&&activeLease)await this.releaseRenderLease(activeLease.jobId);
     this.emitSnapshot();if(!this.runningJobId)void this.pump();
   }
 
@@ -200,8 +213,13 @@ export class RenderQueueService extends EventEmitter {
       await this.cleanupJobSnapshots(jobId);
       this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;
       const nextRecovery=this.recoveryPending.shift();
-      if(nextRecovery){this.runningJobId=nextRecovery;this.emitSnapshot();void this.recoverActiveJob(nextRecovery);}
-      else{this.emitSnapshot();void this.pump();}
+      if(nextRecovery){
+        const project=this.requireProject();await this.acquireRenderLease(project,nextRecovery);
+        this.runningJobId=nextRecovery;this.emitSnapshot();void this.recoverActiveJob(nextRecovery);
+      }else{
+        await this.releaseRenderLease(jobId);
+        this.emitSnapshot();void this.pump();
+      }
     }
   }
 
@@ -339,6 +357,17 @@ export class RenderQueueService extends EventEmitter {
     ])await rm(path,{recursive:true,force:true}).catch(error=>console.warn(`Could not remove completed job cache: ${path}`,error));
   }
 
+  private async acquireRenderLease(project:FilmProject,jobId:string):Promise<void>{
+    await this.renderLeases.write({version:1,projectId:project.id,projectRoot:project.rootPath,jobId,createdAt:new Date().toISOString()});
+  }
+
+  private async releaseRenderLease(jobId:string):Promise<void>{
+    while(true){
+      try{await this.renderLeases.clearIfJob(jobId);return;}
+      catch(error){console.warn('Active-render lease could not be cleared; GPU queue remains locked.',error);await sleep(2000);}
+    }
+  }
+
   private requireProject():FilmProject{const project=this.projects.getCurrent();if(!project)throw new Error('Open a project first.');return project;}
 
   private hasActiveJobForShot(shotId:string):boolean{return this.snapshot().jobs.some(j=>j.shotId===shotId&&ACTIVE.has(j.status));}
@@ -464,6 +493,7 @@ export class RenderQueueService extends EventEmitter {
   private async pump():Promise<void>{
     if(this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
     const jobId=this.pending.shift()!;if(this.cancelled.has(jobId)){this.cancelled.delete(jobId);return void this.pump();}
+    const project=this.requireProject();await this.acquireRenderLease(project,jobId);
     this.runningJobId=jobId;this.emitSnapshot();
     try{await this.run(jobId);}
     catch(error){
@@ -476,7 +506,9 @@ export class RenderQueueService extends EventEmitter {
       }
     }finally{
       await this.cleanupJobSnapshots(jobId);
-      this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
+      this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);
+      await this.releaseRenderLease(jobId);
+      this.runningJobId=undefined;this.emitSnapshot();void this.pump();
     }
   }
 
