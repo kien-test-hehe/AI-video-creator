@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings } from '../../shared/types';
@@ -44,6 +44,7 @@ export class AppSettingsService {
     try{
       const info=await lstat(path);
       if(info.isSymbolicLink())throw new Error(`${label} must not be a symbolic link.`);
+      if(!info.isFile())throw new Error(`${label} is not a regular file.`);
     }catch(error:any){if(error?.code!=='ENOENT')throw error;}
   }
 
@@ -85,14 +86,16 @@ export class AppSettingsService {
   }
 
   private async persistUnlocked(value:AppMachineSettings):Promise<void>{
-    const file=join(this.userDataDir,SETTINGS_FILE),backup=join(this.userDataDir,SETTINGS_BACKUP_FILE),temp=join(this.userDataDir,`.${SETTINGS_FILE}.${process.pid}.tmp`);
+    const file=join(this.userDataDir,SETTINGS_FILE),backup=join(this.userDataDir,SETTINGS_BACKUP_FILE),temp=join(this.userDataDir,`.${SETTINGS_FILE}.${randomUUID()}.tmp`);
+    await this.assertStateFileNotSymlink(file,'CineForge machine settings');
+    await this.assertStateFileNotSymlink(backup,'CineForge machine-settings backup');
     const payload=JSON.stringify(value,null,2);
     try{await copyFile(file,backup);}catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create machine-settings backup before saving: ${error instanceof Error?error.message:String(error)}`);}
-    await writeFile(temp,payload,'utf8');
+    await writeFile(temp,payload,{encoding:'utf8',flag:'wx',mode:0o600});
     try{await rename(temp,file);}
     catch(error:any){
       if(!['EEXIST','EPERM','EACCES'].includes(error?.code)){await rm(temp,{force:true}).catch(()=>undefined);throw error;}
-      try{await writeFile(file,payload,'utf8');}finally{await rm(temp,{force:true}).catch(()=>undefined);}
+      try{await this.assertStateFileNotSymlink(file,'CineForge machine settings');await writeFile(file,payload,'utf8');}finally{await rm(temp,{force:true}).catch(()=>undefined);}
     }
     this.current=structuredClone(value);
   }
