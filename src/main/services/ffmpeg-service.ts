@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared/types';
 import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
-import { killProcessTree } from './process-utils';
+import { isProcessAlive, killProcessTree } from './process-utils';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 
 interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean;durationSec?:number}
@@ -106,7 +106,7 @@ function run(command:string,args:string[],timeoutMs=60*60_000,signal?:AbortSigna
     const child=spawn(command,args,{windowsHide:true,stdio:['ignore','ignore','pipe'],detached:process.platform!=='win32'});
     let stderr='',settled=false,stopping=false,stopReason:Error|undefined;
     const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',onAbort);error?reject(error):resolve();};
-    const stop=async(reason:Error)=>{if(stopping||settled)return;stopping=true;stopReason=reason;if(!child.pid)return finish(reason);try{await killProcessTree(child.pid);finish(reason);}catch(error){stderr=appendTail(stderr,`\nProcess stop confirmation failed: ${error instanceof Error?error.message:String(error)}`);stopping=false;}};
+    const stop=async(reason:Error)=>{if(stopping||settled)return;stopping=true;stopReason=reason;if(!child.pid)return finish(reason);while(!settled&&isProcessAlive(child.pid)){try{await killProcessTree(child.pid);}catch(error){stderr=appendTail(stderr,`\nProcess stop confirmation failed; retrying: ${error instanceof Error?error.message:String(error)}`);await new Promise(resolve=>setTimeout(resolve,2000));}}if(!settled)finish(reason);};
     const onAbort=()=>{void stop(new Error('Timeline export cancelled.'));};
     const timer=setTimeout(()=>{void stop(new Error('FFmpeg timed out.'));},timeoutMs);timer.unref();
     child.stderr?.on('data',d=>{stderr=appendTail(stderr,d);});
@@ -119,7 +119,7 @@ function runCapture(command:string,args:string[],timeoutMs:number,signal?:AbortS
     const child=spawn(command,args,{windowsHide:true,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
     const stdoutChunks:Buffer[]=[];let stdoutBytes=0,stderr='',settled=false,stopping=false,stopReason:Error|undefined,captureExceeded=false;
     const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',onAbort);error?reject(error):resolve(Buffer.concat(stdoutChunks,stdoutBytes).toString('utf8'));};
-    const stop=async(reason:Error)=>{if(stopping||settled)return;stopping=true;stopReason=reason;if(!child.pid)return finish(reason);try{await killProcessTree(child.pid);finish(reason);}catch(error){stderr=appendTail(stderr,`\nProcess stop confirmation failed: ${error instanceof Error?error.message:String(error)}`);stopping=false;}};
+    const stop=async(reason:Error)=>{if(stopping||settled)return;stopping=true;stopReason=reason;if(!child.pid)return finish(reason);while(!settled&&isProcessAlive(child.pid)){try{await killProcessTree(child.pid);}catch(error){stderr=appendTail(stderr,`\nProcess stop confirmation failed; retrying: ${error instanceof Error?error.message:String(error)}`);await new Promise(resolve=>setTimeout(resolve,2000));}}if(!settled)finish(reason);};
     const onAbort=()=>{void stop(new Error('Timeline export cancelled.'));};
     const timer=setTimeout(()=>{void stop(new Error('FFprobe timed out.'));},timeoutMs);timer.unref();
     child.stdout?.on('data',(data:Buffer)=>{if(captureExceeded)return;stdoutBytes+=data.length;if(stdoutBytes>PROCESS_CAPTURE_BYTES){captureExceeded=true;void stop(new Error(`${command} output exceeded the ${PROCESS_CAPTURE_BYTES}-byte safety limit.`));return;}stdoutChunks.push(Buffer.from(data));});
