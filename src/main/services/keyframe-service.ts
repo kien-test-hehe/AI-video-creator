@@ -16,6 +16,7 @@ import { killProcessTree } from './process-utils';
 import { planShotReferences } from './reference-plan';
 import { keyframeProjectInputKey } from '../../shared/shot-signature';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
+import { KeyframeLeaseStore, recoverOrphanedKeyframeLease, type KeyframeLease } from './keyframe-lease';
 
 function keyframePrompt(shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
@@ -56,7 +57,7 @@ async function assertKeyframeSnapshotCurrent(
   }
 }
 
-export async function generateKeyframe(projects:ProjectService,machine:AppMachineSettings,request:KeyframeRequest,signal?:AbortSignal):Promise<FilmProject>{
+export async function generateKeyframe(projects:ProjectService,machine:AppMachineSettings,request:KeyframeRequest,leaseStore:KeyframeLeaseStore,signal?:AbortSignal):Promise<FilmProject>{
   throwIfAborted(signal);
   const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');if(project.rootPath!==request.projectRoot)throw new Error('Keyframe request does not match the open project.');
   const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');
@@ -98,11 +99,20 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   const baseline={projectId:project.id,rootPath:project.rootPath,shotId:shot.id,role:request.role,profileId:profile.id,inputSignature,workflowSha256,runtimeFingerprint:currentRuntime.environmentSha256,assetFingerprints};
   const assertCurrent=(checkRuntime=true)=>assertKeyframeSnapshotCurrent(projects,machine,baseline,checkRuntime);
   const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),workflowSnapshotRoot=join(project.rootPath,'cache','keyframe-workflows',randomUUID());
-  let generatedPath:string;
+  const leaseId=randomUUID(),runId=`keyframe-${leaseId}`;
+  let lease:KeyframeLease={version:1,id:leaseId,projectId:project.id,runtime,runId,phase:'prepared',comfyUrl:runtime==='comfyui'?machine.comfy.url:undefined,wanGpExecutionMode:runtime==='wangp'?machine.wangp.executionMode:undefined,dockerCommand:runtime==='wangp'&&machine.wangp.executionMode==='docker'?machine.wangp.docker.command:undefined,createdAt:new Date().toISOString()};
+  await leaseStore.write(lease);
+  let leaseActivated=false,generatedPath:string;
+  const markSubmitting=async()=>{if(leaseActivated)return;leaseActivated=true;lease={...lease,phase:'submitting'};await leaseStore.write(lease);};
   try{
     const snapshotProfile=await stageWorkflowProfileSnapshot(project.rootPath,profile,workflowSha256,workflowSnapshotRoot);
-    if(runtime==='wangp')generatedPath=await generateWithWanGp(project,machine,snapshotProfile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
-    else generatedPath=await generateWithComfy(project,machine,snapshotProfile,values,shot,request.role,assetFingerprints,assertCurrent,signal);
+    if(runtime==='wangp')generatedPath=await generateWithWanGp(project,machine,snapshotProfile,values,shot,request.role,assetFingerprints,assertCurrent,runId,markSubmitting,signal);
+    else generatedPath=await generateWithComfy(project,machine,snapshotProfile,values,shot,request.role,assetFingerprints,assertCurrent,leaseId,markSubmitting,signal);
+    await leaseStore.clear();
+  }catch(error){
+    if(leaseActivated)await recoverOrphanedKeyframeLease(leaseStore,machine);
+    else await leaseStore.clear().catch(()=>undefined);
+    throw error;
   }finally{await rm(workflowSnapshotRoot,{recursive:true,force:true}).catch(()=>undefined);}
   throwIfAborted(signal);
 
@@ -146,14 +156,14 @@ async function stageWanGpKeyframeInputs(project:FilmProject,values:WorkflowValue
   if(values.referenceImages)values.referenceImages=await Promise.all(values.referenceImages.map(stage));
 }
 
-async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assetFingerprints:Map<string,KeyframeAssetFingerprint>,assertCurrent:(checkRuntime?:boolean)=>Promise<void>,signal?:AbortSignal):Promise<string>{
-  const runId=`keyframe-${randomUUID()}`,cache=join(project.rootPath,'cache','keyframes',runId);await mkdir(cache,{recursive:true});
+async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assetFingerprints:Map<string,KeyframeAssetFingerprint>,assertCurrent:(checkRuntime?:boolean)=>Promise<void>,runId:string,markSubmitting:()=>Promise<void>,signal?:AbortSignal):Promise<string>{
+  const cache=join(project.rootPath,'cache','keyframes',runId);await mkdir(cache,{recursive:true});
   try{
     await stageWanGpKeyframeInputs(project,values,join(cache,'inputs'),assetFingerprints);
     let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     const settingsPath=join(cache,'settings.json'),outputDir=join(cache,'output');await mkdir(outputDir,{recursive:true});await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
     const run=async(dryRun:boolean)=>{
-      throwIfAborted(signal);await assertCurrent(true);
+      throwIfAborted(signal);await assertCurrent(true);await markSubmitting();
       const child=startWanGp(project,machine,{settingsPath,outputDir,dryRun,runId});
       const onAbort=()=>{if(machine.wangp.executionMode==='docker')void stopWanGpDocker(machine,runId);else if(child.pid)void killProcessTree(child.pid);};
       signal?.addEventListener('abort',onAbort,{once:true});
@@ -168,7 +178,7 @@ async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,
   }finally{await rm(cache,{recursive:true,force:true}).catch(()=>undefined);}
 }
 
-async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assetFingerprints:Map<string,KeyframeAssetFingerprint>,assertCurrent:(checkRuntime?:boolean)=>Promise<void>,signal?:AbortSignal):Promise<string>{
+async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assetFingerprints:Map<string,KeyframeAssetFingerprint>,assertCurrent:(checkRuntime?:boolean)=>Promise<void>,submissionId:string,markSubmitting:()=>Promise<void>,signal?:AbortSignal):Promise<string>{
   if(!machine.comfy.dedicatedInstance)throw new Error('ComfyUI keyframe generation requires a dedicated CineForge instance so cancellation cannot interrupt unrelated work.');
   throwIfAborted(signal);
   const client=new ComfyClient(machine.comfy.url,true);const ping=await client.ping();if(!ping.reachable)throw new Error(`ComfyUI unavailable: ${ping.error||machine.comfy.url}`);
@@ -196,8 +206,7 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     for(const key of scalarKeys){const value=values[key];if(typeof value==='string'&&value)(values as any)[key]=await stageImage(value);}
     if(values.referenceImages?.length)values.referenceImages=await Promise.all(values.referenceImages.map(stageImage));
     throwIfAborted(signal);
-    const workflow=await compileProfile(profile,values);await assertCurrent(true);
-    const submissionId=randomUUID();
+    const workflow=await compileProfile(profile,values);await assertCurrent(true);await markSubmitting();
     let queued:{prompt_id:string}|undefined;
     try{queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role,submissionId}});}
     catch(submitError){
