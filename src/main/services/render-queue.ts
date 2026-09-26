@@ -449,9 +449,10 @@ export class RenderQueueService extends EventEmitter {
 
   private async commitQueuedJobs(jobs:RenderJob[]):Promise<void>{
     if(!jobs.length)return;
-    await this.projects.mutate(project=>{project.renderJobs.unshift(...[...jobs].reverse());for(const job of jobs){const shot=project.shots.find(s=>s.id===job.shotId);if(shot)shot.status='queued';}});
     const root=this.requireProject().rootPath;
-    for(const job of jobs){this.liveJobs.set(job.id,structuredClone(job));await this.journal.write(root,job);this.pending.push(job.id);}
+    for(const job of jobs)await this.journal.write(root,job);
+    await this.projects.mutate(project=>{project.renderJobs.unshift(...[...jobs].reverse());for(const job of jobs){const shot=project.shots.find(s=>s.id===job.shotId);if(shot)shot.status='queued';}});
+    for(const job of jobs){this.liveJobs.set(job.id,structuredClone(job));this.pending.push(job.id);}
     this.emitSnapshot();void this.pump();
   }
 
