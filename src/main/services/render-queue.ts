@@ -196,6 +196,7 @@ export class RenderQueueService extends EventEmitter {
         await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
       }
     }finally{
+      await this.cleanupJobSnapshots(jobId);
       this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;
       const nextRecovery=this.recoveryPending.shift();
       if(nextRecovery){this.runningJobId=nextRecovery;this.emitSnapshot();void this.recoverActiveJob(nextRecovery);}
@@ -302,6 +303,15 @@ export class RenderQueueService extends EventEmitter {
       try{await this.updateJob(jobId,patch,true,true);return;}
       catch(error){console.warn('Backend identity persistence failed; retaining GPU ownership until durable state is restored.',error);await sleep(2000);}
     }
+  }
+
+  private async cleanupJobSnapshots(jobId:string):Promise<void>{
+    const project=this.projects.getCurrent();if(!project)return;
+    for(const path of [
+      join(project.rootPath,'cache','workflow-inputs',jobId),
+      join(project.rootPath,'cache','wangp-inputs',jobId),
+      join(project.rootPath,'cache','comfy-inputs',jobId)
+    ])await rm(path,{recursive:true,force:true}).catch(error=>console.warn(`Could not remove completed job cache: ${path}`,error));
   }
 
   private requireProject():FilmProject{const project=this.projects.getCurrent();if(!project)throw new Error('Open a project first.');return project;}
@@ -439,7 +449,7 @@ export class RenderQueueService extends EventEmitter {
         if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
       }
     }finally{
-      const project=this.projects.getCurrent();if(project)await rm(join(project.rootPath,'cache','workflow-inputs',jobId),{recursive:true,force:true}).catch(()=>undefined);
+      await this.cleanupJobSnapshots(jobId);
       this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;this.emitSnapshot();void this.pump();
     }
   }
