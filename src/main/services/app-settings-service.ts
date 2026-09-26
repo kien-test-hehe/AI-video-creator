@@ -90,7 +90,9 @@ export class AppSettingsService {
     await this.assertStateFileNotSymlink(file,'CineForge machine settings');
     await this.assertStateFileNotSymlink(backup,'CineForge machine-settings backup');
     const payload=JSON.stringify(value,null,2);
-    try{await copyFile(file,backup);}catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create machine-settings backup before saving: ${error instanceof Error?error.message:String(error)}`);}
+    const previousPayload=JSON.stringify(this.current,null,2);
+    try{await writeFile(backup,previousPayload,{encoding:'utf8',mode:0o600});}
+    catch(error){throw new Error(`Could not create trusted machine-settings backup before saving: ${error instanceof Error?error.message:String(error)}`);}
     await writeFile(temp,payload,{encoding:'utf8',flag:'wx',mode:0o600});
     try{await rename(temp,file);}
     catch(error:any){
