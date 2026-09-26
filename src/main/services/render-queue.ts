@@ -146,7 +146,7 @@ export class RenderQueueService extends EventEmitter {
   async reconcileAfterProjectOpen():Promise<void>{
     this.pending=[];this.recoveryPending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
     const project=this.projects.getCurrent();if(!project)return;
-    const journals=await this.journal.readAll(project.rootPath);const byId=new Map(journals.map(j=>[j.id,j]));
+    const journals=await this.journal.readAll(project.rootPath,project.renderJobs.filter(job=>!TERMINAL.has(job.status)).map(job=>job.id));const byId=new Map(journals.map(j=>[j.id,j]));
     const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id))).sort((a,b)=>a.job.createdAt.localeCompare(b.job.createdAt));
     let recoveryStarted=false;
     for(const selection of selections){
