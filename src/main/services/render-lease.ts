@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readJsonFileLimited } from './json-file';
@@ -20,10 +20,10 @@ export class RenderLeaseStore{
 
   async write(lease:RenderLease):Promise<void>{
     await mkdir(this.userDataDir,{recursive:true});
-    const file=join(this.userDataDir,LEASE_FILE),temp=`${file}.${process.pid}.${Date.now()}.tmp`;
+    const file=join(this.userDataDir,LEASE_FILE),temp=`${file}.${randomUUID()}.tmp`;
     await assertLeaseFileNotSymlink(file,'active render lease').catch((error:any)=>{if(error?.code!=='ENOENT')throw error;});
     const envelope:LeaseEnvelope={version:1,lease:structuredClone(lease),mac:sign(this.key,lease)};
-    await writeFile(temp,JSON.stringify(envelope,null,2),'utf8');
+    await writeFile(temp,JSON.stringify(envelope,null,2),{encoding:'utf8',flag:'wx',mode:0o600});
     try{await rename(temp,file);}
     catch(error:any){
       if(!['EEXIST','EPERM','EACCES'].includes(error?.code)){await rm(temp,{force:true}).catch(()=>undefined);throw error;}
