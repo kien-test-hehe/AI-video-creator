@@ -189,13 +189,13 @@ export function historyWasInterrupted(history:unknown):boolean{
 
 export interface CineforgeComfyPromptIdentity{promptId:string;state:'running'|'pending'|'history'}
 
-export function cineforgePromptIdentities(queue:unknown,history:unknown,jobId:string):CineforgeComfyPromptIdentity[]{
+export function cineforgePromptIdentitiesByMetadata(queue:unknown,history:unknown,metadata:Record<string,string>):CineforgeComfyPromptIdentity[]{
   const found=new Map<string,CineforgeComfyPromptIdentity>();
   const add=(record:unknown,state:CineforgeComfyPromptIdentity['state'],fallbackId?:string)=>{
     if(!Array.isArray(record))return;
     const promptId=typeof record[1]==='string'?record[1]:fallbackId;
-    const extra=record[3] as any;
-    if(!promptId||extra?.cineforge?.jobId!==jobId)return;
+    const extra=(record[3] as any)?.cineforge;
+    if(!promptId||!extra||!Object.entries(metadata).every(([key,value])=>extra[key]===value))return;
     const prior=found.get(promptId);
     if(!prior||prior.state==='history'||state==='running')found.set(promptId,{promptId,state});
   };
@@ -206,4 +206,8 @@ export function cineforgePromptIdentities(queue:unknown,history:unknown,jobId:st
     for(const[id,entry]of Object.entries(history as Record<string,any>))add(entry?.prompt,'history',id);
   }
   return[...found.values()];
+}
+
+export function cineforgePromptIdentities(queue:unknown,history:unknown,jobId:string):CineforgeComfyPromptIdentity[]{
+  return cineforgePromptIdentitiesByMetadata(queue,history,{jobId});
 }
