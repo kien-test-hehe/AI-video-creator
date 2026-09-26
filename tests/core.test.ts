@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
+import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
 import { tmpdir } from 'node:os';
@@ -257,6 +258,18 @@ describe('machine settings bootstrap import',()=>{
     }
   });
 });
+describe('render GPU ownership lease',()=>{
+  it('persists a signed active render lease and refuses tampered ownership',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-render-lease-')),store=new RenderLeaseStore(root,Buffer.alloc(32,5));
+    try{
+      await store.write({version:1,projectId:'project-1',projectRoot:'/projects/one',jobId:'job-1',createdAt:'2026-01-01T00:00:00.000Z'});
+      expect((await store.read())?.jobId).toBe('job-1');
+      const path=join(root,'active-render.v1.json'),envelope=JSON.parse(await readFile(path,'utf8'));envelope.lease.jobId='job-forged';await writeFile(path,JSON.stringify(envelope),'utf8');
+      await expect(store.read()).rejects.toThrow(/signature/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
 describe('keyframe crash recovery lease',()=>{
   it('signs the machine-local lease and clears prepared work without touching a backend',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-keyframe-lease-')),key=Buffer.alloc(32,7),store=new KeyframeLeaseStore(root,key);
@@ -366,6 +379,13 @@ describe('Comfy submission recovery identity',()=>{
     ]);
     const keyframeQueue={queue_running:[],queue_pending:[[5,'kf-prompt',{}, {cineforge:{purpose:'keyframe',submissionId:'sub-1'}}]]};
     expect(cineforgePromptIdentitiesByMetadata(keyframeQueue,{}, {purpose:'keyframe',submissionId:'sub-1'})).toEqual([{promptId:'kf-prompt',state:'pending'}]);
+  });
+});
+describe('Comfy dedicated active-work detection',()=>{
+  it('treats either running or pending queue entries as active GPU work',()=>{
+    expect(hasActiveComfyPrompts({queue_running:[[1,'p',{}]],queue_pending:[]})).toBe(true);
+    expect(hasActiveComfyPrompts({queue_running:[],queue_pending:[[2,'q',{}]]})).toBe(true);
+    expect(hasActiveComfyPrompts({queue_running:[],queue_pending:[]})).toBe(false);
   });
 });
 describe('Comfy queue identity',()=>{
