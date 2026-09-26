@@ -56,7 +56,7 @@ export async function findExpectedProcessPids(markers:string[]):Promise<number[]
     if(process.platform==='win32'){
       const escaped=wanted.map(marker=>marker.replace(/'/g,"''"));
       const predicate=escaped.map(marker=>`$c.Contains('${marker}')`).join(' -and ');
-      const script=`Get-CimInstance Win32_Process | ForEach-Object { if($_.CommandLine){ $c=$_.CommandLine.ToLowerInvariant(); if(${predicate}){ $_.ProcessId } } }`;
+      const script=`Get-CimInstance Win32_Process | ForEach-Object { if($_.ProcessId -ne $PID -and $_.CommandLine){ $c=$_.CommandLine.ToLowerInvariant(); if(${predicate}){ $_.ProcessId } } }`;
       const{stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{timeout:10_000,maxBuffer:2*1024*1024});
       return stdout.split(/\r?\n/).map(value=>Number(value.trim())).filter(pid=>Number.isInteger(pid)&&pid>0&&pid!==process.pid);
     }
