@@ -1,10 +1,11 @@
-import { readFile, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { assertLocalUrl } from './local-url';
+import { readFileBufferLimited } from './json-file';
 
 export interface ComfyFileRef {
   filename: string;
@@ -50,7 +51,7 @@ export class ComfyClient {
   }
 
   async uploadImage(path: string, overwrite = true): Promise<ComfyFileRef> {
-    const bytes = await readFile(path);
+    const bytes = await readFileBufferLimited(path,'ComfyUI image upload',128*1024*1024);
     const form = new FormData();
     form.append('image', new Blob([bytes]), basename(path));
     form.append('type', 'input');
