@@ -13,7 +13,8 @@ export class JobJournal {
   async write(projectRoot:string,job:RenderJob):Promise<void>{
     const previous=this.gates.get(job.id)??Promise.resolve();let release!:()=>void;const latch=new Promise<void>(resolve=>{release=resolve;});const chained=previous.then(()=>latch);this.gates.set(job.id,chained);await previous;
     try{
-      const dir=join(projectRoot,'.cineforge','jobs');await mkdir(dir,{recursive:true});
+      const candidate=join(projectRoot,'.cineforge','jobs'),safeDir=await assertSafeWritePath(projectRoot,candidate,'job journal directory');await mkdir(safeDir,{recursive:true});
+      const dir=await assertExistingPathInside(projectRoot,safeDir,'job journal directory');
       const file=await assertSafeWritePath(dir,join(dir,`${job.id}.json`),'job journal'),temp=`${file}.${process.pid}.${Date.now()}.tmp`;
       const envelope:JournalEnvelope={version:1,job:structuredClone(job),mac:sign(this.key,job)};
       await writeFile(temp,JSON.stringify(envelope,null,2),'utf8');
