@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings, RuntimeBackend, WanGpExecutionMode } from '../../shared/types';
-import { ComfyClient, cineforgePromptIdentitiesByMetadata, type CineforgeComfyPromptIdentity } from './comfy-client';
+import { ComfyClient, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, type CineforgeComfyPromptIdentity } from './comfy-client';
 import { waitForComfyPromptRelease } from './comfy-runner';
 import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './process-utils';
 import { isWanGpDockerRunning, stopWanGpDocker } from './wangp-runner';
@@ -62,6 +62,7 @@ export async function recoverOrphanedKeyframeLease(store:KeyframeLeaseStore,mach
         const[queue,history]=await Promise.all([client.queue(),client.historyAll()]);
         matches=cineforgePromptIdentitiesByMetadata(queue,history,{purpose:'keyframe',submissionId:lease.id});
         if(matches.length)break;
+        if(hasActiveComfyPrompts(queue))throw new Error('Dedicated ComfyUI still has active work but the stale keyframe submission identity is not visible. Keep CineForge closed until that work stops or the exact prompt identity becomes observable.');
         emptyScans+=1;if(emptyScans<3)await new Promise(resolve=>setTimeout(resolve,500));
       }catch(error){throw new Error(`Cannot verify the stale ComfyUI keyframe lease. Keep CineForge closed until the dedicated ComfyUI instance is reachable or its GPU work is stopped: ${error instanceof Error?error.message:String(error)}`);}
     }
