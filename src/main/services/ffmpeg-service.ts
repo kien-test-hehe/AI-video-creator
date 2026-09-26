@@ -44,12 +44,17 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
     const safeName=project.name.replace(/[^a-zA-Z0-9_-]+/g,'_')||'cineforge';
     const outputPath=await assertSafeWritePath(exportDir,join(exportDir,`${safeName}-${Date.now()}.${project.settings.outputContainer}`),'master export');
 
-    if(project.settings.outputContainer==='webm'){
-      await run(machine.ffmpeg.path,['-y','-f','concat','-safe','0','-i',listPath,'-c:v','libvpx-vp9','-crf','18','-b:v','0','-c:a','libopus','-b:a','192k',outputPath],60*60_000,signal);
-    }else{
-      await run(machine.ffmpeg.path,['-y','-f','concat','-safe','0','-i',listPath,'-c','copy','-movflags','+faststart',outputPath],60*60_000,signal);
+    try{
+      if(project.settings.outputContainer==='webm'){
+        await run(machine.ffmpeg.path,['-y','-f','concat','-safe','0','-i',listPath,'-c:v','libvpx-vp9','-crf','18','-b:v','0','-c:a','libopus','-b:a','192k',outputPath],60*60_000,signal);
+      }else{
+        await run(machine.ffmpeg.path,['-y','-f','concat','-safe','0','-i',listPath,'-c','copy','-movflags','+faststart',outputPath],60*60_000,signal);
+      }
+      return outputPath;
+    }catch(error){
+      await rm(outputPath,{force:true}).catch(cleanupError=>console.warn('Could not remove partial timeline export:',outputPath,cleanupError));
+      throw error;
     }
-    return outputPath;
   }finally{
     await rm(cacheDir,{recursive:true,force:true}).catch(()=>undefined);
   }
