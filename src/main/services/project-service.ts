@@ -59,7 +59,11 @@ export class ProjectService {
   async openWithDialog(): Promise<FilmProject | null> {
     const result = await dialog.showOpenDialog({ title: 'Open CineForge project folder', properties: ['openDirectory'] });
     if (result.canceled || !result.filePaths[0]) return null;
-    const openedRoot = resolve(result.filePaths[0]);
+    return this.openAt(result.filePaths[0]);
+  }
+
+  async openAt(rootPath:string):Promise<FilmProject>{
+    const openedRoot = resolve(rootPath);
     const file = join(openedRoot, PROJECT_FILE);
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
     let raw: unknown;
