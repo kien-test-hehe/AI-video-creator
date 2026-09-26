@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { AppMachineSettings } from '../../shared/types';
 import { DEFAULT_APP_MACHINE_SETTINGS } from './machine-defaults';
 import { assertLocalUrl } from './local-url';
+import { readJsonFileLimited } from './json-file';
 
 const SETTINGS_FILE='machine-settings.v1.json',SETTINGS_BACKUP_FILE='machine-settings.v1.backup.json',JOURNAL_KEY_FILE='journal-hmac.key',BOOTSTRAP_SETTINGS_FILE='bootstrap-machine-settings.v1.json';
 
@@ -18,10 +19,10 @@ export class AppSettingsService {
     await mkdir(this.userDataDir,{recursive:true});
     this.journalKey=await this.loadOrCreateJournalKey();
     const file=join(this.userDataDir,SETTINGS_FILE),backup=join(this.userDataDir,SETTINGS_BACKUP_FILE);
-    try{const raw=JSON.parse(await readFile(file,'utf8'));this.current=sanitizeMachineSettings(raw);}
+    try{const raw=await readJsonFileLimited(file,'CineForge machine settings',4*1024*1024);this.current=sanitizeMachineSettings(raw);}
     catch(primaryError:any){
       try{
-        const raw=JSON.parse(await readFile(backup,'utf8'));this.current=sanitizeMachineSettings(raw);await copyFile(backup,file);
+        const raw=await readJsonFileLimited(backup,'CineForge machine-settings backup',4*1024*1024);this.current=sanitizeMachineSettings(raw);await copyFile(backup,file);
       }catch{
         const bootstrapped=await this.loadBootstrapSettings();
         this.current=bootstrapped??structuredClone(DEFAULT_APP_MACHINE_SETTINGS);
@@ -41,7 +42,7 @@ export class AppSettingsService {
       process.platform==='win32'&&process.env.LOCALAPPDATA?join(process.env.LOCALAPPDATA,'CineForge',BOOTSTRAP_SETTINGS_FILE):undefined
     ].filter((value):value is string=>Boolean(value));
     for(const path of candidates){
-      try{return sanitizeMachineSettings(JSON.parse(await readFile(path,'utf8')));}
+      try{return sanitizeMachineSettings(await readJsonFileLimited(path,'CineForge bootstrap machine settings',4*1024*1024));}
       catch(error:any){if(error?.code!=='ENOENT')console.warn(`Ignoring invalid CineForge bootstrap settings: ${path}`,error);}
     }
     return undefined;
