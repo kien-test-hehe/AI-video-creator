@@ -10,7 +10,7 @@ import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
-import { historyWasInterrupted, promptQueueState } from '../src/main/services/comfy-client';
+import { cineforgePromptIdentities, historyWasInterrupted, promptQueueState } from '../src/main/services/comfy-client';
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
@@ -314,6 +314,16 @@ describe('Comfy output identity',()=>{
     expect(collectComfyHistoryOutputRefs(completedWithoutOutputs)).toEqual([]);
     const withOutput={outputs:{'7':{images:[{filename:'result.png',subfolder:'cineforge',type:'output'}]}},prompt:{filename:'uploaded-input.png'}};
     expect(collectComfyHistoryOutputRefs(withOutput)).toEqual([{filename:'result.png',subfolder:'cineforge',type:'output'}]);
+  });
+});
+describe('Comfy submission recovery identity',()=>{
+  it('finds only exact CineForge job metadata across queue and history',()=>{
+    const queue={queue_running:[[1,'run-prompt',{}, {cineforge:{jobId:'job-a'}}]],queue_pending:[[2,'other-prompt',{}, {cineforge:{jobId:'job-b',note:'job-a'}}]]};
+    const history={'done-prompt':{prompt:[3,'done-prompt',{}, {cineforge:{jobId:'job-a'}}]},noise:{prompt:[4,'noise',{}, {cineforge:{jobId:'job-c',note:'job-a'}}]}};
+    expect(cineforgePromptIdentities(queue,history,'job-a')).toEqual([
+      {promptId:'run-prompt',state:'running'},
+      {promptId:'done-prompt',state:'history'}
+    ]);
   });
 });
 describe('Comfy queue identity',()=>{
