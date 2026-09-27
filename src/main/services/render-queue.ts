@@ -36,6 +36,7 @@ export class RenderQueueService extends EventEmitter {
   private pending:string[]=[];
   private recoveryPending:string[]=[];
   private runningJobId?:string;
+  private pumping=false;
   private recoveryBlockedError?:string;
   private cancelled=new Set<string>();
   private wanGpProcesses=new Map<string,ChildProcess>();
@@ -193,7 +194,7 @@ export class RenderQueueService extends EventEmitter {
       if(['submitted','running','recovering','stalled','downloading'].includes(job.status)){
         if(!recoveryStarted){
           recoveryStarted=true;this.runningJobId=job.id;
-          await this.acquireRenderLease(project,job.id);
+          await this.acquireRecoveryRenderLease(project,job.id);
           void this.recoverActiveJob(job.id);continue;
         }
         await this.updateJob(job.id,{status:'recovering',message:'Waiting for serialized backend recovery; no new GPU work will start before this backend identity is resolved.'},true,true);
@@ -251,7 +252,7 @@ export class RenderQueueService extends EventEmitter {
       this.cancelled.delete(jobId);this.runningJobId=undefined;
       const nextRecovery=this.recoveryPending.shift();
       if(nextRecovery){
-        const project=this.requireProject();await this.acquireRenderLease(project,nextRecovery);
+        const project=this.requireProject();await this.acquireRecoveryRenderLease(project,nextRecovery);
         this.runningJobId=nextRecovery;this.emitSnapshot();void this.recoverActiveJob(nextRecovery);
       }else{
         await this.releaseRenderLease(jobId);
@@ -399,6 +400,16 @@ export class RenderQueueService extends EventEmitter {
     await this.renderLeases.write({version:1,projectId:project.id,projectRoot:project.rootPath,jobId,createdAt:new Date().toISOString()});
   }
 
+  private async acquireRecoveryRenderLease(project:FilmProject,jobId:string):Promise<void>{
+    while(true){
+      try{await this.acquireRenderLease(project,jobId);return;}
+      catch(error){
+        await this.updateJob(jobId,{status:'stalled',message:`Cannot persist machine GPU ownership for recovered job; GPU remains locked · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);
+        this.emitSnapshot();await sleep(2000);
+      }
+    }
+  }
+
   private async releaseRenderLease(jobId:string):Promise<void>{
     while(true){
       try{await this.renderLeases.clearIfJob(jobId);return;}
@@ -533,24 +544,46 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async pump():Promise<void>{
-    if(this.recoveryBlockedError||this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
-    const jobId=this.pending.shift()!;if(this.cancelled.has(jobId)){this.cancelled.delete(jobId);return void this.pump();}
-    const project=this.requireProject();await this.acquireRenderLease(project,jobId);
-    this.runningJobId=jobId;this.emitSnapshot();
-    try{await this.run(jobId);}
-    catch(error){
-      if(!this.cancelled.has(jobId)){
-        const message=error instanceof Error?error.message:String(error);
-        await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed',error:message},true,true);
-        const current=this.projects.getCurrent(),job=current?.renderJobs.find(j=>j.id===jobId);
-        const externalSpecCurrent=job&&current?await this.immutableFilesStillCurrent(current,job):false;
-        if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
+    if(this.pumping)return;
+    this.pumping=true;
+    try{
+      if(this.recoveryBlockedError||this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
+      const jobId=this.pending[0];
+      if(this.cancelled.has(jobId)){
+        this.pending=this.pending.filter(id=>id!==jobId);this.cancelled.delete(jobId);return;
+      }
+      const project=this.requireProject();
+      try{await this.acquireRenderLease(project,jobId);}
+      catch(error){
+        this.pending=this.pending.filter(id=>id!==jobId);
+        const message=`Render did not start because CineForge could not persist the machine GPU ownership lease: ${error instanceof Error?error.message:String(error)}`;
+        await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed before GPU start',error:message},true,true).catch(updateError=>console.warn('Could not persist render-lease acquisition failure:',updateError));
+        await this.projects.mutate(p=>{const job=p.renderJobs.find(item=>item.id===jobId),shot=job?p.shots.find(item=>item.id===job.shotId):undefined;if(shot)shot.status=shot.latestRenderId?'rendered':'ready';}).catch(updateError=>console.warn('Could not restore shot state after render-lease acquisition failure:',updateError));
+        this.emitSnapshot();return;
+      }
+      if(this.cancelled.has(jobId)||!this.pending.includes(jobId)){
+        await this.releaseRenderLease(jobId);this.pending=this.pending.filter(id=>id!==jobId);this.cancelled.delete(jobId);return;
+      }
+      this.pending=this.pending.filter(id=>id!==jobId);
+      this.runningJobId=jobId;this.emitSnapshot();
+      try{await this.run(jobId);}
+      catch(error){
+        if(!this.cancelled.has(jobId)){
+          const message=error instanceof Error?error.message:String(error);
+          await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed',error:message},true,true);
+          const current=this.projects.getCurrent(),job=current?.renderJobs.find(j=>j.id===jobId);
+          const externalSpecCurrent=job&&current?await this.immutableFilesStillCurrent(current,job):false;
+          if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
+        }
+      }finally{
+        await this.cleanupJobSnapshots(jobId);
+        this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);
+        await this.releaseRenderLease(jobId);
+        this.runningJobId=undefined;this.emitSnapshot();
       }
     }finally{
-      await this.cleanupJobSnapshots(jobId);
-      this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);
-      await this.releaseRenderLease(jobId);
-      this.runningJobId=undefined;this.emitSnapshot();void this.pump();
+      this.pumping=false;
+      if(!this.recoveryBlockedError&&!this.runningJobId&&!this.recoveryPending.length&&this.pending.length)void this.pump();
     }
   }
 
