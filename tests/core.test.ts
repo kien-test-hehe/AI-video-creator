@@ -24,6 +24,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
+import { ProjectService } from '../src/main/services/project-service';
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
@@ -81,6 +82,26 @@ describe('bounded workflow JSON reads',()=>{
 describe('FFmpeg concat path formatting',()=>{
   it('normalizes Windows separators before writing concat-demuxer file entries',()=>{
     expect(ffmpegConcatFileLine(String.raw`C:\Projects\My Film\clip.mp4`)).toBe("file 'C:/Projects/My Film/clip.mp4'");
+  });
+});
+describe('renderer save runtime authority',()=>{
+  it('does not let a newly renderer-created shot forge render runtime state',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-renderer-save-authority-'));
+    try{
+      const service=new ProjectService(),created=await service.createAt(root,'Film');
+      const sceneId='scene-new',shotId='shot-new';
+      const rendererProject=structuredClone(created);
+      rendererProject.scenes.push({id:sceneId,index:1,heading:'INT. ROOM',body:'',shotIds:[shotId]});
+      rendererProject.shots.push({
+        id:shotId,sceneId,index:1,title:'New shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+        characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendering',
+        generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:20,cfg:1,seed:1,negativePrompt:'',includeAudio:false},
+        latestRenderId:'forged-output'
+      });
+      const saved=await service.saveFromRenderer(rendererProject),shot=saved.shots.find(item=>item.id===shotId)!;
+      expect(shot.status).toBe('draft');
+      expect(shot.latestRenderId).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
 describe('project schema canonicalization',()=>{
