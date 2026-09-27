@@ -3,7 +3,7 @@
 CineForge does not automate CapCut with screen coordinates. Instead, **Finishing → Prepare CapCut handoff** creates:
 
 ```text
-handoff/capcut/<timestamp>/
+handoff/capcut/<timestamp>-<uuid>/
   manifest.json
   CODEX_CAPCUT_TASK.md
 ```
