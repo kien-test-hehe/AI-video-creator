@@ -141,7 +141,8 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     try{converted=uiWorkflowToApi(rawWorkflow,await client.objectInfo());}
     catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
     if(converted.requiresApiExport){await rm(target,{force:true}).catch(()=>undefined);return{path:'',format:'ui' as const,suggestedBindings:[],warnings:[...converted.warnings,'CineForge refused to create a partial API graph. Load it in ComfyUI, Save (API Format), and import that JSON.']};}
-    const apiPath=await assertSafeWritePath(join(project.rootPath,'workflows'),target.replace(/\.json$/i,'.api.json'),'converted workflow');
+    const convertedName=`${randomUUID()}-converted-${basename(source).replace(/[^a-zA-Z0-9._-]+/g,'_')}.api.json`;
+    const apiPath=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',convertedName),'converted workflow');
     try{
       await writeFile(apiPath,JSON.stringify(converted.workflow,null,2),'utf8');
       await rm(target,{force:true});
