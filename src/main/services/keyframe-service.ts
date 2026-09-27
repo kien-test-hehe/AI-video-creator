@@ -163,10 +163,11 @@ async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,
     let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     const settingsPath=join(cache,'settings.json'),outputDir=join(cache,'output');await mkdir(outputDir,{recursive:true});await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
     const run=async(dryRun:boolean)=>{
-      throwIfAborted(signal);await assertCurrent(true);await markSubmitting();
+      throwIfAborted(signal);await assertCurrent(true);await markSubmitting();throwIfAborted(signal);
       const child=startWanGp(project,machine,{settingsPath,outputDir,dryRun,runId});
       const onAbort=()=>{if(machine.wangp.executionMode==='docker')void stopWanGpDocker(machine,runId);else if(child.pid)void killProcessTree(child.pid);};
       signal?.addEventListener('abort',onAbort,{once:true});
+      if(signal?.aborted)onAbort();
       try{await waitWanGp(child);throwIfAborted(signal);}
       catch(error){if(signal?.aborted)throw new Error('Keyframe generation cancelled.');throw error;}
       finally{signal?.removeEventListener('abort',onAbort);}
@@ -206,7 +207,7 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     for(const key of scalarKeys){const value=values[key];if(typeof value==='string'&&value)(values as any)[key]=await stageImage(value);}
     if(values.referenceImages?.length)values.referenceImages=await Promise.all(values.referenceImages.map(stageImage));
     throwIfAborted(signal);
-    const workflow=await compileProfile(profile,values);await assertCurrent(true);await markSubmitting();
+    const workflow=await compileProfile(profile,values);await assertCurrent(true);await markSubmitting();throwIfAborted(signal);
     let queued:{prompt_id:string}|undefined;
     try{queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role,submissionId}});}
     catch(submitError){
@@ -235,6 +236,11 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     let cancelPromise:Promise<void>|undefined;
     const requestCancel=()=>cancelPromise??=client.cancelPrompt(queued.prompt_id);
     const onAbort=()=>{void requestCancel().catch(()=>undefined);};signal?.addEventListener('abort',onAbort,{once:true});
+    if(signal?.aborted){
+      try{await requestCancel();}
+      catch{await waitForComfyPromptRelease(client,queued.prompt_id);}
+      throw new Error('Keyframe generation cancelled after ComfyUI released the submitted prompt.');
+    }
     let history:any;
     try{history=await waitForComfyCompletion(client,queued.prompt_id,{timeoutMs:60*60_000,cancelled:()=>Boolean(signal?.aborted)});throwIfAborted(signal);}
     catch(error){
