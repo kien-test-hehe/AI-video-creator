@@ -34,6 +34,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
+import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { loadPortableProject } from '../src/main/services/project-schema';
 
 const api: ApiWorkflow = {
@@ -41,6 +42,14 @@ const api: ApiWorkflow = {
   '2': { class_type: 'KSampler', inputs: { seed: 1, steps: 20, cfg: 1 } }
 };
 
+describe('WanGP entrypoint containment',()=>{
+  it('rejects native/docker entrypoints that escape the configured WanGP root',()=>{
+    const machine={wangp:{rootPath:'/opt/Wan2GP',entrypoint:'../outside.py'}} as any as AppMachineSettings;
+    expect(()=>wangpEntrypoint(machine)).toThrow(/outside|entrypoint/i);
+    machine.wangp.entrypoint='wgp.py';
+    expect(wangpEntrypoint(machine).replace(/\\/g,'/')).toMatch(/\/opt\/Wan2GP\/wgp\.py$/);
+  });
+});
 describe('WanGP source-tree runtime fingerprint',()=>{
   it('changes for mounted source edits but ignores model-weight payloads',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-wangp-source-'));
