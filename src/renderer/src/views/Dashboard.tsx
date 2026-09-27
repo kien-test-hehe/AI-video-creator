@@ -9,8 +9,11 @@ export function Dashboard(){
   const [checking,setChecking]=useState(false);
 
   const runProbe=async()=>{
-    try{setProbe(await window.cineforge.system.probe());}
-    catch(e){setError(e instanceof Error?e.message:String(e));}
+    const requestedProjectId=useAppStore.getState().project?.id;
+    try{
+      const next=await window.cineforge.system.probe();
+      if(useAppStore.getState().project?.id===requestedProjectId)setProbe(next);
+    }catch(e){if(useAppStore.getState().project?.id===requestedProjectId)setError(e instanceof Error?e.message:String(e));}
   };
   const preflight=async()=>{
     if(!project)return;
@@ -48,7 +51,7 @@ export function Dashboard(){
     }catch(e){setError(e instanceof Error?e.message:String(e));}
   };
   const projectId=project?.id;
-  useEffect(()=>{void window.cineforge.system.probe().then(setProbe).catch(e=>setError(e instanceof Error?e.message:String(e)));},[projectId,setError,setProbe]);
+  useEffect(()=>{let disposed=false;const requestedProjectId=projectId;void window.cineforge.system.probe().then(next=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setProbe(next);}).catch(e=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setError(e instanceof Error?e.message:String(e));});return()=>{disposed=true;};},[projectId,setError,setProbe]);
 
   return <Page title="System & production overview" subtitle="Inspect this workstation before opening a project; project-specific render checks appear once a film is open." actions={<div className="row"><button className="ghost" onClick={runProbe}>Probe system</button><button className="ghost" disabled={!project||checking||project.shots.length===0} onClick={preflight}>{checking?'Checking…':'Run preflight'}</button><button className="primary" disabled={!project||checking||project.shots.length===0} onClick={queueUnrendered}>Render unrendered</button></div>}>
     <div className="grid two">
