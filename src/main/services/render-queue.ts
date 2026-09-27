@@ -28,6 +28,7 @@ import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExec
 import { selectRecoveryJob } from '../../shared/recovery-policy';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { RenderLeaseStore } from './render-lease';
+import { AdmissionGate } from './admission-gate';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -43,8 +44,7 @@ export class RenderQueueService extends EventEmitter {
   private comfyCancelPromises=new Map<string,Promise<void>>();
   private liveJobs=new Map<string,RenderJob>();
   private lastJournalWrite=new Map<string,number>();
-  private admissionGate:Promise<void>=Promise.resolve();
-  private admissionCount=0;
+  private admission=new AdmissionGate();
   private journal:JobJournal;
 
   constructor(private projects:ProjectService,private settings:AppSettingsService,private renderLeases:RenderLeaseStore){
@@ -60,9 +60,9 @@ export class RenderQueueService extends EventEmitter {
     return{runningJobId:this.runningJobId,blockedReason:this.recoveryBlockedError,jobs};
   }
 
-  isBusy():boolean{return Boolean(this.admissionCount||this.recoveryBlockedError||this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
+  isBusy():boolean{return Boolean(this.admission.busy||this.recoveryBlockedError||this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
 
-  async enqueue(request:RenderRequest):Promise<QueueSnapshot>{return this.withAdmission(()=>this.enqueueInternal(request));}
+  async enqueue(request:RenderRequest):Promise<QueueSnapshot>{return this.admission.run(()=>this.enqueueInternal(request));}
 
   private async enqueueInternal(request:RenderRequest):Promise<QueueSnapshot>{
     this.assertRecoveryOperational();const project=this.requireProject();
@@ -76,7 +76,7 @@ export class RenderQueueService extends EventEmitter {
     await this.commitQueuedJobs([job]);return this.snapshot();
   }
 
-  async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{return this.withAdmission(()=>this.enqueueBatchInternal(request));}
+  async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{return this.admission.run(()=>this.enqueueBatchInternal(request));}
 
   private async enqueueBatchInternal(request:RenderBatchRequest):Promise<QueueSnapshot>{
     this.assertRecoveryOperational();const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
@@ -104,7 +104,7 @@ export class RenderQueueService extends EventEmitter {
     if(jobs.length)await this.commitQueuedJobs(jobs);return this.snapshot();
   }
 
-  async retry(jobId:string):Promise<QueueSnapshot>{return this.withAdmission(()=>this.retryInternal(jobId));}
+  async retry(jobId:string):Promise<QueueSnapshot>{return this.admission.run(()=>this.retryInternal(jobId));}
 
   private async retryInternal(jobId:string):Promise<QueueSnapshot>{
     this.assertRecoveryOperational();const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
@@ -550,15 +550,6 @@ export class RenderQueueService extends EventEmitter {
       out.push({assetId,projectPath:asset.projectPath,sha256:await sha256File(path)});
     }
     return out;
-  }
-
-  private async withAdmission<T>(operation:()=>Promise<T>):Promise<T>{
-    this.admissionCount+=1;
-    const previous=this.admissionGate;let release!:()=>void;
-    this.admissionGate=new Promise<void>(resolve=>{release=resolve;});
-    await previous;
-    try{return await operation();}
-    finally{this.admissionCount=Math.max(0,this.admissionCount-1);release();}
   }
 
   private async commitQueuedJobs(jobs:RenderJob[]):Promise<void>{
