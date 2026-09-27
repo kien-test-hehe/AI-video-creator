@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared/types';
-import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
+import { assertExistingPathInside, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { isProcessAlive, killProcessTree } from './process-utils';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 
@@ -27,9 +27,10 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
   const first=await probeVideo(machine.ffmpeg.ffprobePath,sources[0].path,signal);
   const master={...first,fps:Math.max(1,project.settings.defaultFps||first.fps)};
   const h264Encoder=await chooseH264Encoder(machine,signal);
-  const cacheDir=join(project.rootPath,'cache',`export-${randomUUID()}`);
-  const exportDir=join(project.rootPath,'exports');
-  await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(exportDir,{recursive:true})]);
+  const [cacheDir,exportDir]=await Promise.all([
+    ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache',`export-${randomUUID()}`),'timeline export cache directory'),
+    ensureSafeDirectory(project.rootPath,join(project.rootPath,'exports'),'timeline export directory')
+  ]);
   try{
     const normalized:string[]=[];
     for(let i=0;i<sources.length;i++){
