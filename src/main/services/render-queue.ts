@@ -25,7 +25,7 @@ import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './proc
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
 import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
-import { selectRecoveryJob } from '../../shared/recovery-policy';
+import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../../shared/recovery-policy';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { RenderLeaseStore } from './render-lease';
 import { AdmissionGate } from './admission-gate';
@@ -156,7 +156,7 @@ export class RenderQueueService extends EventEmitter {
       }
     }else this.cancelled.add(jobId);
     await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled'},true,true);
-    await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shot.latestRenderId?'rendered':currentSpec&&job.spec?.shot.status==='draft'?'draft':'ready';});
+    await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'cancelled');});
     if(!wasRunning){this.cancelled.delete(jobId);void this.pump();}
     return this.snapshot();
   }
@@ -274,10 +274,8 @@ export class RenderQueueService extends EventEmitter {
   private async restoreShotAfterOrphan(job:RenderJob):Promise<void>{
     await this.projects.mutate(project=>{
       const shot=project.shots.find(item=>item.id===job.shotId);if(!shot)return;
-      if(shot.latestRenderId){shot.status='rendered';return;}
       const currentSpec=this.isCurrentJobSpec(project,job,shot);
-      if(currentSpec)shot.status=job.spec?.shot.status==='draft'?'draft':'ready';
-      else if(['queued','rendering'].includes(shot.status))shot.status='ready';
+      shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'orphaned');
     });
   }
 
@@ -580,7 +578,7 @@ export class RenderQueueService extends EventEmitter {
         if(cancelledWhileAcquiring){this.cancelled.delete(jobId);this.emitSnapshot();return;}
         const message=`Render did not start because CineForge could not persist the machine GPU ownership lease: ${error instanceof Error?error.message:String(error)}`;
         await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed before GPU start',error:message},true,true).catch(updateError=>console.warn('Could not persist render-lease acquisition failure:',updateError));
-        await this.projects.mutate(p=>{const job=p.renderJobs.find(item=>item.id===jobId),shot=job?p.shots.find(item=>item.id===job.shotId):undefined;if(shot)shot.status=shot.latestRenderId?'rendered':'ready';}).catch(updateError=>console.warn('Could not restore shot state after render-lease acquisition failure:',updateError));
+        await this.projects.mutate(p=>{const job=p.renderJobs.find(item=>item.id===jobId),shot=job?p.shots.find(item=>item.id===job.shotId):undefined;if(shot&&job){const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'orphaned');}}).catch(updateError=>console.warn('Could not restore shot state after render-lease acquisition failure:',updateError));
         this.emitSnapshot();return;
       }
       if(this.cancelled.has(jobId)||!this.pending.includes(jobId)){
@@ -595,7 +593,7 @@ export class RenderQueueService extends EventEmitter {
           await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed',error:message},true,true);
           const current=this.projects.getCurrent(),job=current?.renderJobs.find(j=>j.id===jobId);
           const externalSpecCurrent=job&&current?await this.immutableFilesStillCurrent(current,job):false;
-          if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
+          if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;const currentSpec=Boolean(externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot));shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'failed');});
         }
       }finally{
         await this.cleanupJobSnapshots(jobId);
