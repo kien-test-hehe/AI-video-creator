@@ -52,19 +52,21 @@ export function isStudioWorkflowReady(profile:WorkflowProfile|undefined,shot:Sho
 
 export function reorderTimeline(project:FilmProject,sourceId:string,targetId:string):boolean{
   if(sourceId===targetId)return false;
-  const ordered=[...project.timeline].sort((a,b)=>a.order-b.order);
+  const source=project.timeline.find(clip=>clip.id===sourceId),target=project.timeline.find(clip=>clip.id===targetId);
+  if(!source||!target||source.track!==target.track)return false;
+  const ordered=project.timeline.filter(clip=>clip.track===source.track).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id));
   const from=ordered.findIndex(clip=>clip.id===sourceId),to=ordered.findIndex(clip=>clip.id===targetId);
   if(from<0||to<0)return false;
-  const[moved]=ordered.splice(from,1);ordered.splice(to,0,moved);ordered.forEach((clip,index)=>clip.order=index);project.timeline=ordered;
+  const[moved]=ordered.splice(from,1);ordered.splice(to,0,moved);ordered.forEach((clip,index)=>clip.order=index);
   return true;
 }
 
 export function insertTimelineOutput(project:FilmProject,outputId:string,beforeClipId?:string):boolean{
   const output=project.renderOutputs.find(item=>item.id===outputId&&item.mediaType==='video');if(!output)return false;
   if(!project.shots.some(shot=>shot.id===output.shotId))return false;
-  const ordered=[...project.timeline].sort((a,b)=>a.order-b.order);
-  const target=beforeClipId?ordered.findIndex(clip=>clip.id===beforeClipId):ordered.length;
-  const index=target<0?ordered.length:target;
-  ordered.splice(index,0,{id:crypto.randomUUID(),shotId:output.shotId,renderOutputId:output.id,track:0,order:index,trimInSec:0,volume:1});
-  ordered.forEach((clip,order)=>clip.order=order);project.timeline=ordered;return true;
+  const targetClip=beforeClipId?project.timeline.find(clip=>clip.id===beforeClipId):undefined,track=targetClip?.track??0;
+  const ordered=project.timeline.filter(clip=>clip.track===track).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id));
+  const target=targetClip?ordered.findIndex(clip=>clip.id===targetClip.id):ordered.length,index=target<0?ordered.length:target;
+  const inserted={id:crypto.randomUUID(),shotId:output.shotId,renderOutputId:output.id,track,order:index,trimInSec:0,volume:1};
+  ordered.splice(index,0,inserted);ordered.forEach((clip,order)=>clip.order=order);project.timeline.push(inserted);return true;
 }
