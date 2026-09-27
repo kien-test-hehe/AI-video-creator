@@ -122,7 +122,8 @@ export class ProjectService {
           continue;
         }
         if(shotProjectRenderInputKey(incoming,shot)!==shotProjectRenderInputKey(this.current,currentShot)){
-          shot.status=shot.latestRenderId?'rendered':currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
+          shot.latestRenderId=undefined;
+          shot.status=currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
         }else{
           shot.status=currentShot.status;
           shot.latestRenderId=currentShot.latestRenderId;
