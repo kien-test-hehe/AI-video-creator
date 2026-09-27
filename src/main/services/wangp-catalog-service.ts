@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { app } from 'electron';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
