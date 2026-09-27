@@ -5,6 +5,7 @@ import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from '
 import { IPC } from '../shared/ipc';
 import type { AppMachineSettings, AssetKind, FilmProject, KeyframeRequest, RenderBatchRequest, RenderRequest } from '../shared/types';
 import { removedActiveRenderShotIds } from '../shared/project-guards';
+import { capcutHandoffInputKey, timelineExportInputKey } from '../shared/timeline-policy';
 import { AppSettingsService } from './services/app-settings-service';
 import { ProjectService } from './services/project-service';
 import { parseScreenplay } from './services/script-parser';
@@ -230,9 +231,17 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     assertProjectStable();
     if(activeExportAbortController)throw new Error('A timeline export is already running.');
     if(queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy)throw new Error('Finish or cancel active render, keyframe, Director, or workflow maintenance work before starting the GPU-assisted timeline export.');
+    const snapshot=requireProject(projects),signature=timelineExportInputKey(snapshot);
     activeExportAbortController=new AbortController();
-    const task=exportTimeline(requireProject(projects),settings.get(),activeExportAbortController.signal);activeExportPromise=task;
-    try{return{outputPath:await task};}
+    const task=exportTimeline(snapshot,settings.get(),activeExportAbortController.signal);activeExportPromise=task;
+    try{
+      const outputPath=await task,current=projects.getCurrent();
+      if(!current||timelineExportInputKey(current)!==signature){
+        await rm(outputPath,{force:true}).catch(cleanupError=>console.warn('Could not remove stale timeline export:',outputPath,cleanupError));
+        throw new Error('Timeline or export settings changed while export was running. The stale master was discarded; export again from the current canonical cut.');
+      }
+      return{outputPath};
+    }
     finally{activeExportAbortController=null;activeExportPromise=null;}
   });
   handle(IPC.timelineCancelExport,async()=>{activeExportAbortController?.abort();});
@@ -240,8 +249,16 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     assertProjectStable();
     if(activeHandoffPromise)throw new Error('A CapCut handoff is already being prepared.');
     if(activeExportAbortController)throw new Error('Wait for the active timeline export to finish before preparing a CapCut handoff.');
-    const task=prepareCapCutHandoff(requireProject(projects));activeHandoffPromise=task;
-    try{return await task;}finally{activeHandoffPromise=null;}
+    const snapshot=requireProject(projects),signature=capcutHandoffInputKey(snapshot);
+    const task=prepareCapCutHandoff(snapshot);activeHandoffPromise=task;
+    try{
+      const result=await task,current=projects.getCurrent();
+      if(!current||capcutHandoffInputKey(current)!==signature){
+        await rm(result.directory,{recursive:true,force:true}).catch(cleanupError=>console.warn('Could not remove stale CapCut handoff:',result.directory,cleanupError));
+        throw new Error('Timeline, story, assets, or finishing settings changed while the CapCut handoff was being prepared. The stale handoff was discarded; prepare it again.');
+      }
+      return result;
+    }finally{activeHandoffPromise=null;}
   });
 
   queue.on('snapshot',snapshot=>{for(const window of BrowserWindow.getAllWindows())if(!window.isDestroyed())window.webContents.send(IPC.queueEvent,snapshot);});
