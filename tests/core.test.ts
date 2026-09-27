@@ -253,6 +253,17 @@ describe('workflow engine',()=>{
      expect(await validateComfyNodeAvailability(profile,{InstalledNode:{},MissingCustomNode:{}})).toEqual([]);
    }finally{await rm(root,{recursive:true,force:true});}
  });
+ it('does not treat inherited Object prototype fields as real Comfy node inputs',async()=>{
+   const root=await mkdtemp(join(tmpdir(),'cineforge-comfy-own-input-')),path=join(root,'workflow.json');
+   await writeFile(path,JSON.stringify({'1':{class_type:'Dummy',inputs:{seed:1}}}),'utf8');
+   try{
+     const issues=await validateProfileBindings({id:'p',runtime:'comfyui',purpose:'video',name:'own input',modelFamily:'custom',mode:'t2v',workflowPath:path,workflowFormat:'api',bindings:[
+       {key:'prompt',selector:{nodeId:'1'},input:'toString',required:true},
+       {key:'seed',selector:{nodeId:'1'},input:'seed',required:true}
+     ],enabled:false});
+     expect(issues.join(' ')).toMatch(/toString.*not present|input .* not present/i);
+   }finally{await rm(root,{recursive:true,force:true});}
+ });
  it('rejects a video Comfy profile that cannot receive prompt or seed',async()=>{
    const root=await mkdtemp(join(tmpdir(),'cineforge-comfy-')),path=join(root,'workflow.json');
    await writeFile(path,JSON.stringify({'1':{class_type:'Dummy',inputs:{width:512}}}),'utf8');
