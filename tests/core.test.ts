@@ -24,6 +24,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
+import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
@@ -504,6 +505,20 @@ describe('Local Director output bounds',()=>{
   it('clips model-generated text before it enters renderer/project state',()=>{
     expect(directorText('abcdef','',4)).toBe('abcd');
     expect(directorText(undefined,'fallback',4)).toBe('fall');
+  });
+});
+describe('render admission serialization',()=>{
+  it('is busy immediately and serializes overlapping admissions',async()=>{
+    const gate=new AdmissionGate(),events:string[]=[];
+    let releaseFirst!:()=>void;const firstBlock=new Promise<void>(resolve=>{releaseFirst=resolve;});
+    const first=gate.run(async()=>{events.push('first:start');await firstBlock;events.push('first:end');});
+    expect(gate.busy).toBe(true);
+    const second=gate.run(async()=>{events.push('second:start');events.push('second:end');});
+    await new Promise(resolve=>setTimeout(resolve,5));
+    expect(events).toEqual(['first:start']);expect(gate.busy).toBe(true);
+    releaseFirst();await Promise.all([first,second]);
+    expect(events).toEqual(['first:start','first:end','second:start','second:end']);
+    expect(gate.busy).toBe(false);
   });
 });
 describe('main-process workflow routing authority',()=>{
