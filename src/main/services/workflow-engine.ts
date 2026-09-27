@@ -43,6 +43,7 @@ export async function readWorkflow(path: string): Promise<any> {
   return readJsonFileLimited(path,'ComfyUI workflow JSON');
 }
 
+function parseFiniteNumberTransform(value:unknown):number{const parsed=typeof value==='number'?value:Number(typeof value==='string'?value.trim():value);if(!Number.isFinite(parsed))throw new Error(`Cannot transform value to a finite number safely: ${String(value)}`);return parsed;}
 function parseBooleanTransform(value:unknown):boolean{
   if(typeof value==='boolean')return value;
   if(typeof value==='number'){if(value===1)return true;if(value===0)return false;}
@@ -55,8 +56,8 @@ function parseBooleanTransform(value:unknown):boolean{
 }
 function transformValue(value: unknown, transform: WorkflowBinding['transform']): unknown {
   switch (transform) {
-    case 'integer': return Math.round(Number(value));
-    case 'float': return Number(value);
+    case 'integer': return Math.round(parseFiniteNumberTransform(value));
+    case 'float': return parseFiniteNumberTransform(value);
     case 'boolean': return parseBooleanTransform(value);
     case 'string': return value == null ? '' : String(value);
     default: return value;
