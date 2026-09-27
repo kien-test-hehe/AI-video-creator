@@ -69,22 +69,22 @@ export class ProjectService {
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
     await this.assertProjectStateFileNotSymlink(file,'CineForge project file');
     await this.assertProjectStateFileNotSymlink(backup,'CineForge backup project file');
-    let raw: unknown,recoveredFromBackup=false,primaryFailure:unknown;
-    try {
+    let raw:unknown,loaded:ReturnType<typeof loadPortableProject>,recoveredFromBackup=false,primaryFailure:unknown;
+    try{
       raw=await readJsonFileLimited(file,'CineForge project file',50*1024*1024);
-    }
-    catch (primaryError) {
+      loaded=loadPortableProject(raw,openedRoot);
+    }catch(primaryError){
       primaryFailure=primaryError;
-      try {
+      try{
         raw=await readJsonFileLimited(backup,'CineForge backup project file',50*1024*1024);
+        loaded=loadPortableProject(raw,openedRoot);
         recoveredFromBackup=true;
-      } catch (backupError) {
+      }catch(backupError){
         throw new Error(`CineForge project could not be loaded from primary or backup. Primary: ${primaryError instanceof Error?primaryError.message:String(primaryError)}. Backup: ${backupError instanceof Error?backupError.message:String(backupError)}`);
       }
     }
 
-    const loaded = loadPortableProject(raw, openedRoot);
-    const project = loaded.project;
+    const project=loaded.project;
     const storedRoot = typeof (raw as any)?.rootPath === 'string' ? resolve((raw as any).rootPath) : openedRoot;
     if (storedRoot !== openedRoot) this.rebasePortablePaths(project, storedRoot, openedRoot);
 
