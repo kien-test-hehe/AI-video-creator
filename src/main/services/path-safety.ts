@@ -1,4 +1,4 @@
-import { access, lstat, realpath } from 'node:fs/promises';
+import { access, lstat, mkdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export function isPathInside(root: string, candidate: string): boolean {
@@ -67,6 +67,12 @@ export async function assertSafeWritePath(root: string, candidate: string, label
       ancestor = parent;
     }
   }
+}
+
+export async function ensureSafeDirectory(root:string,candidate:string,label='directory'):Promise<string>{
+  const safe=await assertSafeWritePath(root,candidate,label);
+  await mkdir(safe,{recursive:true});
+  return assertExistingPathInside(root,safe,label);
 }
 
 export function assertSafeRelativePath(value: string, label = 'relative path'): string {
