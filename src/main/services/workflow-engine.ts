@@ -257,7 +257,7 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
   }
 
   for (const [nodeId, node] of activeNodes) {
-    const schema = objectInfo[node.type];
+    const schema=Object.prototype.hasOwnProperty.call(objectInfo,node.type)?objectInfo[node.type]:undefined;
     if (!schema) {
       const connected = Boolean(node.inputs?.some(input => input.link != null) || node.outputs?.some(output => (output.links?.length || 0) > 0));
       const looksLikeSubgraph = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(node.type);
@@ -280,7 +280,8 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
         warnings.push(`Node ${nodeId}.${input.name} comes from disabled/bypassed node ${link.originId}; export API format if this branch is required.`);
         continue;
       }
-      if (!objectInfo[activeNodes.get(link.originId)!.type]) continue;
+      const originType=activeNodes.get(link.originId)!.type;
+      if(!Object.prototype.hasOwnProperty.call(objectInfo,originType))continue;
       inputs[input.name] = [link.originId, link.originSlot];
     }
 
