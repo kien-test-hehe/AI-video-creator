@@ -17,7 +17,7 @@ import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessa
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob } from '../src/shared/recovery-policy';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../src/shared/timeline-policy';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
