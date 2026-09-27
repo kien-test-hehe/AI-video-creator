@@ -448,6 +448,28 @@ describe('foreground artifact input signatures',()=>{
     const qc=structuredClone(base);qc.renderOutputs[0].technicalQc!.warnings=['warn'];expect(capcutHandoffInputKey(qc)).not.toBe(before);
   });
 });
+describe('multi-track timeline editing',()=>{
+  const project=()=>({
+    shots:[{id:'s1'},{id:'s2'},{id:'s3'}],
+    renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'},{id:'o3',shotId:'s3',mediaType:'video'}],
+    timeline:[
+      {id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},
+      {id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},
+      {id:'c',shotId:'s3',renderOutputId:'o3',track:1,order:0,trimInSec:0,volume:1}
+    ]
+  }) as any as FilmProject;
+  it('reorders only within one track and refuses cross-track drag reorder',()=>{
+    const p=project();expect(reorderTimeline(p,'b','a')).toBe(true);
+    expect(p.timeline.find(c=>c.id==='b')?.order).toBe(0);expect(p.timeline.find(c=>c.id==='a')?.order).toBe(1);expect(p.timeline.find(c=>c.id==='c')?.order).toBe(0);
+    expect(reorderTimeline(p,'a','c')).toBe(false);expect(p.timeline.find(c=>c.id==='c')?.order).toBe(0);
+  });
+  it('inserts a take into the target clip track without renumbering other tracks',()=>{
+    const p=project();expect(insertTimelineOutput(p,'o1','c')).toBe(true);
+    const inserted=p.timeline.find(c=>c.id!=='a'&&c.id!=='b'&&c.id!=='c')!;
+    expect(inserted.track).toBe(1);expect(inserted.order).toBe(0);expect(p.timeline.find(c=>c.id==='c')?.order).toBe(1);
+    expect(p.timeline.find(c=>c.id==='a')?.order).toBe(0);expect(p.timeline.find(c=>c.id==='b')?.order).toBe(1);
+  });
+});
 describe('canonical timeline integrity',()=>{
   const output=(id:string,shotId:string,mediaType:'video'|'image'='video')=>({id,jobId:'j',shotId,path:`/tmp/${id}`,filename:id,mediaType,createdAt:'2026-01-01T00:00:00.000Z'}) as any;
   it('rejects cross-shot and non-video output references',()=>{
