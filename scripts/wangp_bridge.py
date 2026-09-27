@@ -35,6 +35,8 @@ def as_list(value):
 def compact(entry):
     nested = entry.get("metadata")
     metadata = nested if isinstance(nested, dict) else entry
+    raw_capabilities = metadata.get("capabilities")
+    capabilities = {str(key): value is True for key, value in raw_capabilities.items()} if isinstance(raw_capabilities, dict) else {}
     return {
         "modelType": entry.get("model_type") or metadata.get("model_type"),
         "name": entry.get("name") or metadata.get("name") or entry.get("model_type") or metadata.get("model_type"),
@@ -43,7 +45,7 @@ def compact(entry):
         "mainOutput": as_list(metadata.get("main_output")),
         "outputs": as_list(metadata.get("outputs")),
         "inputs": as_list(metadata.get("inputs")),
-        "capabilities": metadata.get("capabilities") if isinstance(metadata.get("capabilities"), dict) else {},
+        "capabilities": capabilities,
         "description": entry.get("description") or metadata.get("description") or "",
     }
 
