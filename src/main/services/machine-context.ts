@@ -1,10 +1,10 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings, FilmProject, SystemProbe } from '../../shared/types';
-import { assertSafeWritePath } from './path-safety';
+import { assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 
 export async function writeCodexMachineContext(project:FilmProject,machine:AppMachineSettings,probe:SystemProbe):Promise<string>{
-  const dir=join(project.rootPath,'.cineforge');await mkdir(dir,{recursive:true});
+  const dir=await ensureSafeDirectory(project.rootPath,join(project.rootPath,'.cineforge'),'CineForge metadata directory');
   const jsonPath=await assertSafeWritePath(dir,join(dir,'machine-context.json'),'Codex machine context');
   const mdPath=await assertSafeWritePath(dir,join(dir,'CODEX_MACHINE_CONTEXT.md'),'Codex machine context');
   const snapshot={
