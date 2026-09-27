@@ -115,7 +115,12 @@ export class ProjectService {
       });
       const currentShots = new Map(this.current.shots.map(shot => [shot.id, shot]));
       for (const shot of incoming.shots) {
-        const currentShot=currentShots.get(shot.id);if(!currentShot)continue;
+        const currentShot=currentShots.get(shot.id);
+        if(!currentShot){
+          shot.latestRenderId=undefined;
+          shot.status=shot.status==='ready'?'ready':'draft';
+          continue;
+        }
         if(shotProjectRenderInputKey(incoming,shot)!==shotProjectRenderInputKey(this.current,currentShot)){
           shot.status=shot.latestRenderId?'rendered':currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
         }else{
