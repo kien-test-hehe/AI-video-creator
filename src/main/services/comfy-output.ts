@@ -18,7 +18,10 @@ export function collectComfyFileRefs(value: unknown, out: ComfyFileRef[] = []): 
     if(Array.isArray(current)){for(let i=current.length-1;i>=0;i--)stack.push(current[i]);continue;}
     if(!current||typeof current!=='object')continue;
     const obj=current as Record<string,unknown>;
-    if(typeof obj.filename==='string')out.push({filename:obj.filename,subfolder:typeof obj.subfolder==='string'?obj.subfolder:undefined,type:typeof obj.type==='string'?obj.type:'output'});
+    if(typeof obj.filename==='string'){
+      const type=typeof obj.type==='string'?obj.type:'output';
+      if(type!=='input')out.push({filename:obj.filename,subfolder:typeof obj.subfolder==='string'?obj.subfolder:undefined,type});
+    }
     for(const child of Object.values(obj))stack.push(child);
   }
   return out;
