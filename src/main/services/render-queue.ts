@@ -639,6 +639,8 @@ export class RenderQueueService extends EventEmitter {
         const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
         if(await sha256File(path)!==fingerprint.sha256)return false;
       }
+      const runtime=await fingerprintRuntime(this.settings.get(),spec.workflowProfile);
+      if(runtime.environmentSha256!==spec.runtimeFingerprint.environmentSha256)return false;
       return true;
     }catch{return false;}
   }
