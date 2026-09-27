@@ -137,6 +137,16 @@ describe('project schema canonicalization',()=>{
     const loaded=loadPortableProject(raw,'/project').project;
     expect(loaded.settings.workflowProfiles.find(profile=>profile.id==='legacy-wangp')?.runtime).toBe('wangp');
   });
+  it('orphans render-output provenance when an existing job belongs to another shot',()=>{
+    const raw:any=baseProject();
+    raw.scenes.push({id:'scene-2',index:2,heading:'INT. OTHER',body:'',shotIds:['shot-2']});
+    raw.shots.push({...structuredClone(raw.shots[0]),id:'shot-2',sceneId:'scene-2',latestRenderId:undefined,status:'ready'});
+    raw.renderJobs=[{id:'job-2',shotId:'shot-2',createdAt:'2026-01-03T00:00:00.000Z',updatedAt:'2026-01-03T00:00:00.000Z',status:'done',progress:1,message:'',modelFamily:'ltx-2.5-fast',outputs:[]}];
+    raw.renderOutputs[0].jobId='job-2';
+    const loaded=loadPortableProject(raw,'/project').project;
+    expect(loaded.renderOutputs[0].jobId).toBe('orphaned');
+    expect(loaded.renderJobs[0].outputs).toEqual([]);
+  });
   it('rejects render jobs whose immutable spec targets a different shot id',()=>{
     const raw:any=baseProject(),specShot=structuredClone(raw.shots[0]);specShot.id='shot-2';
     raw.renderJobs=[{
