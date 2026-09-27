@@ -203,23 +203,43 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async recoverActiveJob(jobId:string):Promise<void>{
-    let recoveredJob:RenderJob|undefined;
+    let recoveredJob:RenderJob|undefined,releaseAllowed=false;
     try{
-      const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job?.spec)throw new Error('Recovered job has no immutable spec.');
+      const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);
+      if(!job)throw new Error('Recovered job is missing from the project queue.');
       recoveredJob=job;
+      if(!job.spec)throw new Error('Recovered active job has no immutable spec, so its backend runtime cannot be identified safely.');
       const runtime=job.spec.workflowProfile.runtime??(job.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
       await this.updateJob(jobId,{status:'recovering',message:`Recovering ${runtime} job after restart`},true,true);
       if(runtime==='wangp')await this.recoverWanGp(project,job);
       else await this.recoverComfy(project,job);
+      releaseAllowed=true;
     }catch(error){
-      if(this.cancelled.has(jobId))await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled',error:undefined},true,true);
-      else{
-        if(recoveredJob)await this.cleanupRejectedRecovery(recoveredJob);
-        await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
+      if(this.cancelled.has(jobId)){
+        await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled',error:undefined},true,true);
+        releaseAllowed=true;
+      }else{
+        try{
+          if(!recoveredJob)throw new Error('Recovered job identity is unavailable, so backend cleanup cannot be confirmed.');
+          await this.cleanupRejectedRecovery(recoveredJob);
+          await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
+          releaseAllowed=true;
+        }catch(cleanupError){
+          const reason=`Recovery failed and backend cleanup could not be confirmed for ${jobId}: ${cleanupError instanceof Error?cleanupError.message:String(cleanupError)}`;
+          this.recoveryBlockedError=reason;
+          await this.updateJob(jobId,{status:'stalled',message:'Recovery cleanup is unconfirmed; GPU ownership remains locked',error:reason},true,true).catch(updateError=>console.warn('Could not persist blocked recovery state:',updateError));
+          this.emitSnapshot();
+        }
       }
     }finally{
+      this.comfyCancelPromises.delete(jobId);
+      if(!releaseAllowed){
+        this.runningJobId=jobId;
+        this.emitSnapshot();
+        return;
+      }
       await this.cleanupJobSnapshots(jobId);
-      this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;
+      this.cancelled.delete(jobId);this.runningJobId=undefined;
       const nextRecovery=this.recoveryPending.shift();
       if(nextRecovery){
         const project=this.requireProject();await this.acquireRenderLease(project,nextRecovery);
@@ -233,7 +253,8 @@ export class RenderQueueService extends EventEmitter {
 
   private async cleanupRejectedRecovery(job:RenderJob):Promise<void>{
     const latest=this.snapshot().jobs.find(item=>item.id===job.id)??job;
-    const runtime=latest.spec?.workflowProfile.runtime??(latest.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),machine=this.settings.get();
+    if(!latest.spec)throw new Error('Cannot clean up recovered backend safely because the immutable job spec/runtime identity is missing.');
+    const runtime=latest.spec.workflowProfile.runtime??(latest.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),machine=this.settings.get();
     if(runtime==='comfyui'){
       let promptId=latest.comfyPromptId;
       if(!promptId){
