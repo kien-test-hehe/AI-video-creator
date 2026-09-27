@@ -84,6 +84,20 @@ describe('project schema canonicalization',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/render output path is required/i);
   });
+  it('rejects render jobs whose immutable spec targets a different shot id',()=>{
+    const raw:any=baseProject(),specShot=structuredClone(raw.shots[0]);specShot.id='shot-2';
+    raw.renderJobs=[{
+      id:'job-1',shotId:'shot-1',createdAt:'2026-01-03T00:00:00.000Z',updatedAt:'2026-01-03T00:00:00.000Z',status:'failed',progress:0,message:'',modelFamily:'ltx-2.5-fast',outputs:[],
+      spec:{
+        shot:specShot,
+        workflowProfile:{id:'wf-1',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/project/workflows/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:true},
+        effectivePrompt:'',queuedProjectUpdatedAt:'2026-01-03T00:00:00.000Z',workflowSha256:'0'.repeat(64),assetFingerprints:[],
+        runtimeFingerprint:{backend:'wangp',executionMode:'native',environmentSha256:'1'.repeat(64)}
+      }
+    }];
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/immutable spec shot id .* does not match job shotid/i);
+  });
+
 });
 describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
 describe('strict workflow numeric transforms',()=>{
