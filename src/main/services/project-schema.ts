@@ -82,9 +82,8 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   for(const shot of shots){
     const validLatest=shot.latestRenderId?renderOutputs.find(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video'):undefined;
     if(!validLatest){
-      const fallback=[...renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video'&&output.technicalQc?.passed===true).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
-      shot.latestRenderId=fallback?.id;
-      if(shot.status==='rendered'&&!fallback)shot.status='ready';
+      shot.latestRenderId=undefined;
+      if(shot.status==='rendered')shot.status='ready';
     }
   }
   for(const job of renderJobs)job.outputs=renderOutputs.filter(output=>output.jobId===job.id&&output.shotId===job.shotId);
