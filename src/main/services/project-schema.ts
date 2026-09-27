@@ -90,9 +90,9 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
     }
   }
 
-  const outputsByJobShot=new Map<string,RenderOutput[]>();
+  const jobShotById=new Map(renderJobs.map(job=>[job.id,job.shotId] as const)),outputsByJobShot=new Map<string,RenderOutput[]>();
   for(const output of renderOutputs){
-    if(!jobIds.has(output.jobId)){output.jobId='orphaned';continue;}
+    if(!jobIds.has(output.jobId)||jobShotById.get(output.jobId)!==output.shotId){output.jobId='orphaned';continue;}
     const key=`${output.jobId}\u0000${output.shotId}`,list=outputsByJobShot.get(key)??[];list.push(output);outputsByJobShot.set(key,list);
   }
   for(const job of renderJobs)job.outputs=outputsByJobShot.get(`${job.id}\u0000${job.shotId}`)??[];
