@@ -825,6 +825,10 @@ export class RenderQueueService extends EventEmitter {
       if(shot){if(!currentSpec){if(shot.latestRenderId)shot.status='rendered';else if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(!qcFailed&&canRefreshProfileValidationFromRender(profile,job.spec)){profile!.validation={...profile!.validation!,lastSuccessfulRenderAt:now};}
     });
+    // The backend is already terminal and the project summary is durable. Clear the machine
+    // GPU lease before the final signed-journal refresh so a crash here cannot make an older
+    // active journal outrank this newer terminal project state solely because a stale lease survived.
+    await this.releaseRenderLease(job.id);
     const current=this.projects.getCurrent()?.renderJobs.find(j=>j.id===job.id);if(current){this.liveJobs.set(job.id,structuredClone(current));await this.journal.write(this.requireProject().rootPath,current);}
     this.emitSnapshot();
   }
