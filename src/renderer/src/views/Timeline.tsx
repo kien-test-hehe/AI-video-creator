@@ -18,7 +18,7 @@ export function Timeline(){
     return !message||window.confirm(message);
   };
   const add=(outputId:string)=>{if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});};
-  const remove=(id:string)=>updateProject(next=>{next.timeline=next.timeline.filter(clip=>clip.id!==id).map((clip,index)=>({...clip,order:index}));});
+  const remove=(id:string)=>updateProject(next=>{next.timeline=next.timeline.filter(clip=>clip.id!==id);});
   const move=(id:string,delta:number)=>updateProject(next=>{
     const ordered=[...next.timeline].sort((a,b)=>a.order-b.order),index=ordered.findIndex(clip=>clip.id===id),target=index+delta;
     if(index<0||target<0||target>=ordered.length)return;
