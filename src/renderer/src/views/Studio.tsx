@@ -57,13 +57,13 @@ export function Studio(){
     return()=>{disposed=true;};
   },[probe,projectId,setError,setProbe]);
 
-  const sortedShots=useMemo(()=>{
-    if(!project)return[];
-    return[...project.shots].sort((a,b)=>{
-      const sa=project.scenes.find(s=>s.id===a.sceneId)?.index??0;
-      const sb=project.scenes.find(s=>s.id===b.sceneId)?.index??0;
-      return sa-sb||a.index-b.index;
-    });
+  const {sortedShots,shotsByScene}=useMemo(()=>{
+    if(!project)return{sortedShots:[] as Shot[],shotsByScene:new Map<string,Shot[]>()};
+    const sceneIndex=new Map(project.scenes.map(scene=>[scene.id,scene.index] as const));
+    const sortedShots=[...project.shots].sort((a,b)=>(sceneIndex.get(a.sceneId)??0)-(sceneIndex.get(b.sceneId)??0)||a.index-b.index||a.id.localeCompare(b.id));
+    const shotsByScene=new Map<string,Shot[]>();
+    for(const shot of sortedShots){const list=shotsByScene.get(shot.sceneId)??[];list.push(shot);shotsByScene.set(shot.sceneId,list);}
+    return{sortedShots,shotsByScene};
   },[project]);
 
   const selectedShot=project?(project.shots.find(shot=>shot.id===selectedShotId)||sortedShots[0]):undefined;
@@ -86,7 +86,7 @@ export function Studio(){
 
     let sceneShotCursor=42;
     for(const scene of project.scenes){
-      const sceneShots=sortedShots.filter(shot=>shot.sceneId===scene.id);
+      const sceneShots=shotsByScene.get(scene.id)??[];
       const firstShotY=sceneShotCursor;
       if(sceneShots.length){
         sceneShots.forEach((shot,index)=>{
@@ -130,7 +130,7 @@ export function Studio(){
     const workflowRows=profiles.length+(unbound.length?1:0);
     const height=Math.max(900,180+Math.max(sceneShotCursor,42+workflowRows*142));
     return{nodes,edges,width:2070,height};
-  },[hardwareTier,preflightReady,preflightState,project,queue.jobs,selectedShot,sortedShots,wanGpAvailable]);
+  },[hardwareTier,preflightReady,preflightState,project,queue.jobs,selectedShot,shotsByScene,sortedShots,wanGpAvailable]);
 
   const nodes=useMemo(()=>graph.nodes.map(node=>{const saved=positions[node.id],x=saved?.x??node.x,y=saved?.y??node.y;return{...node,x:Math.min(Math.max(0,graph.width-node.width),Math.max(0,x)),y:Math.min(Math.max(0,graph.height-node.height),Math.max(0,y))};}),[graph.height,graph.nodes,graph.width,positions]);
   const nodeMap=useMemo(()=>new Map(nodes.map(node=>[node.id,node])),[nodes]);
