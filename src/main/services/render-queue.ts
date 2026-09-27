@@ -274,8 +274,10 @@ export class RenderQueueService extends EventEmitter {
   private async restoreShotAfterOrphan(job:RenderJob):Promise<void>{
     await this.projects.mutate(project=>{
       const shot=project.shots.find(item=>item.id===job.shotId);if(!shot)return;
-      if(shot.latestRenderId)shot.status='rendered';
-      else shot.status=job.spec?.shot.status==='draft'?'draft':'ready';
+      if(shot.latestRenderId){shot.status='rendered';return;}
+      const currentSpec=this.isCurrentJobSpec(project,job,shot);
+      if(currentSpec)shot.status=job.spec?.shot.status==='draft'?'draft':'ready';
+      else if(['queued','rendering'].includes(shot.status))shot.status='ready';
     });
   }
 
