@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { AppMachineSettings, FilmProject, ModelFamily, WanGpCatalogEntry, WorkflowProfile } from '../../shared/types';
 import { AppSettingsService } from './app-settings-service';
-import { assertSafeWritePath } from './path-safety';
+import { assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { ProjectService } from './project-service';
 import { validateAndRecordProfile } from './profile-validation';
 import { analyzeWanGpBindings } from './wangp-engine';
@@ -44,7 +44,7 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
       if(settingsJson.resolution==null)settingsJson.resolution=pick.role==='hero'?'832x480':'1280x704';
     }else if(settingsJson.resolution==null){settingsJson.resolution='1280x720';}
 
-    const workflowsRoot=join(project.rootPath,'workflows');await mkdir(workflowsRoot,{recursive:true});
+    const workflowsRoot=await ensureSafeDirectory(project.rootPath,join(project.rootPath,'workflows'),'managed WanGP workflows directory');
     const safeModel=pick.entry.modelType.replace(/[^a-zA-Z0-9._-]+/g,'_');
     const workflowPath=await assertSafeWritePath(workflowsRoot,join(workflowsRoot,`managed-${safeModel}.json`),'managed WanGP settings');
     await writeFile(workflowPath,JSON.stringify(settingsJson,null,2),'utf8');
