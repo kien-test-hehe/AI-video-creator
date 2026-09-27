@@ -109,6 +109,7 @@ export class RenderQueueService extends EventEmitter {
   private async retryInternal(jobId:string):Promise<QueueSnapshot>{
     this.assertRecoveryOperational();const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
     if(ACTIVE.has(prior.status))throw new Error('Cannot retry an active job.');
+    if(this.hasActiveJobForShot(prior.shotId))throw new Error('Cannot retry this snapshot while another render for the same shot is active.');
     if(!prior.spec)return this.enqueueInternal({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
     if(prior.spec.shot.id!==prior.shotId)throw new Error('Render job immutable spec shot identity does not match the job shot. Refusing unsafe exact retry.');
     const project=this.requireProject(),machine=this.settings.get(),probe=await probeSystem(project,machine);
