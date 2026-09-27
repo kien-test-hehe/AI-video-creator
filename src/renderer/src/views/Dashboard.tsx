@@ -14,23 +14,36 @@ export function Dashboard(){
   };
   const preflight=async()=>{
     if(!project)return;
-    try{setChecking(true);await useAppStore.getState().persist();const r=await window.cineforge.project.preflight();setReport(r);setProbe(r.probe);}
-    catch(e){setError(e instanceof Error?e.message:String(e));}
+    try{
+      setChecking(true);await useAppStore.getState().persist();
+      const baseline=useAppStore.getState(),baselineProject=baseline.project;
+      if(!baselineProject||baseline.projectDirty)throw new Error('Project changed while saving. Run preflight again after the current edit/save cycle finishes.');
+      const revision=baselineProject.updatedAt,r=await window.cineforge.project.preflight(),current=useAppStore.getState();
+      if(!current.project||current.project.id!==baselineProject.id||current.project.updatedAt!==revision||current.projectDirty){
+        setReport(undefined);setNotice('Preflight result was discarded because the project changed while checks were running.');return;
+      }
+      setReport(r);setProbe(r.probe);
+    }catch(e){setError(e instanceof Error?e.message:String(e));}
     finally{setChecking(false);}
   };
   const queueUnrendered=async()=>{
     if(!project)return;
     try{
       await useAppStore.getState().persist();
-      const checked=await window.cineforge.project.preflight();
+      const baseline=useAppStore.getState(),baselineProject=baseline.project;
+      if(!baselineProject||baseline.projectDirty)throw new Error('Project changed while saving. Finish the current edit/save cycle before batch rendering.');
+      const revision=baselineProject.updatedAt,checked=await window.cineforge.project.preflight(),current=useAppStore.getState();
+      if(!current.project||current.project.id!==baselineProject.id||current.project.updatedAt!==revision||current.projectDirty){
+        setReport(undefined);throw new Error('Project changed while preflight was running. Run the checks again before batch rendering.');
+      }
       setReport(checked);setProbe(checked.probe);
       if(!checked.ready){setError('Preflight has blocking errors. Fix them before batch rendering.');return;}
-      const ordered=[...project.shots].sort((a,b)=>{
-        const sa=project.scenes.find(s=>s.id===a.sceneId)?.index??0;
-        const sb=project.scenes.find(s=>s.id===b.sceneId)?.index??0;
+      const ordered=[...current.project.shots].sort((a,b)=>{
+        const sa=current.project!.scenes.find(s=>s.id===a.sceneId)?.index??0;
+        const sb=current.project!.scenes.find(s=>s.id===b.sceneId)?.index??0;
         return sa-sb||a.index-b.index;
       });
-      const snapshot=await window.cineforge.render.enqueueBatch({projectRoot:project.rootPath,shotIds:ordered.map(s=>s.id),skipIfRendered:true});
+      const snapshot=await window.cineforge.render.enqueueBatch({projectRoot:current.project.rootPath,shotIds:ordered.map(s=>s.id),skipIfRendered:true});
       setQueue(snapshot);setNotice('Queued all unrendered shots with immutable render snapshots.');setView('queue');
     }catch(e){setError(e instanceof Error?e.message:String(e));}
   };
