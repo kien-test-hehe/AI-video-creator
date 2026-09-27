@@ -16,7 +16,7 @@ import { collectWanGpOutputs, isWanGpDockerRunning, outputMediaType, startWanGp,
 import { routeWorkflow } from './model-router';
 import { collectComfyHistoryOutputRefs, inferMediaType } from './comfy-output';
 import { waitForComfyCompletion, waitForComfyPromptRelease } from './comfy-runner';
-import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
+import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { JobJournal } from './job-journal';
