@@ -252,6 +252,12 @@ describe('workflow engine',()=>{
      expect(issues.join(' ')).toMatch(/prompt/i);expect(issues.join(' ')).toMatch(/seed/i);
    }finally{await rm(root,{recursive:true,force:true});}
  });
+ it('does not treat inherited Object prototype names as installed Comfy node schemas',()=>{
+   const ui={nodes:[{id:1,type:'toString',mode:0,inputs:[],outputs:[{name:'out',links:[1]}],widgets_values:[]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:1}],widgets_values:[]}],links:[[1,1,0,2,0,'INT']]};
+   const converted=uiWorkflowToApi(ui,{Consumer:{input:{required:{value:['INT',{forceInput:true}]}}}});
+   expect(converted.requiresApiExport).toBe(true);
+   expect(converted.workflow['1']).toBeUndefined();
+ });
  it('refuses to silently flatten unknown connected subgraphs',()=>{const ui={nodes:[{id:10,type:'792f0fd8-129e-48eb-9904-8d1aa82154d1',mode:0,inputs:[{name:'image',link:7}],outputs:[{name:'latent',links:[8]}],widgets_values:[]}],links:[]};const converted=uiWorkflowToApi(ui,{});expect(converted.requiresApiExport).toBe(true);expect(converted.warnings.join(' ')).toMatch(/API Format/i);});
 });
 describe('local-only networking',()=>{it('accepts loopback and blocks public hosts',()=>{expect(assertLocalUrl('http://127.0.0.1:8188').hostname).toBe('127.0.0.1');expect(()=>assertLocalUrl('https://example.com')).toThrow(/Local-only/);});});
