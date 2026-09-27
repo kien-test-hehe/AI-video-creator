@@ -18,7 +18,7 @@ import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserv
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
-import { selectRecoveryJob } from '../src/shared/recovery-policy';
+import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../src/shared/timeline-policy';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -331,6 +331,20 @@ describe('active render project guards',()=>{
     const project={shots:[{id:'s1'}]} as unknown as FilmProject;
     expect(removedActiveRenderShotIds(project,jobs)).toEqual(['s3']);
     expect(removedActiveRenderShotIds({shots:[{id:'s1'},{id:'s3'}]} as unknown as FilmProject,jobs)).toEqual([]);
+  });
+});
+describe('stale render job shot settlement',()=>{
+  it('preserves changed creative state while only clearing stale runtime states',()=>{
+    expect(shotStatusAfterJobSettlement('draft',false,false,'ready','failed')).toBe('draft');
+    expect(shotStatusAfterJobSettlement('failed',false,false,'ready','cancelled')).toBe('failed');
+    expect(shotStatusAfterJobSettlement('rendering',false,false,'ready','orphaned')).toBe('ready');
+    expect(shotStatusAfterJobSettlement('queued',false,false,'draft','failed')).toBe('ready');
+  });
+  it('applies the current job outcome only when the queued spec is still current',()=>{
+    expect(shotStatusAfterJobSettlement('rendering',false,true,'draft','cancelled')).toBe('draft');
+    expect(shotStatusAfterJobSettlement('rendering',false,true,'ready','orphaned')).toBe('ready');
+    expect(shotStatusAfterJobSettlement('rendering',false,true,'ready','failed')).toBe('failed');
+    expect(shotStatusAfterJobSettlement('draft',true,false,'draft','cancelled')).toBe('rendered');
   });
 });
 describe('signed journal recovery policy',()=>{
