@@ -262,7 +262,7 @@ describe('machine context containment',()=>{
         wangp:{configured:false,available:false,executionMode:'native',rootPath:''},
         hardwarePlan:{tier:'test',recommendedWanGpProfile:4,recommendedAttention:'auto',defaultVideoModel:'ltx-2.5-fast',defaultStillStrategy:'local',notes:[]}
       } as any;
-      await expect(writeCodexMachineContext(project,machine,probe)).rejects.toThrow(/symlink escape|outside/i);
+      await expect(writeCodexMachineContext(project,machine,probe)).rejects.toThrow(/symbolic-link|symlink escape|outside/i);
     }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
   });
 });
