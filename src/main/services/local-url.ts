@@ -7,7 +7,7 @@ export function assertLocalUrl(value:string,localOnly=true):URL{
   return url;
 }
 
-export function fetchLocalUrl(value:string|URL,init:RequestInit={},localOnly=true):Promise<Response>{
+export async function fetchLocalUrl(value:string|URL,init:RequestInit={},localOnly=true):Promise<Response>{
   const url=assertLocalUrl(value instanceof URL?value.toString():value,localOnly);
   return fetch(url,{...init,redirect:'error'});
 }
