@@ -18,11 +18,12 @@ export function Timeline(){
     return !message||window.confirm(message);
   };
   const add=(outputId:string)=>{if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});};
-  const remove=(id:string)=>updateProject(next=>{next.timeline=next.timeline.filter(clip=>clip.id!==id);});
+  const remove=(id:string)=>updateProject(next=>{const removed=next.timeline.find(clip=>clip.id===id);next.timeline=next.timeline.filter(clip=>clip.id!==id);if(removed){next.timeline.filter(clip=>clip.track===removed.track).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id)).forEach((clip,order)=>clip.order=order);}});
   const move=(id:string,delta:number)=>updateProject(next=>{
-    const ordered=[...next.timeline].sort((a,b)=>a.order-b.order),index=ordered.findIndex(clip=>clip.id===id),target=index+delta;
+    const clip=next.timeline.find(item=>item.id===id);if(!clip)return;
+    const ordered=next.timeline.filter(item=>item.track===clip.track).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id)),index=ordered.findIndex(item=>item.id===id),target=index+delta;
     if(index<0||target<0||target>=ordered.length)return;
-    [ordered[index],ordered[target]]=[ordered[target],ordered[index]];ordered.forEach((clip,order)=>clip.order=order);next.timeline=ordered;
+    [ordered[index],ordered[target]]=[ordered[target],ordered[index]];ordered.forEach((item,order)=>item.order=order);
   });
   const patch=(id:string,fn:(clip:TimelineClip)=>void)=>updateProject(next=>{const clip=next.timeline.find(item=>item.id===id);if(clip)fn(clip);});
   const dropClip=(event:DragEvent<HTMLElement>,targetId:string)=>{
@@ -30,7 +31,12 @@ export function Timeline(){
     const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');
     if(outputId){if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId,targetId);});setNotice('Inserted rendered take into the timeline.');return;}
     const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');
-    if(sourceId)updateProject(next=>{reorderTimeline(next,sourceId,targetId);});
+    if(sourceId){
+      const source=project.timeline.find(clip=>clip.id===sourceId),target=project.timeline.find(clip=>clip.id===targetId);
+      if(!source||!target)return;
+      if(source.track!==target.track){setError('Timeline clips can only be reordered within the same track.');return;}
+      updateProject(next=>{reorderTimeline(next,sourceId,targetId);});
+    }
   };
   const dropTrack=(event:DragEvent<HTMLElement>)=>{
     const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');if(!outputId)return;
@@ -80,14 +86,14 @@ export function Timeline(){
           </div>;
         })}</div>}
       </Card>
-      <Card title="Main track" kicker="EDIT">
+      <Card title="Canonical tracks" kicker="EDIT">
         <div className="timeline-drop-surface" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-cineforge-render-output')){event.preventDefault();event.dataTransfer.dropEffect='copy';}}} onDrop={dropTrack}>
-          {project.timeline.length===0?<Empty>Drag a rendered take here or add one from the left.</Empty>:<div className="timeline-track">{[...project.timeline].sort((a,b)=>a.order-b.order).map((clip,index)=>{
+          {project.timeline.length===0?<Empty>Drag a rendered take here or add one from the left.</Empty>:<div className="timeline-track">{[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order||a.id.localeCompare(b.id)).map((clip,index)=>{
             const shot=project.shots.find(item=>item.id===clip.shotId),output=project.renderOutputs.find(item=>item.id===clip.renderOutputId);
             const duration=output?.technicalQc?.durationSec??Math.max(.01,(shot?.generation.frames||1)/Math.max(1,shot?.generation.fps||24));
             const maxIn=Math.max(0,duration-.01);
             return <div className="timeline-clip timeline-clip-edit" key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect=event.dataTransfer.types.includes('application/x-cineforge-render-output')?'copy':'move';}} onDrop={event=>dropClip(event,clip.id)}>
-              <span className="drag-handle" title="Drag to reorder">⋮⋮</span><Pill>{index+1}</Pill>
+              <span className="drag-handle" title="Drag to reorder within this track">⋮⋮</span><Pill>T{clip.track} · {clip.order+1}</Pill>
               <div className="clip-main"><strong>{shot?.title||'Shot'}</strong><small>{duration.toFixed(2)}s source{output?.technicalQc?' · measured':' · nominal'}</small>
                 <div className="clip-fields">
                   <label>In<input type="number" min="0" max={maxIn} step="0.1" value={clip.trimInSec} onChange={event=>patch(clip.id,target=>{const value=Math.max(0,Math.min(maxIn,Number(event.target.value)||0));target.trimInSec=value;if(target.trimOutSec!=null&&target.trimOutSec<=value)target.trimOutSec=Math.min(duration,value+.1);})}/></label>
@@ -95,7 +101,7 @@ export function Timeline(){
                   <label>Vol<input type="number" min="0" max="8" step="0.05" value={clip.volume} onChange={event=>patch(clip.id,target=>target.volume=Math.max(0,Math.min(8,Number(event.target.value)||0)))}/></label>
                 </div>
               </div>
-              <div className="clip-actions"><button onClick={()=>move(clip.id,-1)} disabled={index===0}>←</button><button onClick={()=>move(clip.id,1)} disabled={index===project.timeline.length-1}>→</button><button onClick={()=>remove(clip.id)}>×</button></div>
+              <div className="clip-actions"><button onClick={()=>move(clip.id,-1)} disabled={!project.timeline.some(other=>other.track===clip.track&&other.order<clip.order)}>←</button><button onClick={()=>move(clip.id,1)} disabled={!project.timeline.some(other=>other.track===clip.track&&other.order>clip.order)}>→</button><button onClick={()=>remove(clip.id)}>×</button></div>
             </div>;
           })}</div>}
         </div>
