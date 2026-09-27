@@ -265,6 +265,18 @@ describe('machine context containment',()=>{
   });
 });
 
+describe('local HTTP redirect policy',()=>{
+  it('forces local-service fetches to reject redirects even if a caller requests follow mode',async()=>{
+    const original=globalThis.fetch;let seen:RequestInit|undefined;
+    globalThis.fetch=(async(_input:RequestInfo|URL,init?:RequestInit)=>{seen=init;return new Response('{}',{status:200});}) as typeof fetch;
+    try{
+      await fetchLocalUrl('http://127.0.0.1:8188/system_stats',{redirect:'follow'});
+      expect(seen?.redirect).toBe('error');
+      await expect(fetchLocalUrl('https://example.com/')).rejects.toThrow(/loopback|blocks host/i);
+    }finally{globalThis.fetch=original;}
+  });
+});
+
 describe('renderer navigation trust',()=>{
   it('accepts only the exact packaged renderer file in production mode',()=>{
     const expected='file:///C:/Program%20Files/CineForge/resources/app.asar/out/renderer/index.html';
