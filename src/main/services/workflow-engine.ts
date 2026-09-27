@@ -1,5 +1,6 @@
 import { readJsonFileLimited } from './json-file';
 import type { WorkflowBinding, WorkflowBindingKey, WorkflowProfile } from '../../shared/types';
+import { assertSafeObjectKey } from '../../shared/safe-object';
 
 export type ApiWorkflow = Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
 
@@ -93,7 +94,8 @@ export function applyBindings(workflow: ApiWorkflow, bindings: WorkflowBinding[]
       if (binding.required) throw new Error(`Required ComfyUI binding has no input: ${binding.key}`);
       continue;
     }
-    for (const [, node] of matches) node.inputs[binding.input] = transformValue(value, binding.transform);
+    const input=assertSafeObjectKey(binding.input,'ComfyUI binding input');
+    for (const [, node] of matches) node.inputs[input] = transformValue(value, binding.transform);
   }
   return output;
 }
@@ -242,7 +244,7 @@ function normalizeLink(link: any): { id: string; originId: string; originSlot: n
 export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>): { workflow: ApiWorkflow; warnings: string[]; requiresApiExport: boolean } {
   const warnings: string[] = [];
   let requiresApiExport = false;
-  const result: ApiWorkflow = {};
+  const result=Object.create(null) as ApiWorkflow;
   const activeNodes = new Map<string, UiWorkflowNode>();
   for (const node of ui.nodes || []) {
     if (node.mode != null && node.mode !== 0) continue;
@@ -267,7 +269,7 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
       }
       continue;
     }
-    const inputs: Record<string, unknown> = {};
+    const inputs=Object.create(null) as Record<string,unknown>;
     const uiInputs = new Map((node.inputs || []).map(i => [i.name, i]));
 
     for (const input of node.inputs || []) {
