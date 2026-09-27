@@ -185,7 +185,11 @@ export class RenderQueueService extends EventEmitter {
           await this.projects.mutate(p=>{
             const target=p.renderJobs.find(item=>item.id===job.id);if(target)Object.assign(target,structuredClone(job));
             const shot=p.shots.find(item=>item.id===job.shotId);
-            if(shot&&['queued','rendering'].includes(shot.status))shot.status=shot.latestRenderId?'rendered':job.status==='failed'?'failed':'ready';
+            if(shot&&['queued','rendering'].includes(shot.status)){
+              const currentSpec=this.isCurrentJobSpec(p,job,shot);
+              if(job.status==='failed'||job.status==='cancelled'||job.status==='orphaned')shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,job.status);
+              else shot.status=shot.latestRenderId?'rendered':'ready';
+            }
           });
         }
         continue;
