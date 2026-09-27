@@ -6,6 +6,7 @@ import { assertPathInside, assertRelativeProjectPath } from '../src/main/service
 import { chooseModelForShot } from '../src/shared/routing';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
+import { directorText } from '../src/main/services/director-service';
 import { parseVolumeDetectPeak, technicalQcStructuralIssues } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
@@ -492,6 +493,12 @@ describe('hardware advisor',()=>{
    const plan=deriveHardwarePlan({cpu:{model:'Intel Core i5-14400F',logicalCores:16,physicalCores:10},gpu:{name:'NVIDIA GeForce RTX 5060 Ti',totalVramMb:16384,freeVramMb:15000},memory:{totalMb:48*1024,freeMb:32*1024}});
    expect(plan.tier).toBe('rtx50-16gb');expect(plan.recommendedWanGpProfile).toBe(4);expect(plan.defaultVideoModel).toBe('ltx-2.5-fast');
  });
+});
+describe('Local Director output bounds',()=>{
+  it('clips model-generated text before it enters renderer/project state',()=>{
+    expect(directorText('abcdef','',4)).toBe('abcd');
+    expect(directorText(undefined,'fallback',4)).toBe('fall');
+  });
 });
 describe('main-process workflow routing authority',()=>{
   const shot:Shot={id:'route-shot',sceneId:'scene',index:1,title:'Route',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}};
