@@ -52,6 +52,9 @@ Each queued render stores an immutable snapshot of:
 - effective prompt,
 - generation settings and seed,
 - runtime profile and bindings,
-- SHA-256 of the imported workflow/settings JSON.
+- SHA-256 of the imported workflow/settings JSON;
+- SHA-256 of every referenced project asset;
+- a local runtime/environment fingerprint;
+- an optional model/checkpoint fingerprint.
 
-Retry reuses that snapshot. If the workflow/settings file changed after queue time, retry fails instead of silently producing a different render.
+Retry reuses that snapshot. If the workflow/settings file, referenced assets, runtime environment, or recorded model fingerprint changed after queue time, retry fails instead of silently claiming an exact reproduction.
