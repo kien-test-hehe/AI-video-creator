@@ -260,7 +260,8 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     }
     finally{signal?.removeEventListener('abort',onAbort);}
     const refs=collectComfyHistoryOutputRefs(history);const imageRef=refs.find(r=>inferMediaType(r.filename)==='image');if(!imageRef)throw new Error('Image workflow completed but returned no image output in history.outputs.');
-    const stageDir=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','keyframe-stage'),'keyframe staging directory'),durable=await assertSafeWritePath(stageDir,join(stageDir,`${randomUUID()}${extname(imageRef.filename)||'.png'}`),'staged ComfyUI keyframe output'),bytes=await client.download(imageRef);await writeFile(durable,bytes);return durable;
+    const stageDir=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','keyframe-stage'),'keyframe staging directory'),durable=await assertSafeWritePath(stageDir,join(stageDir,`${randomUUID()}${extname(imageRef.filename)||'.png'}`),'staged ComfyUI keyframe output');
+    await client.downloadToFile(imageRef,durable);return durable;
   }finally{await rm(snapshotRoot,{recursive:true,force:true}).catch(()=>undefined);}
 }
 
