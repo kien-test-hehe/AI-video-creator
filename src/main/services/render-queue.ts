@@ -82,7 +82,13 @@ export class RenderQueueService extends EventEmitter {
     };
     for(const id of [...new Set(request.shotIds)]){
       const shot=project.shots.find(s=>s.id===id);if(!shot)throw new Error(`Shot not found: ${id}`);
-      if(request.skipIfRendered&&shot.latestRenderId)continue;
+      if(request.skipIfRendered&&shot.latestRenderId){
+        const preferred=project.renderOutputs.find(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video');
+        if(preferred){
+          try{await assertExistingPathInside(join(project.rootPath,'renders'),preferred.path,`preferred render for ${shot.title}`);continue;}
+          catch(error:any){if(error?.code!=='ENOENT')throw error;}
+        }
+      }
       if(this.hasActiveJobForShot(shot.id))continue;
       const profile=routeWorkflow(project,shot);
       this.assertExecutionEnvironment(machine,profile,probe);
