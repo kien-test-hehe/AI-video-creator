@@ -191,7 +191,7 @@ export async function validateProfileBindings(profile: WorkflowProfile): Promise
     if (count > 0) {
       const matched = Object.entries(api).filter(([id,node]) => matchesNode(id,node,binding));
       if (!binding.input) errors.push(`${binding.key}: missing input name.`);
-      else if (matched.some(([,node]) => !(binding.input! in node.inputs))) errors.push(`${binding.key}: input “${binding.input}” is not present on every matched node.`);
+      else if (matched.some(([,node]) => !Object.prototype.hasOwnProperty.call(node.inputs,binding.input!))) errors.push(`${binding.key}: input “${binding.input}” is not present on every matched node.`);
     }
   }
   return errors;
