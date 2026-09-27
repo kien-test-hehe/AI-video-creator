@@ -565,7 +565,9 @@ export class RenderQueueService extends EventEmitter {
       const project=this.requireProject();
       try{await this.acquireRenderLease(project,jobId);}
       catch(error){
+        const cancelledWhileAcquiring=this.cancelled.has(jobId)||!this.pending.includes(jobId);
         this.pending=this.pending.filter(id=>id!==jobId);
+        if(cancelledWhileAcquiring){this.cancelled.delete(jobId);this.emitSnapshot();return;}
         const message=`Render did not start because CineForge could not persist the machine GPU ownership lease: ${error instanceof Error?error.message:String(error)}`;
         await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed before GPU start',error:message},true,true).catch(updateError=>console.warn('Could not persist render-lease acquisition failure:',updateError));
         await this.projects.mutate(p=>{const job=p.renderJobs.find(item=>item.id===jobId),shot=job?p.shots.find(item=>item.id===job.shotId):undefined;if(shot)shot.status=shot.latestRenderId?'rendered':'ready';}).catch(updateError=>console.warn('Could not restore shot state after render-lease acquisition failure:',updateError));
