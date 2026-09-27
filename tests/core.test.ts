@@ -19,7 +19,7 @@ import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
-import { capcutHandoffInputKey, duplicateTimelineOrderKey, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
+import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
@@ -330,11 +330,11 @@ describe('Studio workflow routing and timeline drag',()=>{
  });
  it('inserts a rendered take at the requested canonical timeline position',()=>{
    const project={shots:[{id:'s1'},{id:'s2'}],renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'}],timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}]} as unknown as FilmProject;
-   expect(insertTimelineOutput(project,'o2','a')).toBe(true);expect(project.timeline.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(project.timeline.map(clip=>clip.order)).toEqual([0,1]);
+   expect(insertTimelineOutput(project,'o2','a')).toBe(true);const canonical=[...project.timeline].sort(compareTimelineClips);expect(canonical.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(canonical.map(clip=>clip.order)).toEqual([0,1]);
  });
  it('reorders canonical timeline clips by drag target',()=>{
    const project={timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},{id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},{id:'c',shotId:'s3',renderOutputId:'o3',track:0,order:2,trimInSec:0,volume:1}]} as unknown as FilmProject;
-   expect(reorderTimeline(project,'c','a')).toBe(true);expect(project.timeline.map(clip=>clip.id)).toEqual(['c','a','b']);expect(project.timeline.map(clip=>clip.order)).toEqual([0,1,2]);
+   expect(reorderTimeline(project,'c','a')).toBe(true);const canonical=[...project.timeline].sort(compareTimelineClips);expect(canonical.map(clip=>clip.id)).toEqual(['c','a','b']);expect(canonical.map(clip=>clip.order)).toEqual([0,1,2]);
  });
 });
 describe('workflow validation authority',()=>{
@@ -462,12 +462,14 @@ describe('foreground artifact input signatures',()=>{
   });
   it('changes export signature only when export-relevant canonical inputs change',()=>{
     const base=project(),before=timelineExportInputKey(base);
+    const storageReorder=structuredClone(base);storageReorder.timeline.reverse();expect(timelineExportInputKey(storageReorder)).toBe(before);
     const storyEdit=structuredClone(base);storyEdit.story.notes='metadata only';expect(timelineExportInputKey(storyEdit)).toBe(before);
     const trimEdit=structuredClone(base);trimEdit.timeline[0].trimInSec=.25;expect(timelineExportInputKey(trimEdit)).not.toBe(before);
     const fpsEdit=structuredClone(base);fpsEdit.settings.defaultFps=30;expect(timelineExportInputKey(fpsEdit)).not.toBe(before);
   });
   it('changes CapCut signature when manifest-relevant story, assets, shot metadata or QC changes',()=>{
     const base=project(),before=capcutHandoffInputKey(base);
+    const storageReorder=structuredClone(base);storageReorder.timeline.reverse();expect(capcutHandoffInputKey(storageReorder)).toBe(before);
     const story=structuredClone(base);story.story.notes='changed';expect(capcutHandoffInputKey(story)).not.toBe(before);
     const asset=structuredClone(base);asset.assets[0].notes='changed';expect(capcutHandoffInputKey(asset)).not.toBe(before);
     const shot=structuredClone(base);shot.shots[0].dialogue='changed';expect(capcutHandoffInputKey(shot)).not.toBe(before);
