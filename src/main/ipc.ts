@@ -279,6 +279,5 @@ async function autoProvisionWanGpIfNeeded(projects:ProjectService,settings:AppSe
   if(!project||machine.wangp.executionMode!=='native'||!machine.wangp.rootPath.trim())return;
   const usable=project.settings.workflowProfiles.some(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   if(usable)return;
-  try{await provisionRecommendedWanGpProfiles(projects,settings);}
-  catch(error){console.warn('Automatic WanGP profile provisioning was skipped:',error);}
+  await provisionRecommendedWanGpProfiles(projects,settings);
 }
