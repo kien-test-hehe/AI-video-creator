@@ -16,10 +16,16 @@ export function duplicateTimelineOrderKey(clips:Array<Pick<TimelineClip,'track'|
   return undefined;
 }
 
+export function compareTimelineClips(
+  a:Pick<TimelineClip,'track'|'order'|'id'>,
+  b:Pick<TimelineClip,'track'|'order'|'id'>
+):number{
+  return a.track-b.track||a.order-b.order||a.id.localeCompare(b.id);
+}
 
 export function timelineExportInputKey(project:FilmProject):string{
   const outputs=new Map(project.renderOutputs.map(output=>[output.id,output] as const));
-  const clips=[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order||a.id.localeCompare(b.id)).map(clip=>{
+  const clips=[...project.timeline].sort(compareTimelineClips).map(clip=>{
     const output=outputs.get(clip.renderOutputId);
     return{clip,output:output?{id:output.id,shotId:output.shotId,path:output.path,mediaType:output.mediaType}:undefined};
   });
@@ -40,7 +46,7 @@ export function capcutHandoffInputKey(project:FilmProject):string{
     project:{id:project.id,rootPath:project.rootPath,name:project.name,schemaVersion:project.schemaVersion},
     story:project.story,
     policy:{costPolicy:project.settings.costPolicy,capcut:project.settings.capcut,defaultFps:project.settings.defaultFps,outputContainer:project.settings.outputContainer},
-    timeline:[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order||a.id.localeCompare(b.id)),
+    timeline:[...project.timeline].sort(compareTimelineClips),
     shots:project.shots.filter(shot=>shotIds.has(shot.id)).map(shot=>({id:shot.id,title:shot.title,dialogue:shot.dialogue,continuityNotes:shot.continuityNotes})).sort((a,b)=>a.id.localeCompare(b.id)),
     outputs:project.renderOutputs.filter(output=>outputIds.has(output.id)).map(output=>({id:output.id,jobId:output.jobId,shotId:output.shotId,path:output.path,filename:output.filename,mediaType:output.mediaType,technicalQc:output.technicalQc})).sort((a,b)=>a.id.localeCompare(b.id)),
     assets:project.assets.map(asset=>({id:asset.id,kind:asset.kind,name:asset.name,projectPath:asset.projectPath,notes:asset.notes,tags:asset.tags})).sort((a,b)=>a.id.localeCompare(b.id))
