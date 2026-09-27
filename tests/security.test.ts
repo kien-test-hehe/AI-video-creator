@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadPortableProject } from '../src/main/services/project-schema';
-import { assertExistingPathInside, assertExistingProjectMediaPath, assertSafeWritePath } from '../src/main/services/path-safety';
+import { assertExistingPathInside, assertExistingProjectMediaPath, assertSafeWritePath, ensureSafeDirectory } from '../src/main/services/path-safety';
 import { analyzeWanGpBindings } from '../src/main/services/wangp-engine';
 import { profileCompatibilityErrors } from '../src/main/services/profile-validation';
 import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
@@ -130,6 +130,19 @@ describe('safe write target containment',()=>{
       const link=join(dir,'machine-context.json');await symlink(external,link);
       await expect(assertSafeWritePath(dir,link,'machine context')).rejects.toThrow(/symbolic-link target|symlink escape/i);
       expect(await readFile(external,'utf8')).toBe('outside');
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
+
+describe('managed directory containment',()=>{
+  it('refuses a nested managed directory that resolves through a symlink outside its root',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-safe-dir-')),outside=await mkdtemp(join(tmpdir(),'cineforge-safe-dir-outside-'));
+    try{
+      const cache=join(root,'cache');await mkdir(cache,{recursive:true});
+      await symlink(outside,join(cache,'job'),'dir');
+      await expect(ensureSafeDirectory(cache,join(cache,'job','nested'),'render cache directory')).rejects.toThrow(/symlink escape|outside/i);
+      await expect(import('node:fs/promises').then(fs=>fs.stat(join(outside,'nested')))).rejects.toThrow();
     }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
   });
 });
