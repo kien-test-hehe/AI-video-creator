@@ -12,7 +12,7 @@ The pinned application toolchain is declared in package.json and locked by packa
 
 Follow the current upstream WanGP guide rather than old setup posts. The current upstream recommendation for RTX 30XX–50XX uses Python 3.11.14 and PyTorch 2.10 with CUDA 13.x; Windows RTX 30XX–50XX guidance uses Triton 3.6, and RTX 50XX can use optimized NV FP4 paths.
 
-CineForge does not vendor WanGP or weights. Configure the exact working installation under Machine Settings and import JSON exported from that same version/model.
+CineForge does not commit WanGP source or model weights into this repository. On Windows, `setup.cmd` clones the repository-pinned WanGP commit into `.runtime/Wan2GP`, runs its environment installer, and seeds machine-local paths. A separately installed WanGP runtime can still be configured explicitly in Machine Settings. Model weights remain on-demand.
 
 ## Native versus Docker
 
