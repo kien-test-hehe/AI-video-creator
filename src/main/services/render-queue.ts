@@ -870,9 +870,10 @@ export class RenderQueueService extends EventEmitter {
 
   private async updateJob(jobId:string,patch:Partial<RenderJob>,persistSummary=false,forceJournal=false):Promise<void>{
     const project=this.requireProject(),base=this.liveJobs.get(jobId)??project.renderJobs.find(j=>j.id===jobId);if(!base)return;
-    const next={...structuredClone(base),...patch,updatedAt:new Date().toISOString()} as RenderJob;this.liveJobs.set(jobId,next);
-    const now=Date.now(),last=this.lastJournalWrite.get(jobId)??0;
-    if(forceJournal||now-last>=1500){this.lastJournalWrite.set(jobId,now);await this.journal.write(project.rootPath,next);}
+    const next={...structuredClone(base),...patch,updatedAt:new Date().toISOString()} as RenderJob;
+    const now=Date.now(),last=this.lastJournalWrite.get(jobId)??0,writeJournal=forceJournal||now-last>=1500;
+    if(writeJournal){await this.journal.write(project.rootPath,next);this.lastJournalWrite.set(jobId,now);}
+    this.liveJobs.set(jobId,next);
     if(persistSummary)await this.projects.mutate(p=>{const target=p.renderJobs.find(j=>j.id===jobId);if(target)Object.assign(target,next);const shot=p.shots.find(s=>s.id===next.shotId);if(shot&&['preparing','uploading','submitted','running','recovering','stalled','downloading'].includes(next.status))shot.status='rendering';});
     this.emitSnapshot();
   }
