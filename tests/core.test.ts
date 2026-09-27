@@ -44,10 +44,10 @@ const api: ApiWorkflow = {
 
 describe('WanGP entrypoint containment',()=>{
   it('rejects native/docker entrypoints that escape the configured WanGP root',()=>{
-    const machine={wangp:{rootPath:'/opt/Wan2GP',entrypoint:'../outside.py'}} as any as AppMachineSettings;
+    const root=join(tmpdir(),'cineforge-wangp-root'),machine={wangp:{rootPath:root,entrypoint:'../outside.py'}} as any as AppMachineSettings;
     expect(()=>wangpEntrypoint(machine)).toThrow(/outside|entrypoint/i);
     machine.wangp.entrypoint='wgp.py';
-    expect(wangpEntrypoint(machine).replace(/\\/g,'/')).toMatch(/\/opt\/Wan2GP\/wgp\.py$/);
+    expect(wangpEntrypoint(machine)).toBe(join(root,'wgp.py'));
   });
 });
 describe('WanGP source-tree runtime fingerprint',()=>{
