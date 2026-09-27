@@ -218,7 +218,7 @@ describe('immutable workflow staging',()=>{
   it('copies the exact hashed workflow into project cache and rejects changed source bytes',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-workflow-snapshot-'));
     try{
-      await mkdir(join(root,'workflows'),{recursive:true});const source=join(root,'workflows','wf.json');await writeFile(source,'{"prompt":"a"}','utf8');
+      await mkdir(join(root,'workflows'),{recursive:true});await mkdir(join(root,'cache'),{recursive:true});const source=join(root,'workflows','wf.json');await writeFile(source,'{"prompt":"a"}','utf8');
       const expected=await sha256File(source),profile={id:'p',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:source,workflowFormat:'wangp-settings',bindings:[],enabled:true} as WorkflowProfile;
       const staged=await stageWorkflowProfileSnapshot(root,profile,expected,join(root,'cache','wf'));
       expect(staged.workflowPath).toContain(join('cache','wf'));expect(await sha256File(staged.workflowPath)).toBe(expected);
