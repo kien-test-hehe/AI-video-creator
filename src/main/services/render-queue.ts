@@ -43,6 +43,8 @@ export class RenderQueueService extends EventEmitter {
   private comfyCancelPromises=new Map<string,Promise<void>>();
   private liveJobs=new Map<string,RenderJob>();
   private lastJournalWrite=new Map<string,number>();
+  private admissionGate:Promise<void>=Promise.resolve();
+  private admissionCount=0;
   private journal:JobJournal;
 
   constructor(private projects:ProjectService,private settings:AppSettingsService,private renderLeases:RenderLeaseStore){
@@ -58,9 +60,11 @@ export class RenderQueueService extends EventEmitter {
     return{runningJobId:this.runningJobId,blockedReason:this.recoveryBlockedError,jobs};
   }
 
-  isBusy():boolean{return Boolean(this.recoveryBlockedError||this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
+  isBusy():boolean{return Boolean(this.admissionCount||this.recoveryBlockedError||this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
 
-  async enqueue(request:RenderRequest):Promise<QueueSnapshot>{
+  async enqueue(request:RenderRequest):Promise<QueueSnapshot>{return this.withAdmission(()=>this.enqueueInternal(request));}
+
+  private async enqueueInternal(request:RenderRequest):Promise<QueueSnapshot>{
     this.assertRecoveryOperational();const project=this.requireProject();
     if(project.rootPath!==request.projectRoot)throw new Error('Render request does not match the open project.');
     const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');
@@ -72,7 +76,9 @@ export class RenderQueueService extends EventEmitter {
     await this.commitQueuedJobs([job]);return this.snapshot();
   }
 
-  async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{
+  async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{return this.withAdmission(()=>this.enqueueBatchInternal(request));}
+
+  private async enqueueBatchInternal(request:RenderBatchRequest):Promise<QueueSnapshot>{
     this.assertRecoveryOperational();const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
     const jobs:RenderJob[]=[];
     const machine=this.settings.get(),probe=await probeSystem(project,machine),runtimeFingerprints=new Map<string,Promise<RenderRuntimeFingerprint>>();
@@ -98,10 +104,12 @@ export class RenderQueueService extends EventEmitter {
     if(jobs.length)await this.commitQueuedJobs(jobs);return this.snapshot();
   }
 
-  async retry(jobId:string):Promise<QueueSnapshot>{
+  async retry(jobId:string):Promise<QueueSnapshot>{return this.withAdmission(()=>this.retryInternal(jobId));}
+
+  private async retryInternal(jobId:string):Promise<QueueSnapshot>{
     this.assertRecoveryOperational();const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
     if(ACTIVE.has(prior.status))throw new Error('Cannot retry an active job.');
-    if(!prior.spec)return this.enqueue({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
+    if(!prior.spec)return this.enqueueInternal({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
     if(prior.spec.shot.id!==prior.shotId)throw new Error('Render job immutable spec shot identity does not match the job shot. Refusing unsafe exact retry.');
     const project=this.requireProject(),machine=this.settings.get(),probe=await probeSystem(project,machine);
     this.assertExecutionEnvironment(machine,prior.spec.workflowProfile,probe);
@@ -542,6 +550,15 @@ export class RenderQueueService extends EventEmitter {
       out.push({assetId,projectPath:asset.projectPath,sha256:await sha256File(path)});
     }
     return out;
+  }
+
+  private async withAdmission<T>(operation:()=>Promise<T>):Promise<T>{
+    this.admissionCount+=1;
+    const previous=this.admissionGate;let release!:()=>void;
+    this.admissionGate=new Promise<void>(resolve=>{release=resolve;});
+    await previous;
+    try{return await operation();}
+    finally{this.admissionCount=Math.max(0,this.admissionCount-1);release();}
   }
 
   private async commitQueuedJobs(jobs:RenderJob[]):Promise<void>{
