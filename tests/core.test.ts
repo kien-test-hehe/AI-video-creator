@@ -86,6 +86,22 @@ describe('project schema canonicalization',()=>{
   });
 });
 describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
+describe('strict workflow numeric transforms',()=>{
+  it('rejects non-finite ComfyUI numeric transforms instead of writing NaN/null',()=>{
+    const workflow:ApiWorkflow={'1':{class_type:'Sampler',inputs:{steps:1}}};
+    expect(()=>applyBindings(workflow,[{key:'prompt',selector:{nodeId:'1'},input:'steps',transform:'integer',required:true}],{prompt:'abc',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:1,filenamePrefix:'x'})).toThrow(/finite number safely/);
+  });
+  it('rejects non-finite WanGP numeric transforms',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-wangp-number-')),path=join(root,'settings.json');
+    try{
+      await writeFile(path,JSON.stringify({prompt:'old',seed:1,steps:1}),'utf8');
+      const profile={id:'p',runtime:'wangp' as const,purpose:'video' as const,name:'number',modelFamily:'custom' as const,mode:'t2v' as const,workflowPath:path,workflowFormat:'wangp-settings' as const,enabled:true,bindings:[
+        {key:'prompt' as const,jsonPath:'steps',transform:'integer' as const,required:true}
+      ]};
+      await expect(compileWanGpProfile(profile,{prompt:'abc',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:1,filenamePrefix:'x'})).rejects.toThrow(/finite number safely/);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('strict workflow boolean transforms',()=>{
   it('does not coerce the string "false" to true in ComfyUI bindings',()=>{
     const workflow:ApiWorkflow={'1':{class_type:'Switch',inputs:{enabled:true}}};
