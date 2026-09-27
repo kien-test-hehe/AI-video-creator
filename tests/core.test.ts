@@ -153,6 +153,34 @@ describe('project schema canonicalization',()=>{
 
 });
 describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
+describe('workflow binding object-key safety',()=>{
+  it('rejects prototype-polluting Comfy binding inputs at runtime',()=>{
+    const workflow:ApiWorkflow={'1':{class_type:'Node',inputs:{text:'old'}}};
+    expect(()=>applyBindings(workflow,[{key:'prompt',selector:{nodeId:'1'},input:'__proto__',required:true}],{prompt:'pollute',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:1,filenamePrefix:'x'})).toThrow(/forbidden object key/i);
+    expect((Object.prototype as any).polluted).toBeUndefined();
+  });
+  it('rejects prototype-polluting WanGP JSON paths at runtime',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-wangp-safe-path-')),path=join(root,'settings.json');
+    try{
+      await writeFile(path,JSON.stringify({prompt:'old',seed:1}),'utf8');
+      const profile={id:'p',runtime:'wangp' as const,purpose:'video' as const,name:'safe',modelFamily:'custom' as const,mode:'t2v' as const,workflowPath:path,workflowFormat:'wangp-settings' as const,enabled:true,bindings:[
+        {key:'prompt' as const,jsonPath:'constructor.prototype.polluted',required:true}
+      ]};
+      await expect(compileWanGpProfile(profile,{prompt:'yes',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:1,filenamePrefix:'x'})).rejects.toThrow(/forbidden object key/i);
+      expect((Object.prototype as any).polluted).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});delete (Object.prototype as any).polluted;}
+  });
+  it('rejects dangerous workflow binding keys while loading a project',()=>{
+    const raw:any={
+      schemaVersion:2,id:'p',name:'P',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'P',logline:'',script:'',notes:''},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],
+      settings:{workflowProfiles:[{id:'wf',runtime:'comfyui',purpose:'video',name:'WF',modelFamily:'custom',mode:'t2v',workflowPath:'/project/workflows/wf.json',workflowFormat:'api',enabled:false,bindings:[{key:'prompt',selector:{nodeId:'1'},input:'__proto__'}]}]}
+    };
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/forbidden object key/i);
+    raw.settings.workflowProfiles[0].runtime='wangp';raw.settings.workflowProfiles[0].workflowFormat='wangp-settings';raw.settings.workflowProfiles[0].bindings=[{key:'prompt',jsonPath:'constructor.prototype.polluted'}];
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/forbidden object key/i);
+  });
+});
 describe('strict workflow numeric transforms',()=>{
   it('rejects non-finite ComfyUI numeric transforms instead of writing NaN/null',()=>{
     const workflow:ApiWorkflow={'1':{class_type:'Sampler',inputs:{steps:1}}};
