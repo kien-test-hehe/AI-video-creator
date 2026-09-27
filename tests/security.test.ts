@@ -13,6 +13,8 @@ import { sha256File } from '../src/main/services/runtime-fingerprint';
 import { JobJournal } from '../src/main/services/job-journal';
 import { randomBytes } from 'node:crypto';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
+import { writeCodexMachineContext } from '../src/main/services/machine-context';
+import { fetchLocalUrl } from '../src/main/services/local-url';
 
 describe('machine settings trust boundary',()=>{
   it('rejects symlinked machine settings and journal signing keys',async()=>{
