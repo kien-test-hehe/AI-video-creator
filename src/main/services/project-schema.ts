@@ -287,8 +287,10 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
     const rawSpec=asObject(source.spec,'render job spec');
     const workflowProfile=sanitizeWorkflowProfile(rawSpec.workflowProfile);
     const runtimeRaw=rawSpec.runtimeFingerprint&&typeof rawSpec.runtimeFingerprint==='object'?rawSpec.runtimeFingerprint:{};
+    const specShot=sanitizeShot(rawSpec.shot,sceneIds,assetIds,assetKinds);
+    if(specShot.id!==shotId)throw new Error(`Render job ${String(source.id)} immutable spec shot id ${specShot.id} does not match job shotId ${shotId}.`);
     spec={
-      shot:sanitizeShot(rawSpec.shot,sceneIds,assetIds,assetKinds),
+      shot:specShot,
       workflowProfile,
       effectivePrompt:str(rawSpec.effectivePrompt,'',300_000),
       queuedProjectUpdatedAt:iso(rawSpec.queuedProjectUpdatedAt,new Date().toISOString()),
