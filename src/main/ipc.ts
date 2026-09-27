@@ -35,11 +35,12 @@ let activeDirectorPromise:Promise<unknown>|null=null;
 let activeWorkflowMaintenancePromise:Promise<unknown>|null=null;
 let activeHandoffPromise:Promise<unknown>|null=null;
 let activeProjectFileOperations=0;
+const activeProjectFilePromises=new Set<Promise<unknown>>();
 
 export async function shutdownForegroundOperations():Promise<void>{
   activeExportAbortController?.abort();
   activeKeyframeAbortController?.abort();
-  const pending=[activeExportPromise,activeKeyframePromise,activeDirectorPromise,activeWorkflowMaintenancePromise,activeHandoffPromise].filter((value):value is Promise<unknown>=>Boolean(value));
+  const pending=[activeExportPromise,activeKeyframePromise,activeDirectorPromise,activeWorkflowMaintenancePromise,activeHandoffPromise,...activeProjectFilePromises].filter((value):value is Promise<unknown>=>Boolean(value));
   if(pending.length)await Promise.allSettled(pending);
 }
 
@@ -66,7 +67,13 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     try{return await task;}finally{workflowValidationBusy=false;activeWorkflowMaintenancePromise=null;}
   };
   const withProjectSwitchLock=async<T>(operation:()=>Promise<T>):Promise<T>=>{assertProjectSwitchAllowed();projectSwitchBusy=true;try{return await operation();}finally{projectSwitchBusy=false;}};
-  const withProjectFileOperation=async<T>(operation:()=>Promise<T>):Promise<T>=>{assertProjectStable();activeProjectFileOperations+=1;try{return await operation();}finally{activeProjectFileOperations=Math.max(0,activeProjectFileOperations-1);}};
+  const withProjectFileOperation=<T>(operation:()=>Promise<T>):Promise<T>=>{
+    assertProjectStable();activeProjectFileOperations+=1;
+    let task:Promise<T>;
+    try{task=operation();}catch(error){activeProjectFileOperations=Math.max(0,activeProjectFileOperations-1);throw error;}
+    activeProjectFilePromises.add(task);
+    return task.finally(()=>{activeProjectFilePromises.delete(task);activeProjectFileOperations=Math.max(0,activeProjectFileOperations-1);});
+  };
   const runPostSwitchStep=async(operation:()=>Promise<unknown>):Promise<string|undefined>=>{try{await operation();return undefined;}catch(error){const message=error instanceof Error?error.message:String(error);console.warn('Post-switch project task failed:',message);return message;}};
   const showPostSwitchWarning=(label:string,message:string)=>{void dialog.showMessageBox({type:'warning',title:'CineForge project warning',message:`Project opened, but ${label} did not complete.`,detail:`${message}\n\nReview System / Preflight before rendering.`}).catch(()=>undefined);};
 
