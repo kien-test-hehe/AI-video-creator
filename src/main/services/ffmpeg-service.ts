@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared/types';
