@@ -59,7 +59,11 @@ export class ComfyClient {
     form.append('overwrite', overwrite ? 'true' : 'false');
     const res = await this.request('/upload/image', { method: 'POST', body: form }, 120_000);
     if (!res.ok) throw new Error(`ComfyUI image upload failed: ${res.status} ${await readResponseTextLimited(res,'ComfyUI image upload error',1024*1024)}`);
-    return readResponseJsonLimited<ComfyFileRef>(res,'ComfyUI image upload',1024*1024);
+    const uploaded=await readResponseJsonLimited<ComfyFileRef>(res,'ComfyUI image upload',1024*1024);
+    if(!uploaded||typeof uploaded.filename!=='string'||!uploaded.filename.trim())throw new Error('ComfyUI image upload returned no usable filename.');
+    if(uploaded.subfolder!=null&&typeof uploaded.subfolder!=='string')throw new Error('ComfyUI image upload returned an invalid subfolder.');
+    if(uploaded.type!=null&&typeof uploaded.type!=='string')throw new Error('ComfyUI image upload returned an invalid file type.');
+    return uploaded;
   }
 
   async queuePrompt(prompt: Record<string, unknown>, extraData: Record<string, unknown> = {}): Promise<ComfyPromptResult> {
