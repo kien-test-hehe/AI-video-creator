@@ -1,4 +1,4 @@
-import type { RenderJob } from './types';
+import type { RenderJob, Shot } from './types';
 
 const TERMINAL=new Set(['done','failed','cancelled','orphaned']);
 
@@ -13,4 +13,22 @@ export function selectRecoveryJob(projectJob:RenderJob,signedJournal:RenderJob|u
   if(projectTerminal&&projectTime>=journalTime)return{job:projectJob,signed:false,persistTerminal:false};
   if(journalTerminal)return{job:signedJournal,signed:true,persistTerminal:projectJob.status!==signedJournal.status||projectJob.updatedAt!==signedJournal.updatedAt};
   return{job:signedJournal,signed:true,persistTerminal:false};
+}
+
+
+export type JobSettlementOutcome='cancelled'|'orphaned'|'failed';
+
+export function shotStatusAfterJobSettlement(
+  currentStatus:Shot['status'],
+  hasPreferredTake:boolean,
+  jobStillCurrent:boolean,
+  queuedShotStatus:Shot['status']|undefined,
+  outcome:JobSettlementOutcome
+):Shot['status']{
+  if(hasPreferredTake)return'rendered';
+  if(jobStillCurrent){
+    if(outcome==='failed')return'failed';
+    return queuedShotStatus==='draft'?'draft':'ready';
+  }
+  return currentStatus==='queued'||currentStatus==='rendering'?'ready':currentStatus;
 }
