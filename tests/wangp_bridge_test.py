@@ -31,5 +31,13 @@ class WanGpBridgeTests(unittest.TestCase):
         self.assertEqual(item["outputs"],["image"])
         self.assertEqual(item["inputs"],["text"])
 
+    def test_capability_flags_are_strict_booleans(self):
+        item=bridge.compact({"model_type":"x","capabilities":{"image_to_video":"false","text_to_video":True,"audio":"yes","disabled":False}})
+        self.assertFalse(item["capabilities"]["image_to_video"])
+        self.assertTrue(item["capabilities"]["text_to_video"])
+        self.assertFalse(item["capabilities"]["audio"])
+        self.assertFalse(item["capabilities"]["disabled"])
+
+
 if __name__=="__main__":
     unittest.main()
