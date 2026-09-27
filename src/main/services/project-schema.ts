@@ -139,7 +139,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
     mode: MODES.has(source.mode) ? source.mode : 'i2v',
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
-    bindings: array(source.bindings).map(sanitizeBinding),
+    bindings: array(source.bindings).slice(0,256).map(sanitizeBinding),
     enabled: source.enabled===true,
     notes: str(source.notes, '', 20_000) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
@@ -198,7 +198,7 @@ function sanitizeAsset(value: unknown): Asset {
     sourcePath: sourceLabel(source.sourcePath),
     projectPath: path,
     mimeType: str(source.mimeType, '', 512) || undefined,
-    tags: array(source.tags).map(v=>str(v,'',256)).filter(Boolean).slice(0,128),
+    tags: array(source.tags).slice(0,128).map(v=>str(v,'',256)).filter(Boolean),
     notes: str(source.notes, '', 100_000),
     createdAt: iso(source.createdAt, new Date().toISOString())
   };
@@ -212,7 +212,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const rawModelFamily=typeof generationSource.modelFamily==='string'?generationSource.modelFamily:'';
   const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
   const defaults = MODEL_DEFAULTS[modelFamily];
-  const rawIds = (value: unknown) => array(value).map(safeId).filter(id=>assetIds.has(id));
+  const rawIds = (value: unknown) => array(value).slice(0,128).map(safeId).filter(id=>assetIds.has(id));
   const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!)).slice(0,max);
   const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
     if (typeof value !== 'string' || !value) return undefined;
