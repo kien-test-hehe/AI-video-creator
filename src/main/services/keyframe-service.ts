@@ -116,7 +116,7 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   }finally{await rm(workflowSnapshotRoot,{recursive:true,force:true}).catch(()=>undefined);}
   throwIfAborted(signal);
 
-  try{await assertCurrent(false);}
+  try{await assertCurrent(true);}
   catch(error){await rm(generatedPath,{force:true}).catch(()=>undefined);throw error;}
   const assetId=randomUUID(),extension=extname(generatedPath)||'.png',relativePath=join('assets','keyframe',`${shot.id}-${request.role}-${assetId}${extension}`);
   const target=await assertSafeWritePath(join(project.rootPath,'assets'),join(project.rootPath,relativePath),'generated keyframe');
