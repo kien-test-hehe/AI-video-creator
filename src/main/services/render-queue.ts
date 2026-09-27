@@ -95,6 +95,7 @@ export class RenderQueueService extends EventEmitter {
     this.assertRecoveryOperational();const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
     if(ACTIVE.has(prior.status))throw new Error('Cannot retry an active job.');
     if(!prior.spec)return this.enqueue({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
+    if(prior.spec.shot.id!==prior.shotId)throw new Error('Render job immutable spec shot identity does not match the job shot. Refusing unsafe exact retry.');
     const project=this.requireProject(),machine=this.settings.get(),probe=await probeSystem(project,machine);
     this.assertExecutionEnvironment(machine,prior.spec.workflowProfile,probe);
     await this.verifyImmutableSpec(project,prior);
@@ -547,6 +548,7 @@ export class RenderQueueService extends EventEmitter {
 
   private async run(jobId:string):Promise<void>{
     const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job?.spec)throw new Error('Render job has no immutable spec.');
+    if(job.spec.shot.id!==job.shotId)throw new Error('Render job immutable spec shot identity does not match the job shot.');
     const currentShot=project.shots.find(s=>s.id===job.shotId);if(!currentShot)throw new Error('Shot not found.');
     await this.verifyImmutableSpec(project,job);
     const runtime=job.spec.workflowProfile.runtime??(job.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
