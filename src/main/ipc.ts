@@ -134,7 +134,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const client=new ComfyClient(machine.comfy.url,true);
     const ping=await client.ping();
     if(!ping.reachable){await rm(target,{force:true}).catch(()=>undefined);return{path:'',format:'ui' as const,suggestedBindings:[],warnings:[`ComfyUI is offline, so UI workflow conversion could not run: ${ping.error||'unknown error'}`]};}
-    const converted=uiWorkflowToApi(rawWorkflow,await client.objectInfo());
+    let converted:ReturnType<typeof uiWorkflowToApi>;
+    try{converted=uiWorkflowToApi(rawWorkflow,await client.objectInfo());}
+    catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
     if(converted.requiresApiExport){await rm(target,{force:true}).catch(()=>undefined);return{path:'',format:'ui' as const,suggestedBindings:[],warnings:[...converted.warnings,'CineForge refused to create a partial API graph. Load it in ComfyUI, Save (API Format), and import that JSON.']};}
     const apiPath=await assertSafeWritePath(join(project.rootPath,'workflows'),target.replace(/\.json$/i,'.api.json'),'converted workflow');
     try{
