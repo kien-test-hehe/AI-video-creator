@@ -208,12 +208,32 @@ export function Studio(){
   };
 
   const runPreflight=async():Promise<PreflightReport|undefined>=>{
-    try{setPreflightBusy(true);await useAppStore.getState().persist();const report=await window.cineforge.project.preflight();setPreflightReport(report);setPreflightRevision(useAppStore.getState().project?.updatedAt);setProbe(report.probe);const blockers=report.issues.filter(issue=>issue.level==='error').length;if(report.ready)setNotice('Preflight passed.');else setError(`Preflight found ${blockers} blocking issue${blockers===1?'':'s'}. Open System for the full report.`);return report;}
+    try{
+      setPreflightBusy(true);
+      await useAppStore.getState().persist();
+      const baseline=useAppStore.getState();
+      const baselineProject=baseline.project;
+      if(!baselineProject||baseline.projectDirty)throw new Error('Project changed while saving. Finish the current edit/save cycle, then run preflight again.');
+      const revision=baselineProject.updatedAt;
+      const report=await window.cineforge.project.preflight();
+      const current=useAppStore.getState();
+      if(!current.project||current.project.id!==baselineProject.id||current.project.updatedAt!==revision||current.projectDirty){
+        setPreflightReport(undefined);setPreflightRevision(undefined);
+        setNotice('Preflight result was discarded because the project changed while checks were running. Run preflight again for the current project state.');
+        return undefined;
+      }
+      setPreflightReport(report);setPreflightRevision(revision);setProbe(report.probe);
+      const blockers=report.issues.filter(issue=>issue.level==='error').length;
+      if(report.ready)setNotice('Preflight passed.');else setError(`Preflight found ${blockers} blocking issue${blockers===1?'':'s'}. Open System for the full report.`);
+      return report;
+    }
     catch(error){setError(error instanceof Error?error.message:String(error));return undefined;}finally{setPreflightBusy(false);}
   };
   const renderAll=async()=>{
     if(!project||sortedShots.length===0)return;const report=await runPreflight();if(!report?.ready)return;
-    try{setQueue(await window.cineforge.render.enqueueBatch({projectRoot:project.rootPath,shotIds:sortedShots.map(shot=>shot.id),skipIfRendered:true}));setNotice('Queued all unrendered shots.');}
+    const current=useAppStore.getState();
+    if(!current.project||current.projectDirty){setError('Project changed after preflight. Save and run preflight again before rendering.');return;}
+    try{setQueue(await window.cineforge.render.enqueueBatch({projectRoot:current.project.rootPath,shotIds:current.project.shots.map(shot=>shot.id),skipIfRendered:true}));setNotice('Queued all unrendered shots.');}
     catch(error){setError(error instanceof Error?error.message:String(error));}
   };
   const cancelJob=async(id:string)=>{try{setQueue(await window.cineforge.render.cancel(id));}catch(error){setError(error instanceof Error?error.message:String(error));}};
@@ -226,8 +246,14 @@ export function Studio(){
 
   const queueSelected=async()=>{
     if(!project||!selectedShot)return;
-    try{await useAppStore.getState().persist();setQueue(await window.cineforge.render.enqueue({projectRoot:project.rootPath,shotId:selectedShot.id}));setNotice(`${selectedShot.title} added to the render queue.`);}
-    catch(error){setError(error instanceof Error?error.message:String(error));}
+    try{
+      const shotId=selectedShot.id;await useAppStore.getState().persist();
+      const current=useAppStore.getState();
+      const shot=current.project?.shots.find(item=>item.id===shotId);
+      if(!current.project||current.projectDirty||!shot)throw new Error('Shot changed while saving. Finish the current edit/save cycle before queueing.');
+      setQueue(await window.cineforge.render.enqueue({projectRoot:current.project.rootPath,shotId}));
+      setNotice(`${shot.title} added to the render queue.`);
+    }catch(error){setError(error instanceof Error?error.message:String(error));}
   };
 
   if(!project)return <section className="studio-empty"><Empty>Create or open a project to enter Studio.</Empty></section>;
