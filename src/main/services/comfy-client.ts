@@ -1,12 +1,8 @@
-import { rm } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { assertLocalUrl, fetchLocalUrl } from './local-url';
 import { readFileBufferLimited } from './json-file';
-import { readResponseBufferLimited, readResponseJsonLimited, readResponseTextLimited } from './http-response';
+import { readResponseBufferLimited, readResponseJsonLimited, readResponseTextLimited, writeResponseBodyToFileLimited } from './http-response';
 
 export interface ComfyFileRef {
   filename: string;
@@ -165,13 +161,7 @@ export class ComfyClient {
 
   async downloadToFile(ref:ComfyFileRef,destination:string):Promise<void>{
     const res=await this.outputResponse(ref,30*60_000);
-    if(!res.body)throw new Error('ComfyUI output download returned no response body.');
-    try{
-      await pipeline(Readable.fromWeb(res.body as any),createWriteStream(destination,{flags:'w'}));
-    }catch(error){
-      await rm(destination,{force:true}).catch(()=>undefined);
-      throw error;
-    }
+    await writeResponseBodyToFileLimited(res,'ComfyUI output download',destination,32*1024*1024*1024);
   }
 
   private async outputResponse(ref:ComfyFileRef,timeoutMs=180_000):Promise<Response>{
