@@ -6,3 +6,8 @@ export function assertLocalUrl(value:string,localOnly=true):URL{
   if(localOnly&&!LOOPBACK_HOSTS.has(url.hostname))throw new Error(`Local-only loopback policy blocks host: ${url.hostname}`);
   return url;
 }
+
+export async function fetchLocalUrl(value:string|URL,init:RequestInit={},localOnly=true):Promise<Response>{
+  const url=assertLocalUrl(value instanceof URL?value.toString():value,localOnly);
+  return fetch(url,{...init,redirect:'error'});
+}

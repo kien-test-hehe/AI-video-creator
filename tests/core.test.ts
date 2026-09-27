@@ -36,6 +36,7 @@ import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { loadPortableProject } from '../src/main/services/project-schema';
+import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -74,6 +75,22 @@ describe('streamed large-file primitives',()=>{
       expect(await sha256File(path)).toBe(createHash('sha256').update(payload).digest('hex'));
       expect((await readFileBufferLimited(path,'test asset',payload.length)).length).toBe(payload.length);
       await expect(readFileBufferLimited(path,'test asset',payload.length-1)).rejects.toThrow(/too large|safety limit/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('bounded streamed HTTP downloads',()=>{
+  it('rejects oversized declarations and growth during streaming without leaving partial files',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-http-stream-limit-'));
+    try{
+      const declaredPath=join(root,'declared.bin');
+      const declared=new Response(new Uint8Array([1]),{headers:{'content-length':'100'}});
+      await expect(writeResponseBodyToFileLimited(declared,'test download',declaredPath,16)).rejects.toThrow(/too large|limit/i);
+      await expect(readFile(declaredPath)).rejects.toMatchObject({code:'ENOENT'});
+
+      const growingPath=join(root,'growing.bin');
+      const growing=new Response(new Uint8Array(32),{headers:{'content-length':'8'}});
+      await expect(writeResponseBodyToFileLimited(growing,'test download',growingPath,16)).rejects.toThrow(/streaming safety limit|exceeded/i);
+      await expect(readFile(growingPath)).rejects.toMatchObject({code:'ENOENT'});
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });

@@ -13,6 +13,8 @@ import { sha256File } from '../src/main/services/runtime-fingerprint';
 import { JobJournal } from '../src/main/services/job-journal';
 import { randomBytes } from 'node:crypto';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
+import { writeCodexMachineContext } from '../src/main/services/machine-context';
+import { fetchLocalUrl } from '../src/main/services/local-url';
 
 describe('machine settings trust boundary',()=>{
   it('rejects symlinked machine settings and journal signing keys',async()=>{
@@ -141,7 +143,7 @@ describe('managed directory containment',()=>{
     try{
       const cache=join(root,'cache');await mkdir(cache,{recursive:true});
       await symlink(outside,join(cache,'job'),'dir');
-      await expect(ensureSafeDirectory(cache,join(cache,'job','nested'),'render cache directory')).rejects.toThrow(/symlink escape|outside/i);
+      await expect(ensureSafeDirectory(cache,join(cache,'job','nested'),'render cache directory')).rejects.toThrow(/symbolic-link|symlink escape|outside/i);
       await expect(import('node:fs/promises').then(fs=>fs.stat(join(outside,'nested')))).rejects.toThrow();
     }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
   });
@@ -243,6 +245,37 @@ describe('renderer content security policy',()=>{
     const csp=html.match(/Content-Security-Policy" content="([^"]+)"/)?.[1]||'';
     expect(csp).toContain("connect-src 'self'");
     expect(csp).not.toMatch(/127\.0\.0\.1|localhost|ws:\/\//i);
+  });
+});
+
+describe('machine context containment',()=>{
+  it('refuses a .cineforge directory swapped to a symlink outside the project',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-context-root-')),outside=await mkdtemp(join(tmpdir(),'cineforge-context-outside-'));
+    try{
+      await symlink(outside,join(root,'.cineforge'),'dir');
+      const project={id:'project-1',rootPath:root,settings:{capcut:{pro:false},costPolicy:{allowCapcutAiCredits:false}}} as any;
+      const machine={wangp:{executionMode:'native'},comfy:{dedicatedInstance:true}} as any;
+      const probe={
+        platform:{platform:'linux',release:'test',arch:'x64'},cpu:{model:'CPU',logicalCores:1},memory:{totalMb:1024,freeMb:512},
+        ffmpeg:{available:true,ffprobeAvailable:true},capcut:{installed:false,configuredTier:'free'},
+        wangp:{configured:false,available:false,executionMode:'native',rootPath:''},
+        hardwarePlan:{tier:'test',recommendedWanGpProfile:4,recommendedAttention:'auto',defaultVideoModel:'ltx-2.5-fast',defaultStillStrategy:'local',notes:[]}
+      } as any;
+      await expect(writeCodexMachineContext(project,machine,probe)).rejects.toThrow(/symbolic-link|symlink escape|outside/i);
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
+
+describe('local HTTP redirect policy',()=>{
+  it('forces local-service fetches to reject redirects even if a caller requests follow mode',async()=>{
+    const original=globalThis.fetch;let seen:RequestInit|undefined;
+    globalThis.fetch=(async(_input:RequestInfo|URL,init?:RequestInit)=>{seen=init;return new Response('{}',{status:200});}) as typeof fetch;
+    try{
+      await fetchLocalUrl('http://127.0.0.1:8188/system_stats',{redirect:'follow'});
+      expect(seen?.redirect).toBe('error');
+      await expect(fetchLocalUrl('https://example.com/')).rejects.toThrow(/loopback|blocks host/i);
+    }finally{globalThis.fetch=original;}
   });
 });
 
