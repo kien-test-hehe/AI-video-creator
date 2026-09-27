@@ -32,7 +32,7 @@ export async function planSceneWithLocalDirector(project:FilmProject,scene:Scene
     const refs=Array.isArray(s.referenceAssetIds)?s.referenceAssetIds.map(String).filter((id:string)=>referenceIds.has(id)).slice(0,4):[];
     const props=Array.isArray(s.propAssetIds)?s.propAssetIds.map(String).filter((id:string)=>propIds.has(id)).slice(0,2):[];
     const location=typeof s.locationAssetId==='string'&&locationIds.has(s.locationAssetId)?s.locationAssetId:undefined;
-    return{title:String(s.title||`Shot ${scene.index}.${i+1}`),prompt:String(s.prompt||scene.body),camera:String(s.camera||''),action:String(s.action||''),dialogue:String(s.dialogue||''),continuityNotes:String(s.continuityNotes||''),quality:['preview','balanced','hero'].includes(s.quality)?s.quality:'balanced',preferredModel:validModels.has(s.preferredModel)?s.preferredModel:undefined,characterAssetIds:chars,locationAssetId:location,referenceAssetIds:refs,propAssetIds:props} as DirectorShotDraft;
+    return{title:directorText(s.title,`Shot ${scene.index}.${i+1}`,2000),prompt:directorText(s.prompt,scene.body,200_000),camera:directorText(s.camera,'',20_000),action:directorText(s.action,'',100_000),dialogue:directorText(s.dialogue,'',100_000),continuityNotes:directorText(s.continuityNotes,'',100_000),quality:['preview','balanced','hero'].includes(s.quality)?s.quality:'balanced',preferredModel:validModels.has(s.preferredModel)?s.preferredModel:undefined,characterAssetIds:chars,locationAssetId:location,referenceAssetIds:refs,propAssetIds:props} as DirectorShotDraft;
   });
 }
 
@@ -47,7 +47,11 @@ export async function reviewShotWithLocalDirector(project:FilmProject,shot:Shot,
   const res=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:cfg.model,temperature:Math.min(cfg.temperature,0.4),messages:[{role:'system',content:system},{role:'user',content:user}]}),signal:AbortSignal.timeout(180_000)});
   if(!res.ok)throw new Error(`Local Director HTTP ${res.status}: ${(await readResponseTextLimited(res,'Local Director error',1024*1024)).slice(0,1000)}`);
   const payload=await readResponseJsonLimited<ChatResponse>(res,'Local Director response',8*1024*1024);const content=payload.choices?.[0]?.message?.content;if(!content)throw new Error('Local Director returned no message content.');
-  const parsed=parseJsonObject(content);return{issues:Array.isArray(parsed.issues)?parsed.issues.map(String).slice(0,12):[],suggestedContinuityNotes:String(parsed.suggestedContinuityNotes||''),promptAddendum:String(parsed.promptAddendum||'')};
+  const parsed=parseJsonObject(content);return{issues:Array.isArray(parsed.issues)?parsed.issues.slice(0,12).map((value:unknown)=>directorText(value,'',4096)).filter(Boolean):[],suggestedContinuityNotes:directorText(parsed.suggestedContinuityNotes,'',100_000),promptAddendum:directorText(parsed.promptAddendum,'',100_000)};
+}
+
+export function directorText(value:unknown,fallback:string,max:number):string{
+  const text=value==null?fallback:String(value);return text.length>max?text.slice(0,max):text;
 }
 
 function clipText(value:string,max:number):string{const text=String(value??'');return text.length>max?`${text.slice(0,max-1)}…`:text;}
