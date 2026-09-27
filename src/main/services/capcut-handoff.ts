@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { FilmProject } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
-import { timelineOutputIssue } from '../../shared/timeline-policy';
+import { compareTimelineClips, timelineOutputIssue } from '../../shared/timeline-policy';
 
 export interface CapCutHandoffResult{directory:string;manifestPath:string;taskPath:string;prompt:string}
 
@@ -11,7 +11,7 @@ export async function prepareCapCutHandoff(project:FilmProject):Promise<CapCutHa
   if(!project.settings.capcut.enabled)throw new Error('CapCut handoff is disabled for this project.');
   if(!project.timeline.length)throw new Error('Timeline is empty. Build the canonical CineForge cut before creating a CapCut handoff.');
 
-  const ordered=[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order);
+  const ordered=[...project.timeline].sort(compareTimelineClips);
   const seen=new Set<string>();
   const clips=[];
   for(const clip of ordered){
