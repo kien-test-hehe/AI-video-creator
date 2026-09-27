@@ -94,6 +94,29 @@ describe('FFmpeg concat path formatting',()=>{
   });
 });
 describe('renderer save runtime authority',()=>{
+  it('invalidates a preferred take when renderer edits change render-relevant inputs',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-renderer-stale-take-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Film');
+      const current=await service.mutate(project=>{
+        project.scenes.push({id:'scene-1',index:1,heading:'INT. ROOM',body:'',shotIds:['shot-1']});
+        project.shots.push({
+          id:'shot-1',sceneId:'scene-1',index:1,title:'Shot',prompt:'old prompt',camera:'',action:'',dialogue:'',continuityNotes:'',
+          characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',
+          generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:20,cfg:1,seed:1,negativePrompt:'',includeAudio:false},
+          latestRenderId:'old-output'
+        });
+        project.renderOutputs.push({id:'old-output',jobId:'old-job',shotId:'shot-1',path:join(root,'renders','old.mp4'),filename:'old.mp4',mediaType:'video',createdAt:new Date().toISOString()});
+      });
+      const rendererProject=structuredClone(current);
+      rendererProject.shots[0].prompt='new prompt';
+      rendererProject.shots[0].latestRenderId='old-output';
+      rendererProject.shots[0].status='rendered';
+      const saved=await service.saveFromRenderer(rendererProject);
+      expect(saved.shots[0].latestRenderId).toBeUndefined();
+      expect(saved.shots[0].status).toBe('ready');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
   it('does not let a newly renderer-created shot forge render runtime state',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-renderer-save-authority-'));
     try{
