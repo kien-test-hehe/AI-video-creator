@@ -88,7 +88,7 @@ export function Timeline(){
       </Card>
       <Card title="Canonical tracks" kicker="EDIT">
         <div className="timeline-drop-surface" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-cineforge-render-output')){event.preventDefault();event.dataTransfer.dropEffect='copy';}}} onDrop={dropTrack}>
-          {project.timeline.length===0?<Empty>Drag a rendered take here or add one from the left.</Empty>:<div className="timeline-track">{[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order||a.id.localeCompare(b.id)).map((clip,index)=>{
+          {project.timeline.length===0?<Empty>Drag a rendered take here or add one from the left.</Empty>:<div className="timeline-track">{[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order||a.id.localeCompare(b.id)).map(clip=>{
             const shot=project.shots.find(item=>item.id===clip.shotId),output=project.renderOutputs.find(item=>item.id===clip.renderOutputId);
             const duration=output?.technicalQc?.durationSec??Math.max(.01,(shot?.generation.frames||1)/Math.max(1,shot?.generation.fps||24));
             const maxIn=Math.max(0,duration-.01);
