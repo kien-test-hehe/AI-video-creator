@@ -13,7 +13,7 @@ import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
-import { cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
+import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
@@ -775,6 +775,17 @@ describe('Comfy prompt release safety',()=>{
     } as any;
     await waitForComfyPromptRelease(client,'p',{intervalMs:1});
     expect(historyCalls).toBeGreaterThanOrEqual(2);expect(queueCalls).toBeGreaterThanOrEqual(2);
+  });
+});
+describe('Comfy targeted cancellation confirmation',()=>{
+  it('does not trust a targeted cancel acknowledgement until the exact prompt is released',async()=>{
+    const client=new ComfyClient('http://127.0.0.1:8188',true);
+    let queueCalls=0,historyCalls=0;
+    (client as any).request=async()=>new Response(JSON.stringify({cancelled:true}),{status:200,headers:{'content-type':'application/json'}});
+    client.queue=async()=>{queueCalls+=1;return{queue_running:[],queue_pending:[]};};
+    client.history=async()=>{historyCalls+=1;return{status:{messages:[['execution_interrupted',{prompt_id:'p'}]]}};};
+    await client.cancelPrompt('p');
+    expect(queueCalls).toBe(1);expect(historyCalls).toBe(1);
   });
 });
 describe('Comfy cancellation history',()=>{
