@@ -93,9 +93,15 @@ describe('project schema canonicalization',()=>{
     renderOutputs:[{id:'passing-output',jobId:'missing-job',shotId:'shot-1',path:'/project/renders/take.mp4',filename:'take.mp4',mediaType:'video',createdAt:'2026-01-02T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-02T00:00:00.000Z',passed:true,issues:[],warnings:[]}}],
     timeline:[],settings:{}
   });
-  it('rebuilds scene shot membership and repairs an invalid preferred take from QC-passing history',()=>{
+  it('rebuilds scene shot membership without resurrecting a stale preferred take from history',()=>{
     const loaded=loadPortableProject(baseProject(),'/project').project;
     expect(loaded.scenes[0].shotIds).toEqual(['shot-1']);
+    expect(loaded.shots[0].latestRenderId).toBeUndefined();
+    expect(loaded.shots[0].status).toBe('ready');
+  });
+  it('preserves an explicitly preferred take only when that exact output still exists for the shot',()=>{
+    const raw=baseProject();raw.shots[0].latestRenderId='passing-output';
+    const loaded=loadPortableProject(raw,'/project').project;
     expect(loaded.shots[0].latestRenderId).toBe('passing-output');
     expect(loaded.shots[0].status).toBe('rendered');
   });
