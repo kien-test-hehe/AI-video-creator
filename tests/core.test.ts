@@ -312,6 +312,19 @@ describe('machine settings persistence trust',()=>{
     }
   });
 });
+describe('machine settings bootstrap failure',()=>{
+  it('fails closed when an explicit bootstrap file exists but is invalid',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-bootstrap-invalid-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,'{broken','utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      await expect(new AppSettingsService(join(root,'userdata')).load()).rejects.toThrow(/bootstrap settings are present but invalid or unreadable/i);
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+});
 describe('machine settings bootstrap import',()=>{
   it('imports explicit bootstrap machine settings on first load and then persists them',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-bootstrap-settings-'));
