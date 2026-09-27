@@ -6,7 +6,7 @@ import { loadPortableProject } from '../src/main/services/project-schema';
 import { assertExistingPathInside, assertExistingProjectMediaPath, assertSafeWritePath, ensureSafeDirectory } from '../src/main/services/path-safety';
 import { analyzeWanGpBindings } from '../src/main/services/wangp-engine';
 import { profileCompatibilityErrors } from '../src/main/services/profile-validation';
-import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
+import { isTrustedRendererNavigation, resolveTrustedRendererUrl } from '../src/main/services/ipc-security';
 import type { WorkflowProfile } from '../src/shared/types';
 import { stageWorkflowProfileSnapshot } from '../src/main/services/workflow-snapshot';
 import { sha256File } from '../src/main/services/runtime-fingerprint';
@@ -225,6 +225,15 @@ describe('immutable workflow staging',()=>{
       await writeFile(source,'{"prompt":"changed"}','utf8');
       await expect(stageWorkflowProfileSnapshot(root,profile,expected,join(root,'cache','wf2'))).rejects.toThrow(/changed while staging/i);
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+describe('packaged renderer trust source',()=>{
+  it('ignores environment renderer URLs in packaged builds and restricts dev URLs to loopback',()=>{
+    const bundled='file:///app/out/renderer/index.html';
+    expect(resolveTrustedRendererUrl(true,'https://attacker.invalid/app',bundled)).toBe(bundled);
+    expect(resolveTrustedRendererUrl(false,'http://127.0.0.1:5173/',bundled)).toBe('http://127.0.0.1:5173/');
+    expect(()=>resolveTrustedRendererUrl(false,'https://attacker.invalid/app',bundled)).toThrow(/loopback/i);
   });
 });
 
