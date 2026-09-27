@@ -5,13 +5,13 @@ import { spawn } from 'node:child_process';
 import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared/types';
 import { assertExistingPathInside, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { isProcessAlive, killProcessTree } from './process-utils';
-import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
+import { compareTimelineClips, duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 
 interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean;durationSec?:number}
 
 export async function exportTimeline(project:FilmProject,machine:AppMachineSettings,signal?:AbortSignal):Promise<string>{
   throwIfAborted(signal);
-  const clips=[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order);
+  const clips=[...project.timeline].sort(compareTimelineClips);
   if(clips.length===0)throw new Error('Timeline is empty. Add rendered shots first.');
   if(new Set(clips.map(c=>c.track)).size>1)throw new Error('Multi-track compositing is not enabled in the local master exporter. Use the CapCut handoff for multi-track finishing.');
   const duplicateOrder=duplicateTimelineOrderKey(clips);if(duplicateOrder)throw new Error(`Duplicate timeline order detected at ${duplicateOrder}.`);
