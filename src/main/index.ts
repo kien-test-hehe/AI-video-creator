@@ -6,7 +6,7 @@ import { AppSettingsService } from './services/app-settings-service';
 import { assertExistingProjectMediaPath } from './services/path-safety';
 import { ProjectService } from './services/project-service';
 import { RenderQueueService } from './services/render-queue';
-import { lockDownWebContents } from './services/ipc-security';
+import { lockDownWebContents, resolveTrustedRendererUrl } from './services/ipc-security';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from './services/keyframe-lease';
 import { RenderLeaseStore } from './services/render-lease';
 
@@ -46,8 +46,8 @@ function createWindow(): void {
   lockDownWebContents(mainWindow.webContents,trustedRendererUrl);
   mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
 
-  if(process.env.ELECTRON_RENDERER_URL)void mainWindow.loadURL(trustedRendererUrl);
-  else void mainWindow.loadFile(join(__dirname,'../renderer/index.html'));
+  if(new URL(trustedRendererUrl).protocol==='file:')void mainWindow.loadFile(join(__dirname,'../renderer/index.html'));
+  else void mainWindow.loadURL(trustedRendererUrl);
 }
 
 function registerMediaProtocol(): void {
@@ -67,7 +67,7 @@ function registerMediaProtocol(): void {
 }
 
 if(ownsSingleInstanceLock)app.whenReady().then(async () => {
-  trustedRendererUrl=process.env.ELECTRON_RENDERER_URL||pathToFileURL(join(__dirname,'../renderer/index.html')).toString();
+  trustedRendererUrl=resolveTrustedRendererUrl(app.isPackaged,process.env.ELECTRON_RENDERER_URL,pathToFileURL(join(__dirname,'../renderer/index.html')).toString());
   machineSettings = new AppSettingsService(app.getPath('userData'));
   await machineSettings.load();
   keyframeLeases=new KeyframeLeaseStore(app.getPath('userData'),machineSettings.getJournalKey());
