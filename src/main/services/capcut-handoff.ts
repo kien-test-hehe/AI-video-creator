@@ -46,6 +46,12 @@ export async function prepareCapCutHandoff(project:FilmProject):Promise<CapCutHa
   const prompt='Open the official CapCut × Codex workflow and build an editable CapCut draft from this CineForge handoff. Preserve clip order, trims, dialogue timing and continuity notes. Use CapCut for timeline editing, typography, captions, transitions, tracking/reframe, effects and finishing. Do NOT generate replacement media with paid CapCut AI credits unless the manifest explicitly allows it. Prefer the existing local-generated assets. Keep the result editable in CapCut and do not flatten the project prematurely.';
   const manifestPath=await assertSafeWritePath(base,join(base,'manifest.json'),'CapCut manifest'),taskPath=await assertSafeWritePath(base,join(base,'CODEX_CAPCUT_TASK.md'),'CapCut task');
   const task=`# CineForge → CapCut × Codex handoff\n\n${prompt}\n\n## Inputs\n\n- Manifest: \`${manifestPath}\`\n- Project root: \`${project.rootPath}\`\n- Timeline clips: ${clips.length}\n- AI credit permission: **${project.settings.costPolicy.allowCapcutAiCredits?'ALLOWED':'DISABLED'}**\n\n## Finishing priorities\n\n1. Preserve editorial intent and clip timing.\n2. Style captions/typography in CapCut; never bake important text into generated imagery.\n3. Use deterministic cuts/J-cuts/L-cuts/fades/transitions where appropriate.\n4. Apply tracking/reframe/effects only when they improve the shot.\n5. Keep the CapCut project editable for final human verification.\n6. If a listed source is missing or unreadable, stop and report it instead of substituting cloud-generated media.\n`;
-  await writeFile(manifestPath,JSON.stringify(manifest,null,2),'utf8');await writeFile(taskPath,task,'utf8');
-  return{directory:base,manifestPath,taskPath,prompt};
+  try{
+    await writeFile(manifestPath,JSON.stringify(manifest,null,2),'utf8');
+    await writeFile(taskPath,task,'utf8');
+    return{directory:base,manifestPath,taskPath,prompt};
+  }catch(error){
+    try{await rm(base,{recursive:true,force:true});}catch{}
+    throw error;
+  }
 }
