@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { access, readdir } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { AppMachineSettings, FilmProject } from '../../shared/types';
 import { mapHostPathToWanGpRuntime } from './runtime-path-mapper';
