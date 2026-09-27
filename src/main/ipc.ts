@@ -129,7 +129,10 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     let rawWorkflow:any,format:'api'|'ui';
     try{rawWorkflow=await readWorkflow(target);format=detectWorkflowFormat(rawWorkflow);}
     catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
-    if(format==='api'){const inspected=await inspectWorkflow(target);return{path:target,...inspected,warnings:[]};}
+    if(format==='api'){
+      try{const inspected=await inspectWorkflow(target);return{path:target,...inspected,warnings:[]};}
+      catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
+    }
     const machine=settings.get();
     const client=new ComfyClient(machine.comfy.url,true);
     const ping=await client.ping();
