@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { FilmProject } from '../../shared/types';
-import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath } from './path-safety';
+import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { timelineOutputIssue } from '../../shared/timeline-policy';
 
 export interface CapCutHandoffResult{directory:string;manifestPath:string;taskPath:string;prompt:string}
@@ -33,8 +33,8 @@ export async function prepareCapCutHandoff(project:FilmProject):Promise<CapCutHa
     assets.push({id:asset.id,kind:asset.kind,name:asset.name,path,projectRelativePath:relative(project.rootPath,path),notes:asset.notes,tags:asset.tags});
   }
 
-  const stamp=new Date().toISOString().replace(/[:.]/g,'-'),handoffRoot=join(project.rootPath,'handoff','capcut');
-  await mkdir(handoffRoot,{recursive:true});const base=await assertSafeWritePath(handoffRoot,join(handoffRoot,`${stamp}-${randomUUID()}`),'CapCut handoff directory');await mkdir(base,{recursive:true});
+  const stamp=new Date().toISOString().replace(/[:.]/g,'-'),handoffRoot=await ensureSafeDirectory(project.rootPath,join(project.rootPath,'handoff','capcut'),'CapCut handoff root');
+  const base=await ensureSafeDirectory(handoffRoot,join(handoffRoot,`${stamp}-${randomUUID()}`),'CapCut handoff directory');
 
   const manifest={
     schema:'cineforge-capcut-handoff/v2',
