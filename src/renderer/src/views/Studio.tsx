@@ -52,7 +52,9 @@ export function Studio(){
   },[positions,projectId]);
   useEffect(()=>{
     if(!projectId||probe)return;
-    void window.cineforge.system.probe().then(setProbe).catch(error=>setError(error instanceof Error?error.message:String(error)));
+    let disposed=false;const requestedProjectId=projectId;
+    void window.cineforge.system.probe().then(next=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setProbe(next);}).catch(error=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setError(error instanceof Error?error.message:String(error));});
+    return()=>{disposed=true;};
   },[probe,projectId,setError,setProbe]);
 
   const sortedShots=useMemo(()=>{
