@@ -20,6 +20,15 @@ export interface ComfyPromptResult {
   node_errors?: Record<string, unknown>;
 }
 
+export function validateComfyFileRef(value:unknown,label='ComfyUI file'):ComfyFileRef{
+  if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${label} returned an invalid file record.`);
+  const candidate=value as Record<string,unknown>;
+  if(typeof candidate.filename!=='string'||!candidate.filename.trim())throw new Error(`${label} returned no usable filename.`);
+  if(candidate.subfolder!=null&&typeof candidate.subfolder!=='string')throw new Error(`${label} returned an invalid subfolder.`);
+  if(candidate.type!=null&&typeof candidate.type!=='string')throw new Error(`${label} returned an invalid file type.`);
+  return{filename:candidate.filename,...(candidate.subfolder!=null?{subfolder:candidate.subfolder as string}:{}),...(candidate.type!=null?{type:candidate.type as string}:{})};
+}
+
 export class ComfyClient {
   readonly clientId = randomUUID();
 
@@ -59,11 +68,7 @@ export class ComfyClient {
     form.append('overwrite', overwrite ? 'true' : 'false');
     const res = await this.request('/upload/image', { method: 'POST', body: form }, 120_000);
     if (!res.ok) throw new Error(`ComfyUI image upload failed: ${res.status} ${await readResponseTextLimited(res,'ComfyUI image upload error',1024*1024)}`);
-    const uploaded=await readResponseJsonLimited<ComfyFileRef>(res,'ComfyUI image upload',1024*1024);
-    if(!uploaded||typeof uploaded.filename!=='string'||!uploaded.filename.trim())throw new Error('ComfyUI image upload returned no usable filename.');
-    if(uploaded.subfolder!=null&&typeof uploaded.subfolder!=='string')throw new Error('ComfyUI image upload returned an invalid subfolder.');
-    if(uploaded.type!=null&&typeof uploaded.type!=='string')throw new Error('ComfyUI image upload returned an invalid file type.');
-    return uploaded;
+    return validateComfyFileRef(await readResponseJsonLimited<unknown>(res,'ComfyUI image upload',1024*1024),'ComfyUI image upload');
   }
 
   async queuePrompt(prompt: Record<string, unknown>, extraData: Record<string, unknown> = {}): Promise<ComfyPromptResult> {
