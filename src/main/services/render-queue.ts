@@ -154,8 +154,10 @@ export class RenderQueueService extends EventEmitter {
     const activeLease=await this.renderLeases.read();
     if(activeLease&&(activeLease.projectId!==project.id||activeLease.projectRoot!==project.rootPath))throw new Error('A signed active-render lease belongs to a different project. Open/recover that project before starting any new GPU work.');
     if(activeLease&&!project.renderJobs.some(job=>job.id===activeLease.jobId))throw new Error(`Signed active-render lease references missing job ${activeLease.jobId}. GPU ownership is uncertain; do not start new generation until the prior backend work is stopped and the lease is cleared deliberately.`);
-    const journals=await this.journal.readAll(project.rootPath,project.renderJobs.filter(job=>!TERMINAL.has(job.status)).map(job=>job.id));const byId=new Map(journals.map(j=>[j.id,j]));
-    const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id))).sort((a,b)=>{
+    const journalIds=new Set(project.renderJobs.filter(job=>!TERMINAL.has(job.status)).map(job=>job.id));if(activeLease)journalIds.add(activeLease.jobId);
+    const journals=await this.journal.readAll(project.rootPath,journalIds),byId=new Map(journals.map(j=>[j.id,j]));
+    if(activeLease&&!byId.has(activeLease.jobId))throw new Error(`Signed active-render lease exists for ${activeLease.jobId}, but its signed project journal is missing or invalid. Recovery is blocked to avoid releasing an unknown GPU backend.`);
+    const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id),activeLease?.jobId===projectJob.id)).sort((a,b)=>{
       if(activeLease){if(a.job.id===activeLease.jobId)return-1;if(b.job.id===activeLease.jobId)return 1;}
       return a.job.createdAt.localeCompare(b.job.createdAt);
     });
