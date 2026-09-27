@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadPortableProject } from '../src/main/services/project-schema';
-import { assertExistingPathInside, assertExistingProjectMediaPath } from '../src/main/services/path-safety';
+import { assertExistingPathInside, assertExistingProjectMediaPath, assertSafeWritePath } from '../src/main/services/path-safety';
 import { analyzeWanGpBindings } from '../src/main/services/wangp-engine';
 import { profileCompatibilityErrors } from '../src/main/services/profile-validation';
 import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
@@ -117,6 +117,20 @@ describe('portable project trust boundary',()=>{
       schemaVersion:2,id:'p',name:'x',story:{},scenes:[],assets:[],shots:[{id:'s',sceneId:'missing',generation:{}}],renderJobs:[],renderOutputs:[],timeline:[],
       settings:{costPolicy:{},capcut:{},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
     },'/tmp/p')).toThrow(/unknown scene/i);
+  });
+});
+
+describe('safe write target containment',()=>{
+  it('rejects an existing symlink target even when its parent directory is safe',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-write-target-')),outside=await mkdtemp(join(tmpdir(),'cineforge-write-outside-'));
+    try{
+      const dir=join(root,'.cineforge');await mkdir(dir,{recursive:true});
+      const external=join(outside,'context.json');await writeFile(external,'outside','utf8');
+      const link=join(dir,'machine-context.json');await symlink(external,link);
+      await expect(assertSafeWritePath(dir,link,'machine context')).rejects.toThrow(/symbolic-link target|symlink escape/i);
+      expect(await readFile(external,'utf8')).toBe('outside');
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
   });
 });
 
