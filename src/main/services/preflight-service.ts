@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings, FilmProject, PreflightReport, ValidationIssue, WorkflowProfile } from '../../shared/types';
 import { routeWorkflow } from './model-router';
@@ -9,7 +9,7 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { planShotReferences } from './reference-plan';
 
-async function exists(path:string):Promise<boolean>{try{await access(path);return true;}catch{return false;}}
+async function isDirectory(path:string):Promise<boolean>{try{return (await stat(path)).isDirectory();}catch{return false;}}
 
 export async function preflightProject(project:FilmProject,machine:AppMachineSettings):Promise<PreflightReport>{
   const issues:ValidationIssue[]=[];
@@ -73,7 +73,7 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
     try{const profile=routeWorkflow(project,shot);return(profile.runtime??'comfyui')==='comfyui'&&Boolean(shot.referenceVideoAssetId||shot.audioAssetId);}catch{return false;}
   });
   if(comfyShotsNeedingFileStage&&!machine.comfy.inputDir.trim())issues.push({level:'error',code:'COMFY_INPUT_REQUIRED',message:'A ComfyUI-routed shot uses input audio/video. Configure the local ComfyUI input directory in Machine Settings.'});
-  else if(machine.comfy.inputDir.trim()&&!await exists(machine.comfy.inputDir))issues.push({level:comfyShotsNeedingFileStage?'error':'warning',code:'COMFY_INPUT_MISSING',message:`Configured ComfyUI input directory does not exist: ${machine.comfy.inputDir}`});
+  else if(machine.comfy.inputDir.trim()&&!await isDirectory(machine.comfy.inputDir))issues.push({level:comfyShotsNeedingFileStage?'error':'warning',code:'COMFY_INPUT_MISSING',message:`Configured ComfyUI input directory is missing or is not a directory: ${machine.comfy.inputDir}`});
 
   for(const asset of project.assets){
     try{await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);}
