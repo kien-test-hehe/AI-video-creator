@@ -5,12 +5,14 @@ import { assertLocalUrl } from '../src/main/services/local-url';
 import { assertPathInside, assertRelativeProjectPath } from '../src/main/services/path-safety';
 import { chooseModelForShot } from '../src/shared/routing';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
+import { routeWorkflow } from '../src/main/services/model-router';
+import { parseVolumeDetectPeak, technicalQcStructuralIssues } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
-import { cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState } from '../src/main/services/comfy-client';
+import { cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
@@ -352,6 +354,18 @@ describe('canonical timeline integrity',()=>{
     expect(duplicateTimelineOrderKey([{track:0,order:0},{track:0,order:0}])).toBe('0:0');
   });
 });
+describe('technical QC structural invariants',()=>{
+  const shot:Shot={id:'qc-shot',sceneId:'scene',index:1,title:'QC',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:120,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}};
+  it('fails structural QC when duration is unmeasurable or requested audio is absent',()=>{
+    const missing=technicalQcStructuralIssues(shot,{video:{width:1280,height:704,fps:24},hasAudio:false});
+    expect(missing).toContain('Video duration could not be measured.');
+    expect(missing).toContain('Shot requested audio but output has no audio stream.');
+  });
+  it('detects a volumedetect -inf stream as silent',()=>{
+    expect(parseVolumeDetectPeak('max_volume: -inf dB')).toEqual({silent:true});
+    expect(parseVolumeDetectPeak('max_volume: -3.5 dB')).toEqual({peakDb:-3.5,silent:false});
+  });
+});
 describe('rendered take QC policy',()=>{
   const output=(technicalQc?:any)=>({id:'o',jobId:'j',shotId:'s',path:'/tmp/o.mp4',filename:'o.mp4',mediaType:'video' as const,createdAt:'x',technicalQc});
   it('requires confirmation for failed or unknown QC and not for passing takes',()=>{
@@ -479,6 +493,17 @@ describe('hardware advisor',()=>{
    expect(plan.tier).toBe('rtx50-16gb');expect(plan.recommendedWanGpProfile).toBe(4);expect(plan.defaultVideoModel).toBe('ltx-2.5-fast');
  });
 });
+describe('main-process workflow routing authority',()=>{
+  const shot:Shot={id:'route-shot',sceneId:'scene',index:1,title:'Route',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}};
+  const profile=(id:string,status:'valid'|'invalid'|'unvalidated'):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:`/tmp/${id}.json`,workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:status}});
+  it('refuses explicit and automatic production routes unless validation is valid',()=>{
+    const invalid=profile('invalid','invalid'),unvalidated=profile('unvalidated','unvalidated'),valid=profile('valid','valid');
+    const explicit=structuredClone(shot);explicit.generation.workflowProfileId='unvalidated';
+    expect(()=>routeWorkflow({settings:{workflowProfiles:[unvalidated,valid]}} as unknown as FilmProject,explicit)).toThrow(/Validate it before production use/i);
+    expect(routeWorkflow({settings:{workflowProfiles:[invalid,valid]}} as unknown as FilmProject,shot).id).toBe('valid');
+    expect(()=>routeWorkflow({settings:{workflowProfiles:[invalid]}} as unknown as FilmProject,shot)).toThrow(/No validated/i);
+  });
+});
 describe('model routing',()=>{
  it('keeps dialogue/audio on LTX 2.5 Fast',()=>{expect(chooseModelForShot(routedShot({dialogue:'Hello.'}))).toBe('ltx-2.5-fast');expect(chooseModelForShot(routedShot({generation:{...routedShot().generation,includeAudio:true}}))).toBe('ltx-2.5-fast');});
  it('routes hero shots to Hunyuan and action shots to Wan',()=>{expect(chooseModelForShot(routedShot({generation:{...routedShot().generation,quality:'hero'}}))).toBe('hunyuan-video-1.5');expect(chooseModelForShot(routedShot({camera:'fast tracking orbit',action:'car chase'}))).toBe('wan-2.2-5b');});
@@ -547,6 +572,13 @@ describe('Comfy dedicated active-work detection',()=>{
     expect(hasActiveComfyPrompts({queue_running:[[1,'p',{}]],queue_pending:[]})).toBe(true);
     expect(hasActiveComfyPrompts({queue_running:[],queue_pending:[[2,'q',{}]]})).toBe(true);
     expect(hasActiveComfyPrompts({queue_running:[],queue_pending:[]})).toBe(false);
+  });
+});
+describe('Comfy file record validation',()=>{
+  it('rejects malformed upload records and accepts a concrete filename',()=>{
+    expect(()=>validateComfyFileRef({subfolder:'x'},'upload')).toThrow(/filename/i);
+    expect(()=>validateComfyFileRef({filename:'x.png',subfolder:4},'upload')).toThrow(/subfolder/i);
+    expect(validateComfyFileRef({filename:'x.png',subfolder:'cineforge',type:'input'},'upload')).toEqual({filename:'x.png',subfolder:'cineforge',type:'input'});
   });
 });
 describe('Comfy queue identity',()=>{
