@@ -211,7 +211,7 @@ export class ProjectService {
       if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while deleting the render output. Delete was cancelled.');
       project.renderOutputs=project.renderOutputs.filter(item=>item.id!==outputId);
       for(const job of project.renderJobs)job.outputs=job.outputs.filter(item=>item.id!==outputId);
-      project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId).sort((a,b)=>a.order-b.order).map((clip,index)=>({...clip,order:index}));
+      project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId);
       const shot=project.shots.find(item=>item.id===output.shotId);
       if(shot?.latestRenderId===outputId){
         const fallback=latestPassingVideoTake(project.renderOutputs.filter(item=>item.shotId===shot.id));
