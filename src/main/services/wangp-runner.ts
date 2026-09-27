@@ -4,6 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { AppMachineSettings, FilmProject } from '../../shared/types';
 import { mapHostPathToWanGpRuntime } from './runtime-path-mapper';
+import { assertPathInside } from './path-safety';
 
 const execFileAsync=promisify(execFile);
 
@@ -15,7 +16,11 @@ export interface WanGpRunOptions {
   runId?:string;
 }
 
-export function wangpEntrypoint(machine:AppMachineSettings):string{return resolve(machine.wangp.rootPath,machine.wangp.entrypoint||'wgp.py');}
+export function wangpEntrypoint(machine:AppMachineSettings):string{
+  if(!machine.wangp.rootPath.trim())throw new Error('WanGP root path is not configured.');
+  const root=resolve(machine.wangp.rootPath);
+  return assertPathInside(root,resolve(root,machine.wangp.entrypoint||'wgp.py'),'WanGP entrypoint');
+}
 
 export async function probeWanGp(machine:AppMachineSettings):Promise<{configured:boolean;available:boolean;executionMode:'native'|'docker';rootPath:string;entrypoint?:string;pythonPath?:string;error?:string}>{
   const cfg=machine.wangp;
@@ -31,6 +36,7 @@ export async function probeWanGp(machine:AppMachineSettings):Promise<{configured
 
 export function startWanGp(project:FilmProject,machine:AppMachineSettings,options:WanGpRunOptions):ChildProcess{
   const cfg=machine.wangp;
+  wangpEntrypoint(machine);
   if(cfg.executionMode==='docker')return startDockerWanGp(project,machine,options);
   if(!cfg.rootPath.trim())throw new Error('WanGP root path is not configured.');
   const args=[wangpEntrypoint(machine),'--process',options.settingsPath,'--output-dir',options.outputDir,'--profile',String(cfg.profile||4),'--verbose','1'];
@@ -43,7 +49,8 @@ function startDockerWanGp(project:FilmProject,machine:AppMachineSettings,options
   if(!image)throw new Error('WanGP Docker image is not configured.');
   if(!cfg.rootPath.trim())throw new Error('WanGP root path is required in Docker mode so models/config can be mounted.');
   const settingsPath=mapHostPathToWanGpRuntime(project,machine,options.settingsPath),outputDir=mapHostPathToWanGpRuntime(project,machine,options.outputDir);
-  const entrypoint=`${cfg.docker.wangpMount.replace(/\/+$/,'')}/${cfg.entrypoint}`;
+  const entrypointRelative=relative(resolve(cfg.rootPath),wangpEntrypoint(machine)).replace(/\\/g,'/');
+  const entrypoint=`${cfg.docker.wangpMount.replace(/\/+$/,'')}/${entrypointRelative}`;
   const containerName=wanGpContainerName(options.runId||basename(options.settingsPath,'.json'));
   const args=['run','--rm','--name',containerName,'--gpus','all','-v',`${project.rootPath}:${cfg.docker.projectMount}`,'-v',`${cfg.rootPath}:${cfg.docker.wangpMount}`,'-w',cfg.docker.wangpMount,image,'python',entrypoint,'--process',settingsPath,'--output-dir',outputDir,'--profile',String(cfg.profile||4),'--verbose','1'];
   if(options.dryRun)args.push('--dry-run');if(cfg.attention&&cfg.attention!=='auto')args.push('--attention',cfg.attention);
