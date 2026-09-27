@@ -185,6 +185,7 @@ export class RenderQueueService extends EventEmitter {
       if(!signed){
         if(activeLease?.jobId===job.id)throw new Error(`Signed active-render lease exists for ${job.id}, but its signed project journal is missing or invalid. Recovery is blocked to avoid releasing an unknown GPU backend.`);
         await this.updateJob(job.id,{status:'orphaned',progress:0,message:'Untrusted runtime state was not resumed',error:'No valid installation-signed job journal exists for this active job. Queue a new render explicitly.'},true,false);
+        await this.restoreShotAfterOrphan(job);
         continue;
       }
       if(['queued','preparing','uploading'].includes(job.status)){
@@ -233,6 +234,7 @@ export class RenderQueueService extends EventEmitter {
           if(!recoveredJob)throw new Error('Recovered job identity is unavailable, so backend cleanup cannot be confirmed.');
           await this.cleanupRejectedRecovery(recoveredJob);
           await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
+          await this.restoreShotAfterOrphan(recoveredJob);
           releaseAllowed=true;
         }catch(cleanupError){
           const reason=`Recovery failed and backend cleanup could not be confirmed for ${jobId}: ${cleanupError instanceof Error?cleanupError.message:String(cleanupError)}`;
@@ -259,6 +261,14 @@ export class RenderQueueService extends EventEmitter {
         this.emitSnapshot();void this.pump();
       }
     }
+  }
+
+  private async restoreShotAfterOrphan(job:RenderJob):Promise<void>{
+    await this.projects.mutate(project=>{
+      const shot=project.shots.find(item=>item.id===job.shotId);if(!shot)return;
+      if(shot.latestRenderId)shot.status='rendered';
+      else shot.status=job.spec?.shot.status==='draft'?'draft':'ready';
+    });
   }
 
   private async cleanupRejectedRecovery(job:RenderJob):Promise<void>{
