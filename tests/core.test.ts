@@ -19,7 +19,7 @@ import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
-import { duplicateTimelineOrderKey, timelineOutputIssue } from '../src/shared/timeline-policy';
+import { capcutHandoffInputKey, duplicateTimelineOrderKey, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
@@ -382,6 +382,32 @@ describe('signed journal recovery policy',()=>{
   it('lets an active machine lease make the signed journal authoritative over a newer unsigned terminal summary',()=>{
     const selected=selectRecoveryJob(job('cancelled','2026-01-01T00:00:03.000Z'),job('running','2026-01-01T00:00:02.000Z'),true);
     expect(selected.job.status).toBe('running');expect(selected.signed).toBe(true);expect(selected.persistTerminal).toBe(false);
+  });
+});
+describe('foreground artifact input signatures',()=>{
+  const project=():FilmProject=>({
+    schemaVersion:2,id:'p',name:'Film',rootPath:'/project',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Film',logline:'',script:'',notes:''},
+    scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['shot']}],
+    assets:[{id:'asset',kind:'reference',name:'Ref',sourcePath:'ref.png',projectPath:'assets/ref.png',tags:['a'],notes:'note',createdAt:'2026-01-01T00:00:00.000Z'}],
+    shots:[{id:'shot',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'hello',continuityNotes:'cont',characterAssetIds:[],propAssetIds:[],referenceAssetIds:['asset'],status:'rendered',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:20,cfg:1,seed:1,negativePrompt:'',includeAudio:false},latestRenderId:'out'}],
+    renderJobs:[],
+    renderOutputs:[{id:'out',jobId:'orphaned',shotId:'shot',path:'/project/renders/out.mp4',filename:'out.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}}],
+    timeline:[{id:'clip',shotId:'shot',renderOutputId:'out',track:0,order:0,trimInSec:0,volume:1}],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  });
+  it('changes export signature only when export-relevant canonical inputs change',()=>{
+    const base=project(),before=timelineExportInputKey(base);
+    const storyEdit=structuredClone(base);storyEdit.story.notes='metadata only';expect(timelineExportInputKey(storyEdit)).toBe(before);
+    const trimEdit=structuredClone(base);trimEdit.timeline[0].trimInSec=.25;expect(timelineExportInputKey(trimEdit)).not.toBe(before);
+    const fpsEdit=structuredClone(base);fpsEdit.settings.defaultFps=30;expect(timelineExportInputKey(fpsEdit)).not.toBe(before);
+  });
+  it('changes CapCut signature when manifest-relevant story, assets, shot metadata or QC changes',()=>{
+    const base=project(),before=capcutHandoffInputKey(base);
+    const story=structuredClone(base);story.story.notes='changed';expect(capcutHandoffInputKey(story)).not.toBe(before);
+    const asset=structuredClone(base);asset.assets[0].notes='changed';expect(capcutHandoffInputKey(asset)).not.toBe(before);
+    const shot=structuredClone(base);shot.shots[0].dialogue='changed';expect(capcutHandoffInputKey(shot)).not.toBe(before);
+    const qc=structuredClone(base);qc.renderOutputs[0].technicalQc!.warnings=['warn'];expect(capcutHandoffInputKey(qc)).not.toBe(before);
   });
 });
 describe('canonical timeline integrity',()=>{
