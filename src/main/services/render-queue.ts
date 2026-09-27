@@ -691,7 +691,7 @@ export class RenderQueueService extends EventEmitter {
       const source=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
       expectedByPath.set(source,fingerprint.sha256);
     }
-    const root=join(project.rootPath,'cache','wangp-inputs',job.id);await mkdir(root,{recursive:true});
+    const root=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','wangp-inputs',job.id),'WanGP immutable input directory');
     const staged=new Map<string,string>();let index=0;
     const stage=async(source:string):Promise<string>=>{
       const cached=staged.get(source);if(cached)return cached;
@@ -714,8 +714,10 @@ export class RenderQueueService extends EventEmitter {
     const snapshotProfile=await stageWorkflowProfileSnapshot(project.rootPath,profile,job.spec!.workflowSha256,workflowSnapshotRoot);
     let compiled=await compileWanGpProfile(snapshotProfile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     await this.verifyImmutableSpec(this.requireProject(),job);
-    const cacheDir=join(project.rootPath,'cache','wangp'),outputDir=join(project.rootPath,'renders',shot.id,job.id);
-    await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(outputDir,{recursive:true})]);
+    const [cacheDir,outputDir]=await Promise.all([
+      ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','wangp'),'WanGP cache directory'),
+      ensureSafeDirectory(join(project.rootPath,'renders'),join(project.rootPath,'renders',shot.id,job.id),'WanGP render output directory')
+    ]);
     const settingsPath=await assertSafeWritePath(cacheDir,join(cacheDir,`${job.id}.json`),'WanGP job settings');
     await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
 
@@ -800,7 +802,7 @@ export class RenderQueueService extends EventEmitter {
     const machine=this.settings.get(),shot=job.spec!.shot;
     await this.updateJob(job.id,{status:'downloading',progress:.92,message:'Saving and QC-checking ComfyUI outputs'},true,true);
     const refs=collectComfyHistoryOutputRefs(history);if(!refs.length)throw new Error('ComfyUI finished but no downloadable output files were found in history.outputs.');
-    const outputDir=join(project.rootPath,'renders',shot.id,job.id);await mkdir(outputDir,{recursive:true});const outputs:RenderOutput[]=[];
+    const outputDir=await ensureSafeDirectory(join(project.rootPath,'renders'),join(project.rootPath,'renders',shot.id,job.id),'ComfyUI render output directory');const outputs:RenderOutput[]=[];
     try{
       for(const ref of refs){
         const safeLeaf=ref.filename.replace(/[\\/]/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');const safeSub=(ref.subfolder||'').replace(/[\\/]+/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');
@@ -848,14 +850,14 @@ export class RenderQueueService extends EventEmitter {
     const absolute=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`),machine=this.settings.get();
     const safeName=`${asset.id}-${basename(asset.projectPath).replace(/[^a-zA-Z0-9._-]+/g,'_')}`;
     if(machine.comfy.inputDir){
-      const subfolder=join('cineforge',project.id),targetDir=join(machine.comfy.inputDir,subfolder);await mkdir(targetDir,{recursive:true});
+      const subfolder=join('cineforge',project.id),targetDir=await ensureSafeDirectory(machine.comfy.inputDir,join(machine.comfy.inputDir,subfolder),'ComfyUI input staging directory');
       const target=await assertSafeWritePath(machine.comfy.inputDir,join(targetDir,safeName),'ComfyUI input staging');
       await copyFile(absolute,target);
       if(await sha256File(target)!==fingerprint.sha256){await rm(target,{force:true}).catch(()=>undefined);throw new Error(`Referenced asset changed while staging the immutable ComfyUI snapshot: ${asset.name}. Queue a new render.`);}
       return`${subfolder.replace(/\\/g,'/')}/${safeName}`;
     }
     if(kind==='image'){
-      const snapshotRoot=join(project.rootPath,'cache','comfy-inputs',job.id);await mkdir(snapshotRoot,{recursive:true});
+      const snapshotRoot=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','comfy-inputs',job.id),'ComfyUI immutable upload snapshot directory');
       const snapshot=await assertSafeWritePath(snapshotRoot,join(snapshotRoot,safeName),'ComfyUI immutable upload snapshot');
       try{
         await copyFile(absolute,snapshot);
