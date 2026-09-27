@@ -125,19 +125,9 @@ export class ComfyClient {
     const modern=await this.request(`/api/jobs/${encodeURIComponent(promptId)}/cancel`,{method:'POST'},10_000).catch(()=>undefined);
     if(modern&&modern.status!==404&&modern.status!==405){
       if(!modern.ok)throw new Error(`ComfyUI targeted cancel failed: ${modern.status} ${(await readResponseTextLimited(modern,'ComfyUI targeted cancel error',1024*1024)).slice(0,1000)}`);
-      const raw=await readResponseTextLimited(modern,'ComfyUI targeted cancel',1024*1024);
-      if(raw.trim()){
-        let payload:any;
-        try{payload=JSON.parse(raw);}catch{payload=undefined;}
-        if(payload?.cancelled===true)return;
-      }
-      const state=promptQueueState(await this.queue(),promptId);
-      if(state==='absent'){
-        const history=await this.history(promptId);
-        if(!history||historyWasInterrupted(history))return;
-        throw new Error(`ComfyUI prompt ${promptId} finished before cancellation could be confirmed.`);
-      }
-      throw new Error(`ComfyUI did not confirm targeted cancellation for ${promptId}; prompt is still ${state}.`);
+      await readResponseTextLimited(modern,'ComfyUI targeted cancel',1024*1024);
+      await this.waitForCancellationRelease(promptId);
+      return;
     }
 
     const before=await this.queue();
@@ -151,13 +141,16 @@ export class ComfyClient {
       throw new Error(`ComfyUI prompt ${promptId} is no longer present in queue or history.`);
     }
 
-    const deadline=Date.now()+5000;
+    await this.waitForCancellationRelease(promptId);
+  }
+
+  private async waitForCancellationRelease(promptId:string,timeoutMs=5000):Promise<void>{
+    const deadline=Date.now()+timeoutMs;
     while(Date.now()<deadline){
       const now=promptQueueState(await this.queue(),promptId);
       if(now==='absent'){
         const history=await this.history(promptId);
-        if(!history)return;
-        if(historyWasInterrupted(history))return;
+        if(!history||historyWasInterrupted(history))return;
         throw new Error(`ComfyUI prompt ${promptId} reached terminal history before cancellation was confirmed.`);
       }
       await new Promise(resolve=>setTimeout(resolve,150));
