@@ -593,7 +593,7 @@ describe('Comfy output identity',()=>{
   it('collects filenames only from history.outputs and never from prompt/input metadata',()=>{
     const completedWithoutOutputs={status:{completed:true},prompt:{inputs:{filename:'uploaded-input.png',type:'input'}}};
     expect(collectComfyHistoryOutputRefs(completedWithoutOutputs)).toEqual([]);
-    const withOutput={outputs:{'7':{images:[{filename:'result.png',subfolder:'cineforge',type:'output'}]}},prompt:{filename:'uploaded-input.png'}};
+    const withOutput={outputs:{'7':{images:[{filename:'result.png',subfolder:'cineforge',type:'output'}],metadata:{filename:'uploaded-input.png',type:'input'}}},prompt:{filename:'uploaded-input.png'}};
     expect(collectComfyHistoryOutputRefs(withOutput)).toEqual([{filename:'result.png',subfolder:'cineforge',type:'output'}]);
   });
 });
