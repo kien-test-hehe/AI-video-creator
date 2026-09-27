@@ -142,11 +142,13 @@ export class ProjectService {
 
   async importAsset(kind: AssetKind): Promise<FilmProject | null> {
     if (!this.current) throw new Error('Open a project first.');
+    const origin={id:this.current.id,rootPath:this.current.rootPath};
     const result = await dialog.showOpenDialog({ title: `Import ${kind}`, properties: ['openFile', 'multiSelections'], filters: assetImportFilters(kind) });
     if (result.canceled || result.filePaths.length === 0) return null;
     const copied:string[]=[];
     try{
       return await this.mutate(async project => {
+        if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while the asset import dialog was open. Import was cancelled.');
         for (const sourcePath of result.filePaths) {
           const id = randomUUID();
           const original = basename(sourcePath);
@@ -171,10 +173,12 @@ export class ProjectService {
   async deleteAsset(assetId:string):Promise<FilmProject>{
     const current=this.current;if(!current)throw new Error('Open a project first.');
     const asset=current.assets.find(item=>item.id===assetId);if(!asset)throw new Error('Asset not found.');
+    const origin={id:current.id,rootPath:current.rootPath};
     let absolute:string|undefined;
     try{absolute=await assertExistingRelativeProjectPath(current.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);}
     catch(error:any){if(error?.code!=='ENOENT')throw error;}
     const updated=await this.mutate(project=>{
+      if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while deleting the asset. Delete was cancelled.');
       const before=new Map(project.shots.map(shot=>[shot.id,shotProjectRenderInputKey(project,shot)]));
       project.assets=project.assets.filter(item=>item.id!==assetId);
       for(const shot of project.shots){
@@ -196,6 +200,7 @@ export class ProjectService {
   async deleteRenderOutput(outputId:string):Promise<FilmProject>{
     const current=this.current;if(!current)throw new Error('Open a project first.');
     const output=current.renderOutputs.find(item=>item.id===outputId);if(!output)throw new Error('Render output not found.');
+    const origin={id:current.id,rootPath:current.rootPath};
     const duplicatePath=current.renderOutputs.some(item=>item.id!==outputId&&resolve(item.path)===resolve(output.path));
     let absolute:string|undefined;
     if(!duplicatePath){
@@ -203,6 +208,7 @@ export class ProjectService {
       catch(error:any){if(error?.code!=='ENOENT')throw error;}
     }
     const updated=await this.mutate(project=>{
+      if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while deleting the render output. Delete was cancelled.');
       project.renderOutputs=project.renderOutputs.filter(item=>item.id!==outputId);
       for(const job of project.renderJobs)job.outputs=job.outputs.filter(item=>item.id!==outputId);
       project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId).sort((a,b)=>a.order-b.order).map((clip,index)=>({...clip,order:index}));
