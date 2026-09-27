@@ -6,6 +6,7 @@ import { extname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { AppMachineSettings, RenderRuntimeFingerprint, WorkflowProfile } from '../../shared/types';
 import { ComfyClient } from './comfy-client';
+import { assertPathInside } from './path-safety';
 
 const execFileAsync = promisify(execFile);
 
@@ -88,7 +89,7 @@ const WANGP_SOURCE_SKIP_DIRS=new Set(['.git','.venv','venv','env','models','mode
 
 export async function fingerprintWanGpSourceTree(rootPath:string,entrypointName:string):Promise<string>{
   const root=resolve(rootPath);if(!rootPath.trim())throw new Error('WanGP root path is not configured.');
-  const entrypoint=resolve(root,entrypointName);
+  const entrypoint=assertPathInside(root,resolve(root,entrypointName),'WanGP entrypoint');
   await stat(entrypoint);
   const records:Array<{path:string;sha256:string;size:number}>=[],pending=[root];let entriesSeen=0,totalSourceBytes=0;
   while(pending.length){
