@@ -5,6 +5,7 @@ import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
 import { insertTimelineOutput, reorderTimeline } from '../studio-logic';
 import { takeUseConfirmationMessage } from '../../../shared/take-policy';
+import { compareTimelineClips } from '../../../shared/timeline-policy';
 
 export function Timeline(){
   const{project,updateProject,setError,setNotice,setBusy}=useAppStore();
@@ -18,10 +19,10 @@ export function Timeline(){
     return !message||window.confirm(message);
   };
   const add=(outputId:string)=>{if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});};
-  const remove=(id:string)=>updateProject(next=>{const removed=next.timeline.find(clip=>clip.id===id);next.timeline=next.timeline.filter(clip=>clip.id!==id);if(removed){next.timeline.filter(clip=>clip.track===removed.track).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id)).forEach((clip,order)=>clip.order=order);}});
+  const remove=(id:string)=>updateProject(next=>{const removed=next.timeline.find(clip=>clip.id===id);next.timeline=next.timeline.filter(clip=>clip.id!==id);if(removed){next.timeline.filter(clip=>clip.track===removed.track).sort(compareTimelineClips).forEach((clip,order)=>clip.order=order);}});
   const move=(id:string,delta:number)=>updateProject(next=>{
     const clip=next.timeline.find(item=>item.id===id);if(!clip)return;
-    const ordered=next.timeline.filter(item=>item.track===clip.track).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id)),index=ordered.findIndex(item=>item.id===id),target=index+delta;
+    const ordered=next.timeline.filter(item=>item.track===clip.track).sort(compareTimelineClips),index=ordered.findIndex(item=>item.id===id),target=index+delta;
     if(index<0||target<0||target>=ordered.length)return;
     [ordered[index],ordered[target]]=[ordered[target],ordered[index]];ordered.forEach((item,order)=>item.order=order);
   });
@@ -88,7 +89,7 @@ export function Timeline(){
       </Card>
       <Card title="Canonical tracks" kicker="EDIT">
         <div className="timeline-drop-surface" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-cineforge-render-output')){event.preventDefault();event.dataTransfer.dropEffect='copy';}}} onDrop={dropTrack}>
-          {project.timeline.length===0?<Empty>Drag a rendered take here or add one from the left.</Empty>:<div className="timeline-track">{[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order||a.id.localeCompare(b.id)).map(clip=>{
+          {project.timeline.length===0?<Empty>Drag a rendered take here or add one from the left.</Empty>:<div className="timeline-track">{[...project.timeline].sort(compareTimelineClips).map(clip=>{
             const shot=project.shots.find(item=>item.id===clip.shotId),output=project.renderOutputs.find(item=>item.id===clip.renderOutputId);
             const duration=output?.technicalQc?.durationSec??Math.max(.01,(shot?.generation.frames||1)/Math.max(1,shot?.generation.fps||24));
             const maxIn=Math.max(0,duration-.01);
