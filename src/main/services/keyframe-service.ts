@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import type { AppMachineSettings, Asset, FilmProject, KeyframeRequest, Shot, WorkflowProfile } from '../../shared/types';
 import { ProjectService } from './project-service';
