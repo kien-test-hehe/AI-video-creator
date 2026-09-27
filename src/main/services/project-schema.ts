@@ -5,6 +5,7 @@ import type {
 } from '../../shared/types';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
+import { assertSafeJsonPath, assertSafeObjectKey } from '../../shared/safe-object';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 const MODEL_FAMILIES = new Set<ModelFamily>(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom']);
@@ -170,11 +171,14 @@ function sanitizeBinding(value: unknown): WorkflowBinding {
     ...(str(source.selector.classType, '', 256) ? { classType: str(source.selector.classType, '', 256) } : {}),
     ...(str(source.selector.titleIncludes, '', 256) ? { titleIncludes: str(source.selector.titleIncludes, '', 256) } : {})
   } : undefined;
+  const input=str(source.input,'',256)||undefined,jsonPath=str(source.jsonPath,'',1024)||undefined;
+  if(input)assertSafeObjectKey(input,'Workflow binding input');
+  if(jsonPath)assertSafeJsonPath(jsonPath,'Workflow binding JSON path');
   return {
     key: source.key,
     selector,
-    input: str(source.input, '', 256) || undefined,
-    jsonPath: str(source.jsonPath, '', 1024) || undefined,
+    input,
+    jsonPath,
     transform: ['integer','float','boolean','string'].includes(source.transform) ? source.transform : 'identity',
     required: source.required===true
   } as WorkflowBinding;
