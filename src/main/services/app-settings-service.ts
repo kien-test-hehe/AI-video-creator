@@ -57,8 +57,7 @@ export class AppSettingsService {
       try{return sanitizeMachineSettings(await readJsonFileLimited(path,'CineForge bootstrap machine settings',4*1024*1024));}
       catch(error:any){
         if(error?.code==='ENOENT')continue;
-        if(!isRecoverableBootstrapContentError(error))throw new Error(`CineForge bootstrap settings could not be read safely: ${path}: ${error instanceof Error?error.message:String(error)}`);
-        console.warn(`Ignoring invalid CineForge bootstrap settings: ${path}`,error);
+        throw new Error(`CineForge bootstrap settings are present but invalid or unreadable: ${path}: ${error instanceof Error?error.message:String(error)}`);
       }
     }
     return undefined;
@@ -134,7 +133,3 @@ function clampNumber(value:unknown,min:number,max:number,fallback:number):number
 function sanitizeLeaf(value:unknown,fallback:string):string{const text=asNonEmptyString(value,fallback);if(text.includes('/')||text.includes('\\')||text==='.'||text==='..')throw new Error('WanGP entrypoint must be a filename, not a path.');return text;}
 function sanitizeContainerPath(value:unknown,fallback:string):string{const text=asNonEmptyString(value,fallback).replace(/\\/g,'/');if(!text.startsWith('/')||text.includes('/../')||text.endsWith('/..'))throw new Error('Container mount path must be an absolute normalized Unix path.');return text.replace(/\/+$/,'')||'/';}
 
-function isRecoverableBootstrapContentError(error:any):boolean{
-  const message=error instanceof Error?error.message:String(error);
-  return /not valid JSON|too large|safety limit|not a regular file|WanGP entrypoint|Container mount path|Only loopback|endpoint/i.test(message);
-}
