@@ -133,12 +133,17 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const machine=settings.get();
     const client=new ComfyClient(machine.comfy.url,true);
     const ping=await client.ping();
-    if(!ping.reachable)return{path:target,format:'ui' as const,suggestedBindings:[],warnings:[`ComfyUI is offline, so UI workflow conversion could not run: ${ping.error||'unknown error'}`]};
+    if(!ping.reachable){await rm(target,{force:true}).catch(()=>undefined);return{path:'',format:'ui' as const,suggestedBindings:[],warnings:[`ComfyUI is offline, so UI workflow conversion could not run: ${ping.error||'unknown error'}`]};}
     const converted=uiWorkflowToApi(rawWorkflow,await client.objectInfo());
-    if(converted.requiresApiExport)return{path:target,format:'ui' as const,suggestedBindings:[],warnings:[...converted.warnings,'CineForge refused to create a partial API graph. Load it in ComfyUI, Save (API Format), and import that JSON.']};
+    if(converted.requiresApiExport){await rm(target,{force:true}).catch(()=>undefined);return{path:'',format:'ui' as const,suggestedBindings:[],warnings:[...converted.warnings,'CineForge refused to create a partial API graph. Load it in ComfyUI, Save (API Format), and import that JSON.']};}
     const apiPath=await assertSafeWritePath(join(project.rootPath,'workflows'),target.replace(/\.json$/i,'.api.json'),'converted workflow');
-    await writeFile(apiPath,JSON.stringify(converted.workflow,null,2),'utf8');
-    return{path:apiPath,format:'api' as const,suggestedBindings:suggestBindings(converted.workflow),warnings:converted.warnings};
+    try{
+      await writeFile(apiPath,JSON.stringify(converted.workflow,null,2),'utf8');
+      await rm(target,{force:true});
+      return{path:apiPath,format:'api' as const,suggestedBindings:suggestBindings(converted.workflow),warnings:converted.warnings};
+    }catch(error){
+      await rm(apiPath,{force:true}).catch(()=>undefined);await rm(target,{force:true}).catch(()=>undefined);throw error;
+    }
   }));
 
   handle(IPC.workflowImportWanGp, () => withProjectFileOperation(async () => {
@@ -159,7 +164,9 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     assertProjectStable();
     const project=requireProject(projects);
     const safe=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),path,'workflow path'),'workflow path');
-    try{return await inspectWorkflow(safe);}catch{return inspectWanGpSettings(safe);}
+    const profile=project.settings.workflowProfiles.find(item=>item.workflowPath===safe);
+    if(profile&&(profile.runtime==='wangp'||profile.workflowFormat==='wangp-settings'))return inspectWanGpSettings(safe);
+    return inspectWorkflow(safe);
   });
   handle(IPC.workflowValidate, (profileId:string) => {assertWorkflowMaintenanceAvailable();return withWorkflowValidationLock(()=>validateAndRecordProfile(projects, settings.get(), profileId));});
   handle(IPC.workflowWanGpCatalog, () => listWanGpCatalog(settings.get()));
