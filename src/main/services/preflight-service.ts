@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppMachineSettings, FilmProject, PreflightReport, ValidationIssue, WorkflowProfile } from '../../shared/types';
 import { routeWorkflow } from './model-router';
@@ -9,18 +9,20 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { planShotReferences } from './reference-plan';
 
-async function exists(path:string):Promise<boolean>{try{await access(path);return true;}catch{return false;}}
+async function isDirectory(path:string):Promise<boolean>{try{return (await stat(path)).isDirectory();}catch{return false;}}
 
 export async function preflightProject(project:FilmProject,machine:AppMachineSettings):Promise<PreflightReport>{
   const issues:ValidationIssue[]=[];
   const probe=await probeSystem(project,machine);
-  const routed=new Map<string,WorkflowProfile>();
+  const routed=new Map<string,WorkflowProfile>(),assetIds=new Set(project.assets.map(asset=>asset.id)),outputById=new Map(project.renderOutputs.map(output=>[output.id,output] as const));
+  let comfyShotsNeedingFileStage=false;
 
   for(const shot of project.shots){
     const refs=[...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((id):id is string=>Boolean(id));
-    for(const assetId of new Set(refs))if(!project.assets.some(a=>a.id===assetId))issues.push({level:'error',code:'SHOT_ASSET_MISSING',shotId:shot.id,assetId,message:`${shot.title}: referenced asset no longer exists (${assetId}).`});
+    for(const assetId of new Set(refs))if(!assetIds.has(assetId))issues.push({level:'error',code:'SHOT_ASSET_MISSING',shotId:shot.id,assetId,message:`${shot.title}: referenced asset no longer exists (${assetId}).`});
     try{
       const profile=routeWorkflow(project,shot);routed.set(profile.id,profile);
+      if((profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui'))==='comfyui'&&(shot.referenceVideoAssetId||shot.audioAssetId))comfyShotsNeedingFileStage=true;
       const keys=new Set(profile.bindings.map(binding=>binding.key));
       if(shot.startFrameAssetId&&!keys.has('startImage'))issues.push({level:'error',code:'START_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: a start frame is attached but “${profile.name}” has no startImage binding, so the frame would be ignored.`});
       if(shot.endFrameAssetId&&!keys.has('endImage'))issues.push({level:'error',code:'END_FRAME_UNBOUND',shotId:shot.id,profileId:profile.id,message:`${shot.title}: an end frame is attached but “${profile.name}” has no endImage binding.`});
@@ -50,7 +52,7 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
   if(needsWanGp&&machine.wangp.executionMode==='docker'){
     if(!probe.docker?.available)issues.push({level:'error',code:'DOCKER_UNAVAILABLE',message:`WanGP Docker mode is selected but Docker is unavailable: ${probe.docker?.error||'unknown error'}`});
     if(!machine.wangp.docker.image.trim())issues.push({level:'error',code:'WANGP_DOCKER_IMAGE',message:'WanGP Docker mode requires a configured image tag/digest.'});
-    if(probe.docker?.gpuAccessible===false)issues.push({level:'error',code:'DOCKER_GPU_RUNTIME',message:'Docker did not report an NVIDIA runtime. Verify NVIDIA Container Toolkit / --gpus support before rendering.'});
+    if(probe.docker?.gpuAccessible!==true)issues.push({level:'error',code:'DOCKER_GPU_RUNTIME',message:'Docker NVIDIA GPU runtime is not confirmed. Verify NVIDIA Container Toolkit / --gpus support before rendering.'});
   }
 
   if(!probe.ffmpeg.available)issues.push({level:'error',code:'FFMPEG_MISSING',message:'FFmpeg is unavailable. Technical QC and timeline export require FFmpeg.'});
@@ -69,15 +71,23 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
   if(project.settings.costPolicy.mode!=='codex-capcut-only')issues.push({level:'error',code:'COST_POLICY',message:'Unsupported cost policy. CineForge currently enforces Codex/ChatGPT + CapCut as the only intended recurring paid services.'});
   if(project.settings.costPolicy.allowCapcutAiCredits)issues.push({level:'warning',code:'CAPCUT_AI_CREDITS',message:'CapCut AI credits are enabled. Disable them if generation cost should remain local.'});
 
-  const comfyShotsNeedingFileStage=project.shots.some(shot=>{
-    try{const profile=routeWorkflow(project,shot);return(profile.runtime??'comfyui')==='comfyui'&&Boolean(shot.referenceVideoAssetId||shot.audioAssetId);}catch{return false;}
-  });
   if(comfyShotsNeedingFileStage&&!machine.comfy.inputDir.trim())issues.push({level:'error',code:'COMFY_INPUT_REQUIRED',message:'A ComfyUI-routed shot uses input audio/video. Configure the local ComfyUI input directory in Machine Settings.'});
-  else if(machine.comfy.inputDir.trim()&&!await exists(machine.comfy.inputDir))issues.push({level:comfyShotsNeedingFileStage?'error':'warning',code:'COMFY_INPUT_MISSING',message:`Configured ComfyUI input directory does not exist: ${machine.comfy.inputDir}`});
+  else if(machine.comfy.inputDir.trim()&&!await isDirectory(machine.comfy.inputDir))issues.push({level:comfyShotsNeedingFileStage?'error':'warning',code:'COMFY_INPUT_MISSING',message:`Configured ComfyUI input directory is missing or is not a directory: ${machine.comfy.inputDir}`});
 
   for(const asset of project.assets){
     try{await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);}
     catch(error){issues.push({level:'error',code:'ASSET_PATH_INVALID',assetId:asset.id,message:`${asset.name}: ${error instanceof Error?error.message:String(error)}`});}
+  }
+
+  const canonicalOutputIds=new Set<string>([
+    ...project.timeline.map(clip=>clip.renderOutputId),
+    ...project.shots.map(shot=>shot.latestRenderId).filter((id):id is string=>Boolean(id))
+  ]);
+  for(const outputId of canonicalOutputIds){
+    const output=outputById.get(outputId);
+    if(!output){issues.push({level:'error',code:'CANONICAL_RENDER_MISSING',message:`Canonical render output record is missing: ${outputId}.`});continue;}
+    try{await assertExistingPathInside(join(project.rootPath,'renders'),output.path,`canonical render output ${output.filename}`);}
+    catch(error){issues.push({level:'error',code:'CANONICAL_RENDER_FILE_MISSING',shotId:output.shotId,message:`${output.filename}: ${error instanceof Error?error.message:String(error)}`});}
   }
 
   const currentRuntimeFingerprints=new Map<string,Promise<string>>();

@@ -1,5 +1,6 @@
 import { readJsonFileLimited } from './json-file';
 import type { WorkflowBinding, WorkflowBindingKey, WorkflowProfile } from '../../shared/types';
+import { assertSafeObjectKey } from '../../shared/safe-object';
 
 export type ApiWorkflow = Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
 
@@ -43,11 +44,22 @@ export async function readWorkflow(path: string): Promise<any> {
   return readJsonFileLimited(path,'ComfyUI workflow JSON');
 }
 
+function parseFiniteNumberTransform(value:unknown):number{const parsed=typeof value==='number'?value:Number(typeof value==='string'?value.trim():value);if(!Number.isFinite(parsed))throw new Error(`Cannot transform value to a finite number safely: ${String(value)}`);return parsed;}
+function parseBooleanTransform(value:unknown):boolean{
+  if(typeof value==='boolean')return value;
+  if(typeof value==='number'){if(value===1)return true;if(value===0)return false;}
+  if(typeof value==='string'){
+    const normalized=value.trim().toLowerCase();
+    if(['true','1','yes','on'].includes(normalized))return true;
+    if(['false','0','no','off',''].includes(normalized))return false;
+  }
+  throw new Error(`Cannot transform value to boolean safely: ${String(value)}`);
+}
 function transformValue(value: unknown, transform: WorkflowBinding['transform']): unknown {
   switch (transform) {
-    case 'integer': return Math.round(Number(value));
-    case 'float': return Number(value);
-    case 'boolean': return Boolean(value);
+    case 'integer': return Math.round(parseFiniteNumberTransform(value));
+    case 'float': return parseFiniteNumberTransform(value);
+    case 'boolean': return parseBooleanTransform(value);
     case 'string': return value == null ? '' : String(value);
     default: return value;
   }
@@ -82,7 +94,8 @@ export function applyBindings(workflow: ApiWorkflow, bindings: WorkflowBinding[]
       if (binding.required) throw new Error(`Required ComfyUI binding has no input: ${binding.key}`);
       continue;
     }
-    for (const [, node] of matches) node.inputs[binding.input] = transformValue(value, binding.transform);
+    const input=assertSafeObjectKey(binding.input,'ComfyUI binding input');
+    for (const [, node] of matches) node.inputs[input] = transformValue(value, binding.transform);
   }
   return output;
 }
@@ -178,7 +191,7 @@ export async function validateProfileBindings(profile: WorkflowProfile): Promise
     if (count > 0) {
       const matched = Object.entries(api).filter(([id,node]) => matchesNode(id,node,binding));
       if (!binding.input) errors.push(`${binding.key}: missing input name.`);
-      else if (matched.some(([,node]) => !(binding.input! in node.inputs))) errors.push(`${binding.key}: input “${binding.input}” is not present on every matched node.`);
+      else if (matched.some(([,node]) => !Object.prototype.hasOwnProperty.call(node.inputs,binding.input!))) errors.push(`${binding.key}: input “${binding.input}” is not present on every matched node.`);
     }
   }
   return errors;
@@ -231,7 +244,7 @@ function normalizeLink(link: any): { id: string; originId: string; originSlot: n
 export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>): { workflow: ApiWorkflow; warnings: string[]; requiresApiExport: boolean } {
   const warnings: string[] = [];
   let requiresApiExport = false;
-  const result: ApiWorkflow = {};
+  const result=Object.create(null) as ApiWorkflow;
   const activeNodes = new Map<string, UiWorkflowNode>();
   for (const node of ui.nodes || []) {
     if (node.mode != null && node.mode !== 0) continue;
@@ -244,7 +257,7 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
   }
 
   for (const [nodeId, node] of activeNodes) {
-    const schema = objectInfo[node.type];
+    const schema=Object.prototype.hasOwnProperty.call(objectInfo,node.type)?objectInfo[node.type]:undefined;
     if (!schema) {
       const connected = Boolean(node.inputs?.some(input => input.link != null) || node.outputs?.some(output => (output.links?.length || 0) > 0));
       const looksLikeSubgraph = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(node.type);
@@ -256,7 +269,7 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
       }
       continue;
     }
-    const inputs: Record<string, unknown> = {};
+    const inputs=Object.create(null) as Record<string,unknown>;
     const uiInputs = new Map((node.inputs || []).map(i => [i.name, i]));
 
     for (const input of node.inputs || []) {
@@ -267,7 +280,8 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
         warnings.push(`Node ${nodeId}.${input.name} comes from disabled/bypassed node ${link.originId}; export API format if this branch is required.`);
         continue;
       }
-      if (!objectInfo[activeNodes.get(link.originId)!.type]) continue;
+      const originType=activeNodes.get(link.originId)!.type;
+      if(!Object.prototype.hasOwnProperty.call(objectInfo,originType))continue;
       inputs[input.name] = [link.originId, link.originSlot];
     }
 

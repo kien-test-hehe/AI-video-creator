@@ -1,6 +1,7 @@
 import { readJsonFileLimited } from './json-file';
 import type { WorkflowBinding,WorkflowBindingKey,WorkflowProfile } from '../../shared/types';
 import type { WorkflowValues } from './workflow-engine';
+import { parseSafeJsonPath } from '../../shared/safe-object';
 
 const KEY_HINTS:Record<WorkflowBindingKey,string[]>={
   prompt:['prompt','text_prompt','positive_prompt'],negativePrompt:['negative_prompt','negative'],width:['width'],height:['height'],resolution:['resolution','size'],frames:['frames','num_frames','frame_count','length','video_length'],fps:['fps','frame_rate','force_fps'],steps:['steps','num_steps','num_inference_steps'],cfg:['cfg','guidance','guidance_scale'],seed:['seed'],
@@ -10,10 +11,11 @@ const KEY_HINTS:Record<WorkflowBindingKey,string[]>={
   inputAudio:['audio_guide','input_audio','audio_path'],inputVideo:['video_guide','input_video','video_path'],filenamePrefix:['filename_prefix','output_prefix']
 };
 
-function transformValue(value:unknown,transform:WorkflowBinding['transform']):unknown{switch(transform){case'integer':return Math.round(Number(value));case'float':return Number(value);case'boolean':return Boolean(value);case'string':return value==null?'':String(value);default:return value;}}
-function splitPath(path:string):Array<string|number>{const result:Array<string|number>=[];for(const part of path.split('.')){const re=/([^\[\]]+)|\[(\d+)\]/g;let match:RegExpExecArray|null;while((match=re.exec(part)))result.push(match[2]!=null?Number(match[2]):match[1]);}return result;}
-function hasPath(root:any,path:string):boolean{let cur=root;for(const key of splitPath(path)){if(cur==null||!(key in Object(cur)))return false;cur=cur[key as any];}return true;}
-function setPath(root:any,path:string,value:unknown):void{const parts=splitPath(path);if(!parts.length)throw new Error(`Invalid WanGP JSON path: ${path}`);let cur=root;for(let i=0;i<parts.length-1;i++){const key=parts[i];if(cur[key as any]==null)cur[key as any]=typeof parts[i+1]==='number'?[]:{};cur=cur[key as any];}cur[parts.at(-1) as any]=value;}
+function parseFiniteNumberTransform(value:unknown):number{const parsed=typeof value==='number'?value:Number(typeof value==='string'?value.trim():value);if(!Number.isFinite(parsed))throw new Error(`Cannot transform value to a finite number safely: ${String(value)}`);return parsed;}
+function parseBooleanTransform(value:unknown):boolean{if(typeof value==='boolean')return value;if(typeof value==='number'){if(value===1)return true;if(value===0)return false;}if(typeof value==='string'){const normalized=value.trim().toLowerCase();if(['true','1','yes','on'].includes(normalized))return true;if(['false','0','no','off',''].includes(normalized))return false;}throw new Error(`Cannot transform value to boolean safely: ${String(value)}`);}
+function transformValue(value:unknown,transform:WorkflowBinding['transform']):unknown{switch(transform){case'integer':return Math.round(parseFiniteNumberTransform(value));case'float':return parseFiniteNumberTransform(value);case'boolean':return parseBooleanTransform(value);case'string':return value==null?'':String(value);default:return value;}}
+function hasPath(root:any,path:string):boolean{let cur=root;for(const key of parseSafeJsonPath(path,'WanGP binding JSON path')){if(cur==null||!Object.prototype.hasOwnProperty.call(Object(cur),key))return false;cur=cur[key as any];}return true;}
+function setPath(root:any,path:string,value:unknown):void{const parts=parseSafeJsonPath(path,'WanGP binding JSON path');let cur=root;for(let i=0;i<parts.length-1;i++){const key=parts[i];if(cur==null||!Object.prototype.hasOwnProperty.call(Object(cur),key))throw new Error(`WanGP binding path no longer exists: ${path}`);cur=cur[key as any];}const leaf=parts.at(-1)!;if(cur==null||!Object.prototype.hasOwnProperty.call(Object(cur),leaf))throw new Error(`WanGP binding path no longer exists: ${path}`);cur[leaf as any]=value;}
 
 export function analyzeWanGpBindings(settings:any):{bindings:WorkflowBinding[];warnings:string[]}{
   const leaves:Array<{path:string;key:string;value:unknown}>=[];

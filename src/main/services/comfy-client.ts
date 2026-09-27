@@ -1,10 +1,12 @@
-import { readFile, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { assertLocalUrl } from './local-url';
+import { readFileBufferLimited } from './json-file';
+import { readResponseBufferLimited, readResponseJsonLimited, readResponseTextLimited } from './http-response';
 
 export interface ComfyFileRef {
   filename: string;
@@ -16,6 +18,15 @@ export interface ComfyPromptResult {
   prompt_id: string;
   number?: number;
   node_errors?: Record<string, unknown>;
+}
+
+export function validateComfyFileRef(value:unknown,label='ComfyUI file'):ComfyFileRef{
+  if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${label} returned an invalid file record.`);
+  const candidate=value as Record<string,unknown>;
+  if(typeof candidate.filename!=='string'||!candidate.filename.trim())throw new Error(`${label} returned no usable filename.`);
+  if(candidate.subfolder!=null&&typeof candidate.subfolder!=='string')throw new Error(`${label} returned an invalid subfolder.`);
+  if(candidate.type!=null&&typeof candidate.type!=='string')throw new Error(`${label} returned an invalid file type.`);
+  return{filename:candidate.filename,...(candidate.subfolder!=null?{subfolder:candidate.subfolder as string}:{}),...(candidate.type!=null?{type:candidate.type as string}:{})};
 }
 
 export class ComfyClient {
@@ -37,7 +48,7 @@ export class ComfyClient {
     try {
       const res = await this.request('/system_stats', {}, 5_000);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      return { reachable: true, url: this.baseUrl, systemStats: await res.json() };
+      return { reachable: true, url: this.baseUrl, systemStats: await readResponseJsonLimited(res,'ComfyUI system_stats',2*1024*1024) };
     } catch (error) {
       return { reachable: false, url: this.baseUrl, error: error instanceof Error ? error.message : String(error) };
     }
@@ -46,18 +57,18 @@ export class ComfyClient {
   async objectInfo(): Promise<Record<string, any>> {
     const res = await this.request('/object_info', {}, 30_000);
     if (!res.ok) throw new Error(`ComfyUI /object_info failed: ${res.status}`);
-    return res.json();
+    return readResponseJsonLimited(res,'ComfyUI object_info',64*1024*1024);
   }
 
   async uploadImage(path: string, overwrite = true): Promise<ComfyFileRef> {
-    const bytes = await readFile(path);
+    const bytes = await readFileBufferLimited(path,'ComfyUI image upload',128*1024*1024);
     const form = new FormData();
-    form.append('image', new Blob([bytes]), basename(path));
+    form.append('image', new Blob([Uint8Array.from(bytes)]), basename(path));
     form.append('type', 'input');
     form.append('overwrite', overwrite ? 'true' : 'false');
     const res = await this.request('/upload/image', { method: 'POST', body: form }, 120_000);
-    if (!res.ok) throw new Error(`ComfyUI image upload failed: ${res.status} ${await res.text()}`);
-    return res.json() as Promise<ComfyFileRef>;
+    if (!res.ok) throw new Error(`ComfyUI image upload failed: ${res.status} ${await readResponseTextLimited(res,'ComfyUI image upload error',1024*1024)}`);
+    return validateComfyFileRef(await readResponseJsonLimited<unknown>(res,'ComfyUI image upload',1024*1024),'ComfyUI image upload');
   }
 
   async queuePrompt(prompt: Record<string, unknown>, extraData: Record<string, unknown> = {}): Promise<ComfyPromptResult> {
@@ -66,7 +77,7 @@ export class ComfyClient {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt, client_id: this.clientId, extra_data: extraData })
     }, 30_000);
-    const raw=await res.text();let payload:any;
+    const raw=await readResponseTextLimited(res,'ComfyUI prompt submission',4*1024*1024);let payload:any;
     try{payload=raw?JSON.parse(raw):{};}catch{throw new Error(`ComfyUI /prompt returned ${res.status} with non-JSON body: ${raw.slice(0,1000)}`);}
     if (!res.ok || payload.error) {
       throw new Error(`ComfyUI rejected prompt (${res.status}): ${JSON.stringify(payload).slice(0,4000)}`);
@@ -78,14 +89,14 @@ export class ComfyClient {
   async history(promptId: string): Promise<any | null> {
     const res = await this.request(`/history/${encodeURIComponent(promptId)}`, {}, 15_000);
     if (!res.ok) throw new Error(`ComfyUI history failed: ${res.status}`);
-    const history = await res.json() as Record<string, any>;
+    const history = await readResponseJsonLimited<Record<string,any>>(res,'ComfyUI prompt history',64*1024*1024);
     return history[promptId] ?? null;
   }
 
   async historyAll():Promise<Record<string,any>>{
     const res=await this.request('/history',{},30_000);
     if(!res.ok)throw new Error(`ComfyUI history list failed: ${res.status}`);
-    const history=await res.json();
+    const history=await readResponseJsonLimited<Record<string,any>>(res,'ComfyUI history list',128*1024*1024);
     if(!history||typeof history!=='object'||Array.isArray(history))throw new Error('ComfyUI history list returned an invalid payload.');
     return history as Record<string,any>;
   }
@@ -93,7 +104,7 @@ export class ComfyClient {
   async queue(): Promise<any> {
     const res = await this.request('/queue', {}, 15_000);
     if (!res.ok) throw new Error(`ComfyUI queue failed: ${res.status}`);
-    return res.json();
+    return readResponseJsonLimited(res,'ComfyUI queue',64*1024*1024);
   }
 
   async deleteQueued(promptId:string):Promise<void>{
@@ -113,11 +124,10 @@ export class ComfyClient {
   async cancelPrompt(promptId:string):Promise<void>{
     const modern=await this.request(`/api/jobs/${encodeURIComponent(promptId)}/cancel`,{method:'POST'},10_000).catch(()=>undefined);
     if(modern&&modern.status!==404&&modern.status!==405){
-      if(!modern.ok)throw new Error(`ComfyUI targeted cancel failed: ${modern.status} ${(await modern.text()).slice(0,1000)}`);
-      const payload=await modern.json().catch(()=>({})) as {cancelled?:boolean};
-      if(payload.cancelled===true)return;
-      if(await this.history(promptId))throw new Error(`ComfyUI prompt ${promptId} finished before cancellation could be applied.`);
-      throw new Error(`ComfyUI did not confirm targeted cancellation for ${promptId}.`);
+      if(!modern.ok)throw new Error(`ComfyUI targeted cancel failed: ${modern.status} ${(await readResponseTextLimited(modern,'ComfyUI targeted cancel error',1024*1024)).slice(0,1000)}`);
+      await readResponseTextLimited(modern,'ComfyUI targeted cancel',1024*1024);
+      await this.waitForCancellationRelease(promptId);
+      return;
     }
 
     const before=await this.queue();
@@ -131,13 +141,16 @@ export class ComfyClient {
       throw new Error(`ComfyUI prompt ${promptId} is no longer present in queue or history.`);
     }
 
-    const deadline=Date.now()+5000;
+    await this.waitForCancellationRelease(promptId);
+  }
+
+  private async waitForCancellationRelease(promptId:string,timeoutMs=5000):Promise<void>{
+    const deadline=Date.now()+timeoutMs;
     while(Date.now()<deadline){
       const now=promptQueueState(await this.queue(),promptId);
       if(now==='absent'){
         const history=await this.history(promptId);
-        if(!history)return;
-        if(historyWasInterrupted(history))return;
+        if(!history||historyWasInterrupted(history))return;
         throw new Error(`ComfyUI prompt ${promptId} reached terminal history before cancellation was confirmed.`);
       }
       await new Promise(resolve=>setTimeout(resolve,150));
@@ -147,7 +160,7 @@ export class ComfyClient {
 
   async download(ref: ComfyFileRef): Promise<Uint8Array> {
     const res=await this.outputResponse(ref);
-    return new Uint8Array(await res.arrayBuffer());
+    return readResponseBufferLimited(res,'ComfyUI output download',256*1024*1024);
   }
 
   async downloadToFile(ref:ComfyFileRef,destination:string):Promise<void>{
@@ -167,7 +180,7 @@ export class ComfyClient {
     if(ref.subfolder)url.searchParams.set('subfolder',ref.subfolder);
     if(ref.type)url.searchParams.set('type',ref.type);
     const res=await fetch(url,{signal:AbortSignal.timeout(timeoutMs)});
-    if(!res.ok)throw new Error(`ComfyUI output download failed: ${res.status} ${(await res.text()).slice(0,1000)}`);
+    if(!res.ok)throw new Error(`ComfyUI output download failed: ${res.status} ${(await readResponseTextLimited(res,'ComfyUI output error',1024*1024)).slice(0,1000)}`);
     return res;
   }
 }

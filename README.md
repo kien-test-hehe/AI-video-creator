@@ -157,7 +157,7 @@ A video route that produces no video or fails technical QC becomes a failed job,
 **Finishing → Prepare CapCut handoff** validates the current canonical timeline and writes:
 
 ```text
-handoff/capcut/<timestamp>/
+handoff/capcut/<timestamp>-<uuid>/
   manifest.json
   CODEX_CAPCUT_TASK.md
 ```

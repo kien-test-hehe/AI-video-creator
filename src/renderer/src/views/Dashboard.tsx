@@ -9,33 +9,49 @@ export function Dashboard(){
   const [checking,setChecking]=useState(false);
 
   const runProbe=async()=>{
-    try{setProbe(await window.cineforge.system.probe());}
-    catch(e){setError(e instanceof Error?e.message:String(e));}
+    const requestedProjectId=useAppStore.getState().project?.id;
+    try{
+      const next=await window.cineforge.system.probe();
+      if(useAppStore.getState().project?.id===requestedProjectId)setProbe(next);
+    }catch(e){if(useAppStore.getState().project?.id===requestedProjectId)setError(e instanceof Error?e.message:String(e));}
   };
   const preflight=async()=>{
     if(!project)return;
-    try{setChecking(true);await useAppStore.getState().persist();const r=await window.cineforge.project.preflight();setReport(r);setProbe(r.probe);}
-    catch(e){setError(e instanceof Error?e.message:String(e));}
+    try{
+      setChecking(true);await useAppStore.getState().persist();
+      const baseline=useAppStore.getState(),baselineProject=baseline.project;
+      if(!baselineProject||baseline.projectDirty)throw new Error('Project changed while saving. Run preflight again after the current edit/save cycle finishes.');
+      const revision=baselineProject.updatedAt,r=await window.cineforge.project.preflight(),current=useAppStore.getState();
+      if(!current.project||current.project.id!==baselineProject.id||current.project.updatedAt!==revision||current.projectDirty){
+        setReport(undefined);setNotice('Preflight result was discarded because the project changed while checks were running.');return;
+      }
+      setReport(r);setProbe(r.probe);
+    }catch(e){setError(e instanceof Error?e.message:String(e));}
     finally{setChecking(false);}
   };
   const queueUnrendered=async()=>{
     if(!project)return;
     try{
       await useAppStore.getState().persist();
-      const checked=await window.cineforge.project.preflight();
+      const baseline=useAppStore.getState(),baselineProject=baseline.project;
+      if(!baselineProject||baseline.projectDirty)throw new Error('Project changed while saving. Finish the current edit/save cycle before batch rendering.');
+      const revision=baselineProject.updatedAt,checked=await window.cineforge.project.preflight(),current=useAppStore.getState();
+      if(!current.project||current.project.id!==baselineProject.id||current.project.updatedAt!==revision||current.projectDirty){
+        setReport(undefined);throw new Error('Project changed while preflight was running. Run the checks again before batch rendering.');
+      }
       setReport(checked);setProbe(checked.probe);
       if(!checked.ready){setError('Preflight has blocking errors. Fix them before batch rendering.');return;}
-      const ordered=[...project.shots].sort((a,b)=>{
-        const sa=project.scenes.find(s=>s.id===a.sceneId)?.index??0;
-        const sb=project.scenes.find(s=>s.id===b.sceneId)?.index??0;
+      const ordered=[...current.project.shots].sort((a,b)=>{
+        const sa=current.project!.scenes.find(s=>s.id===a.sceneId)?.index??0;
+        const sb=current.project!.scenes.find(s=>s.id===b.sceneId)?.index??0;
         return sa-sb||a.index-b.index;
       });
-      const snapshot=await window.cineforge.render.enqueueBatch({projectRoot:project.rootPath,shotIds:ordered.map(s=>s.id),skipIfRendered:true});
+      const snapshot=await window.cineforge.render.enqueueBatch({projectRoot:current.project.rootPath,shotIds:ordered.map(s=>s.id),skipIfRendered:true});
       setQueue(snapshot);setNotice('Queued all unrendered shots with immutable render snapshots.');setView('queue');
     }catch(e){setError(e instanceof Error?e.message:String(e));}
   };
   const projectId=project?.id;
-  useEffect(()=>{void window.cineforge.system.probe().then(setProbe).catch(e=>setError(e instanceof Error?e.message:String(e)));},[projectId,setError,setProbe]);
+  useEffect(()=>{let disposed=false;const requestedProjectId=projectId;void window.cineforge.system.probe().then(next=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setProbe(next);}).catch(e=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setError(e instanceof Error?e.message:String(e));});return()=>{disposed=true;};},[projectId,setError,setProbe]);
 
   return <Page title="System & production overview" subtitle="Inspect this workstation before opening a project; project-specific render checks appear once a film is open." actions={<div className="row"><button className="ghost" onClick={runProbe}>Probe system</button><button className="ghost" disabled={!project||checking||project.shots.length===0} onClick={preflight}>{checking?'Checking…':'Run preflight'}</button><button className="primary" disabled={!project||checking||project.shots.length===0} onClick={queueUnrendered}>Render unrendered</button></div>}>
     <div className="grid two">

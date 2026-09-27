@@ -27,7 +27,14 @@ function Require-Command([string]$Name) {
 }
 
 function Ensure-Node {
-  if (Test-Path (Join-Path $NodeRoot 'node.exe')) { return }
+  $existingNode = Join-Path $NodeRoot 'node.exe'
+  if (Test-Path $existingNode) {
+    try {
+      $reported = (& $existingNode --version).Trim().TrimStart('v')
+      if ($reported -eq $NodeVersion) { return }
+    } catch {}
+    throw "Portable Node runtime exists but is not the expected v$NodeVersion. Remove $NodeRoot and rerun setup."
+  }
   Step "Installing portable Node.js $NodeVersion into .runtime"
   New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
   $fileName = "node-v$NodeVersion-win-x64.zip"
@@ -164,7 +171,7 @@ Assert-Nvidia
 $python = Ensure-Python311
 $ff = Ensure-FFmpeg
 $wanPython = Ensure-WanGP $python
-$effectiveWanRoot = if (Test-Path (Join-Path $WanRoot 'wgp.py')) { $WanRoot } else { '' }
+$effectiveWanRoot = if (-not $SkipWanGP -and (Test-Path (Join-Path $WanRoot 'wgp.py'))) { $WanRoot } else { '' }
 $ffmpegPath = $ff[0]
 $ffprobePath = $ff[1]
 

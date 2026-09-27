@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { dialog } from 'electron';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
@@ -8,6 +8,7 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { loadPortableProject } from './project-schema';
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
+import { readJsonFileLimited } from './json-file';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -66,30 +67,31 @@ export class ProjectService {
     const openedRoot = resolve(rootPath);
     const file = join(openedRoot, PROJECT_FILE);
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
-    let raw: unknown;
-    try {
-      const info=await stat(file);
-      if(info.size>50*1024*1024)throw new Error('Project file exceeds the 50 MB safety limit.');
-      raw = JSON.parse(await readFile(file, 'utf8'));
-    }
-    catch (primaryError) {
-      try {
-        const backupInfo=await stat(backup);
-        if(backupInfo.size>50*1024*1024)throw new Error('Backup project file exceeds the 50 MB safety limit.');
-        raw = JSON.parse(await readFile(backup, 'utf8'));
-        await copyFile(backup, file);
-        console.warn('Recovered CineForge project from backup after the primary project file could not be parsed.', primaryError);
-      } catch { throw primaryError; }
+    await this.assertProjectStateFileNotSymlink(file,'CineForge project file');
+    await this.assertProjectStateFileNotSymlink(backup,'CineForge backup project file');
+    let raw:unknown,loaded:ReturnType<typeof loadPortableProject>,recoveredFromBackup=false,primaryFailure:unknown;
+    try{
+      raw=await readJsonFileLimited(file,'CineForge project file',50*1024*1024);
+      loaded=loadPortableProject(raw,openedRoot);
+    }catch(primaryError){
+      primaryFailure=primaryError;
+      try{
+        raw=await readJsonFileLimited(backup,'CineForge backup project file',50*1024*1024);
+        loaded=loadPortableProject(raw,openedRoot);
+        recoveredFromBackup=true;
+      }catch(backupError){
+        throw new Error(`CineForge project could not be loaded from primary or backup. Primary: ${primaryError instanceof Error?primaryError.message:String(primaryError)}. Backup: ${backupError instanceof Error?backupError.message:String(backupError)}`);
+      }
     }
 
-    const loaded = loadPortableProject(raw, openedRoot);
-    const project = loaded.project;
+    const project=loaded.project;
     const storedRoot = typeof (raw as any)?.rootPath === 'string' ? resolve((raw as any).rootPath) : openedRoot;
     if (storedRoot !== openedRoot) this.rebasePortablePaths(project, storedRoot, openedRoot);
 
     await this.ensureFolders(project.rootPath);
     await this.validateStoragePaths(project);
     const committed=await this.persistUnlocked(project);
+    if(recoveredFromBackup)console.warn('Recovered CineForge project from backup after the primary project file failed validation.',primaryFailure);
     if (loaded.migrationNotes.length) console.warn(loaded.migrationNotes.join('\n'));
     return committed;
   }
@@ -113,9 +115,15 @@ export class ProjectService {
       });
       const currentShots = new Map(this.current.shots.map(shot => [shot.id, shot]));
       for (const shot of incoming.shots) {
-        const currentShot=currentShots.get(shot.id);if(!currentShot)continue;
+        const currentShot=currentShots.get(shot.id);
+        if(!currentShot){
+          shot.latestRenderId=undefined;
+          shot.status=shot.status==='ready'?'ready':'draft';
+          continue;
+        }
         if(shotProjectRenderInputKey(incoming,shot)!==shotProjectRenderInputKey(this.current,currentShot)){
-          shot.status=shot.latestRenderId?'rendered':currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
+          shot.latestRenderId=undefined;
+          shot.status=currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
         }else{
           shot.status=currentShot.status;
           shot.latestRenderId=currentShot.latestRenderId;
@@ -140,31 +148,43 @@ export class ProjectService {
 
   async importAsset(kind: AssetKind): Promise<FilmProject | null> {
     if (!this.current) throw new Error('Open a project first.');
+    const origin={id:this.current.id,rootPath:this.current.rootPath};
     const result = await dialog.showOpenDialog({ title: `Import ${kind}`, properties: ['openFile', 'multiSelections'], filters: assetImportFilters(kind) });
     if (result.canceled || result.filePaths.length === 0) return null;
-    return this.mutate(async project => {
-      for (const sourcePath of result.filePaths) {
-        const id = randomUUID();
-        const original = basename(sourcePath);
-        const safeName = original.replace(/[^a-zA-Z0-9._-]+/g, '_');
-        const relativePath = join('assets', kind, `${id}-${safeName}`);
-        const target = await assertSafeWritePath(join(project.rootPath,'assets'), join(project.rootPath,relativePath), 'asset import target');
-        await mkdir(join(project.rootPath, 'assets', kind), { recursive: true });
-        await copyFile(sourcePath, target);
-        project.assets.push({
-          id, kind,
-          name: original.slice(0, Math.max(1, original.length - extname(original).length)),
-          sourcePath: original, projectPath: relativePath, tags: [], notes: '', createdAt: new Date().toISOString()
-        });
-      }
-    });
+    const copied:string[]=[];
+    try{
+      return await this.mutate(async project => {
+        if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while the asset import dialog was open. Import was cancelled.');
+        for (const sourcePath of result.filePaths) {
+          const id = randomUUID();
+          const original = basename(sourcePath);
+          const safeName = original.replace(/[^a-zA-Z0-9._-]+/g, '_');
+          const relativePath = join('assets', kind, `${id}-${safeName}`);
+          const target = await assertSafeWritePath(join(project.rootPath,'assets'), join(project.rootPath,relativePath), 'asset import target');
+          await mkdir(join(project.rootPath, 'assets', kind), { recursive: true });
+          await copyFile(sourcePath, target);copied.push(target);
+          project.assets.push({
+            id, kind,
+            name: original.slice(0, Math.max(1, original.length - extname(original).length)),
+            sourcePath: original, projectPath: relativePath, tags: [], notes: '', createdAt: new Date().toISOString()
+          });
+        }
+      });
+    }catch(error){
+      for(const path of copied)await rm(path,{force:true}).catch(cleanupError=>console.warn(`Could not remove rolled-back asset import: ${path}`,cleanupError));
+      throw error;
+    }
   }
 
   async deleteAsset(assetId:string):Promise<FilmProject>{
     const current=this.current;if(!current)throw new Error('Open a project first.');
     const asset=current.assets.find(item=>item.id===assetId);if(!asset)throw new Error('Asset not found.');
-    const absolute=await assertExistingRelativeProjectPath(current.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`).catch(()=>undefined);
+    const origin={id:current.id,rootPath:current.rootPath};
+    let absolute:string|undefined;
+    try{absolute=await assertExistingRelativeProjectPath(current.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);}
+    catch(error:any){if(error?.code!=='ENOENT')throw error;}
     const updated=await this.mutate(project=>{
+      if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while deleting the asset. Delete was cancelled.');
       const before=new Map(project.shots.map(shot=>[shot.id,shotProjectRenderInputKey(project,shot)]));
       project.assets=project.assets.filter(item=>item.id!==assetId);
       for(const shot of project.shots){
@@ -186,12 +206,18 @@ export class ProjectService {
   async deleteRenderOutput(outputId:string):Promise<FilmProject>{
     const current=this.current;if(!current)throw new Error('Open a project first.');
     const output=current.renderOutputs.find(item=>item.id===outputId);if(!output)throw new Error('Render output not found.');
+    const origin={id:current.id,rootPath:current.rootPath};
     const duplicatePath=current.renderOutputs.some(item=>item.id!==outputId&&resolve(item.path)===resolve(output.path));
-    const absolute=duplicatePath?undefined:await assertExistingPathInside(join(current.rootPath,'renders'),output.path,'render output').catch(()=>undefined);
+    let absolute:string|undefined;
+    if(!duplicatePath){
+      try{absolute=await assertExistingPathInside(join(current.rootPath,'renders'),output.path,'render output');}
+      catch(error:any){if(error?.code!=='ENOENT')throw error;}
+    }
     const updated=await this.mutate(project=>{
+      if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while deleting the render output. Delete was cancelled.');
       project.renderOutputs=project.renderOutputs.filter(item=>item.id!==outputId);
       for(const job of project.renderJobs)job.outputs=job.outputs.filter(item=>item.id!==outputId);
-      project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId).sort((a,b)=>a.order-b.order).map((clip,index)=>({...clip,order:index}));
+      project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId);
       const shot=project.shots.find(item=>item.id===output.shotId);
       if(shot?.latestRenderId===outputId){
         const fallback=latestPassingVideoTake(project.renderOutputs.filter(item=>item.shotId===shot.id));
@@ -285,15 +311,24 @@ export class ProjectService {
     const serializable = structuredClone(project);
     const projectFile = join(project.rootPath, PROJECT_FILE);
     const backupFile = join(project.rootPath, PROJECT_BACKUP_FILE);
-    const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${process.pid}.tmp`);
+    const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${randomUUID()}.tmp`);
+    await this.assertProjectStateFileNotSymlink(projectFile,'CineForge project file');
+    await this.assertProjectStateFileNotSymlink(backupFile,'CineForge backup project file');
     const payload = JSON.stringify(serializable, null, 2);
-    try { await copyFile(projectFile, backupFile); }
-    catch(error:any){if(error?.code!=='ENOENT')throw new Error(`Could not create project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
-    await writeFile(tempFile, payload, 'utf8');
+    const previous=this.current&&this.current.id===project.id&&this.current.rootPath===project.rootPath?structuredClone(this.current):undefined;
+    if(previous){
+      const backupPayload=JSON.stringify(previous,null,2);
+      try{await writeFile(backupFile,backupPayload,{encoding:'utf8',mode:0o600});}
+      catch(error){throw new Error(`Could not create trusted project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
+    }else{
+      try{await writeFile(backupFile,payload,{encoding:'utf8',mode:0o600});}
+      catch(error){throw new Error(`Could not initialize or repair trusted project backup: ${error instanceof Error?error.message:String(error)}`);}
+    }
+    await writeFile(tempFile, payload, {encoding:'utf8',flag:'wx'});
     try { await rename(tempFile, projectFile); }
     catch (error: any) {
       if (!['EEXIST','EPERM','EACCES'].includes(error?.code)){await rm(tempFile,{force:true}).catch(()=>undefined);throw error;}
-      try{await writeFile(projectFile, payload, 'utf8');}
+      try{await this.assertProjectStateFileNotSymlink(projectFile,'CineForge project file');await writeFile(projectFile, payload, 'utf8');}
       finally{await rm(tempFile, { force: true }).catch(() => undefined);}
     }
     this.current = serializable;
@@ -306,6 +341,14 @@ export class ProjectService {
     this.gate = new Promise<void>(resolve => { release = resolve; });
     await previous;
     try { return await operation(); } finally { release(); }
+  }
+
+  private async assertProjectStateFileNotSymlink(path:string,label:string):Promise<void>{
+    try{
+      const info=await lstat(path);
+      if(info.isSymbolicLink())throw new Error(`${label} must not be a symbolic link.`);
+      if(!info.isFile())throw new Error(`${label} is not a regular file.`);
+    }catch(error:any){if(error?.code!=='ENOENT')throw error;}
   }
 
   private async ensureFolders(rootPath: string): Promise<void> {

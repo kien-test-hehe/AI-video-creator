@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { FilmProject } from '../../shared/types';
-import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath } from './path-safety';
-import { timelineOutputIssue } from '../../shared/timeline-policy';
+import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
+import { compareTimelineClips, timelineOutputIssue } from '../../shared/timeline-policy';
 
 export interface CapCutHandoffResult{directory:string;manifestPath:string;taskPath:string;prompt:string}
 
@@ -10,7 +11,7 @@ export async function prepareCapCutHandoff(project:FilmProject):Promise<CapCutHa
   if(!project.settings.capcut.enabled)throw new Error('CapCut handoff is disabled for this project.');
   if(!project.timeline.length)throw new Error('Timeline is empty. Build the canonical CineForge cut before creating a CapCut handoff.');
 
-  const ordered=[...project.timeline].sort((a,b)=>a.track-b.track||a.order-b.order);
+  const ordered=[...project.timeline].sort(compareTimelineClips);
   const seen=new Set<string>();
   const clips=[];
   for(const clip of ordered){
@@ -32,8 +33,8 @@ export async function prepareCapCutHandoff(project:FilmProject):Promise<CapCutHa
     assets.push({id:asset.id,kind:asset.kind,name:asset.name,path,projectRelativePath:relative(project.rootPath,path),notes:asset.notes,tags:asset.tags});
   }
 
-  const stamp=new Date().toISOString().replace(/[:.]/g,'-'),handoffRoot=join(project.rootPath,'handoff','capcut');
-  await mkdir(handoffRoot,{recursive:true});const base=await assertSafeWritePath(handoffRoot,join(handoffRoot,stamp),'CapCut handoff directory');await mkdir(base,{recursive:true});
+  const stamp=new Date().toISOString().replace(/[:.]/g,'-'),handoffRoot=await ensureSafeDirectory(project.rootPath,join(project.rootPath,'handoff','capcut'),'CapCut handoff root');
+  const base=await ensureSafeDirectory(handoffRoot,join(handoffRoot,`${stamp}-${randomUUID()}`),'CapCut handoff directory');
 
   const manifest={
     schema:'cineforge-capcut-handoff/v2',
@@ -45,6 +46,12 @@ export async function prepareCapCutHandoff(project:FilmProject):Promise<CapCutHa
   const prompt='Open the official CapCut × Codex workflow and build an editable CapCut draft from this CineForge handoff. Preserve clip order, trims, dialogue timing and continuity notes. Use CapCut for timeline editing, typography, captions, transitions, tracking/reframe, effects and finishing. Do NOT generate replacement media with paid CapCut AI credits unless the manifest explicitly allows it. Prefer the existing local-generated assets. Keep the result editable in CapCut and do not flatten the project prematurely.';
   const manifestPath=await assertSafeWritePath(base,join(base,'manifest.json'),'CapCut manifest'),taskPath=await assertSafeWritePath(base,join(base,'CODEX_CAPCUT_TASK.md'),'CapCut task');
   const task=`# CineForge → CapCut × Codex handoff\n\n${prompt}\n\n## Inputs\n\n- Manifest: \`${manifestPath}\`\n- Project root: \`${project.rootPath}\`\n- Timeline clips: ${clips.length}\n- AI credit permission: **${project.settings.costPolicy.allowCapcutAiCredits?'ALLOWED':'DISABLED'}**\n\n## Finishing priorities\n\n1. Preserve editorial intent and clip timing.\n2. Style captions/typography in CapCut; never bake important text into generated imagery.\n3. Use deterministic cuts/J-cuts/L-cuts/fades/transitions where appropriate.\n4. Apply tracking/reframe/effects only when they improve the shot.\n5. Keep the CapCut project editable for final human verification.\n6. If a listed source is missing or unreadable, stop and report it instead of substituting cloud-generated media.\n`;
-  await writeFile(manifestPath,JSON.stringify(manifest,null,2),'utf8');await writeFile(taskPath,task,'utf8');
-  return{directory:base,manifestPath,taskPath,prompt};
+  try{
+    await writeFile(manifestPath,JSON.stringify(manifest,null,2),'utf8');
+    await writeFile(taskPath,task,'utf8');
+    return{directory:base,manifestPath,taskPath,prompt};
+  }catch(error){
+    try{await rm(base,{recursive:true,force:true});}catch{}
+    throw error;
+  }
 }

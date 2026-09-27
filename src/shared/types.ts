@@ -136,7 +136,7 @@ export interface FilmProject {
 export interface KeyframeRequest { projectRoot:string;shotId:UUID;role:'start'|'end';workflowProfileId:UUID; }
 export interface RenderRequest { projectRoot:string;shotId:UUID;forceWorkflowProfileId?:UUID; }
 export interface RenderBatchRequest { projectRoot:string;shotIds:UUID[];skipIfRendered?:boolean; }
-export interface QueueSnapshot { runningJobId?:UUID;jobs:RenderJob[]; }
+export interface QueueSnapshot { runningJobId?:UUID;blockedReason?:string;jobs:RenderJob[]; }
 
 export interface HardwarePlan {
   tier:'rtx50-16gb'|'nvidia-16gb-plus'|'nvidia-12gb-plus'|'nvidia-low-vram'|'unknown';

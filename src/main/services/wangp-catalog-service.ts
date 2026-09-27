@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { app } from 'electron';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { AppMachineSettings, FilmProject, ModelFamily, WanGpCatalogEntry, WorkflowProfile } from '../../shared/types';
 import { AppSettingsService } from './app-settings-service';
-import { assertSafeWritePath } from './path-safety';
+import { assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { ProjectService } from './project-service';
 import { validateAndRecordProfile } from './profile-validation';
 import { analyzeWanGpBindings } from './wangp-engine';
@@ -19,7 +19,7 @@ export async function listWanGpCatalog(machine:AppMachineSettings):Promise<WanGp
   if(!Array.isArray(value))throw new Error('WanGP catalog bridge returned an invalid payload.');
   return value.filter(item=>item&&typeof item.modelType==='string'&&item.modelType).map(item=>({
     modelType:String(item.modelType),name:String(item.name||item.modelType),family:item.family?String(item.family):undefined,familyLabel:item.familyLabel?String(item.familyLabel):undefined,
-    mainOutput:Array.isArray(item.mainOutput)?item.mainOutput.map(String):[],outputs:Array.isArray(item.outputs)?item.outputs.map(String):[],inputs:Array.isArray(item.inputs)?item.inputs.map(String):[],capabilities:item.capabilities&&typeof item.capabilities==='object'?Object.fromEntries(Object.entries(item.capabilities).map(([key,value])=>[key,Boolean(value)])):undefined,description:item.description?String(item.description):undefined
+    mainOutput:Array.isArray(item.mainOutput)?item.mainOutput.map(String):[],outputs:Array.isArray(item.outputs)?item.outputs.map(String):[],inputs:Array.isArray(item.inputs)?item.inputs.map(String):[],capabilities:item.capabilities&&typeof item.capabilities==='object'?Object.fromEntries(Object.entries(item.capabilities).map(([key,value])=>[key,value===true])):undefined,description:item.description?String(item.description):undefined
   }));
 }
 
@@ -44,7 +44,7 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
       if(settingsJson.resolution==null)settingsJson.resolution=pick.role==='hero'?'832x480':'1280x704';
     }else if(settingsJson.resolution==null){settingsJson.resolution='1280x720';}
 
-    const workflowsRoot=join(project.rootPath,'workflows');await mkdir(workflowsRoot,{recursive:true});
+    const workflowsRoot=await ensureSafeDirectory(project.rootPath,join(project.rootPath,'workflows'),'managed WanGP workflows directory');
     const safeModel=pick.entry.modelType.replace(/[^a-zA-Z0-9._-]+/g,'_');
     const workflowPath=await assertSafeWritePath(workflowsRoot,join(workflowsRoot,`managed-${safeModel}.json`),'managed WanGP settings');
     await writeFile(workflowPath,JSON.stringify(settingsJson,null,2),'utf8');

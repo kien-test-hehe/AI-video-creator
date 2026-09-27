@@ -15,10 +15,16 @@ import { Finishing } from './views/Finishing';
 export default function App(){
   const{activeView,project,setProject,setMachine,syncRuntime,setQueue,setError}=useAppStore();
   useEffect(()=>{
+    let disposed=false,runtimeSyncSequence=0;
+    const bootstrapSequence=++runtimeSyncSequence;
     void Promise.all([window.cineforge.project.get(),window.cineforge.render.snapshot(),window.cineforge.settings.get()])
-      .then(([project,queue,machine])=>{if(project)setProject(project);setQueue(queue);setMachine(machine);})
-      .catch(e=>setError(e instanceof Error?e.message:String(e)));
-    return window.cineforge.render.onQueueEvent(snapshot=>{setQueue(snapshot);void window.cineforge.project.get().then(project=>project&&syncRuntime(project));});
+      .then(([project,queue,machine])=>{if(disposed)return;setMachine(machine);if(bootstrapSequence!==runtimeSyncSequence)return;if(project)setProject(project);setQueue(queue);})
+      .catch(e=>{if(!disposed&&bootstrapSequence===runtimeSyncSequence)setError(e instanceof Error?e.message:String(e));});
+    const unsubscribe=window.cineforge.render.onQueueEvent(snapshot=>{
+      if(disposed)return;setQueue(snapshot);const sequence=++runtimeSyncSequence;
+      void window.cineforge.project.get().then(project=>{if(!disposed&&sequence===runtimeSyncSequence&&project)syncRuntime(project);}).catch(e=>{if(!disposed&&sequence===runtimeSyncSequence)setError(e instanceof Error?e.message:String(e));});
+    });
+    return()=>{disposed=true;runtimeSyncSequence+=1;unsubscribe();};
   },[setError,setMachine,setProject,setQueue,syncRuntime]);
   useEffect(()=>{
     let allowClose=false,flushing=false;

@@ -9,27 +9,45 @@ export async function technicalQcVideo(machine:AppMachineSettings,path:string,sh
   const probe=await probeMedia(machine.ffmpeg.ffprobePath,path);
   if(!probe.video)issues.push('No video stream found.');
   const duration=probe.durationSec;
-  if(shot&&duration!=null){
-    const expected=shot.generation.frames/Math.max(1,shot.generation.fps);
-    if(Math.abs(duration-expected)>Math.max(0.75,expected*0.2))issues.push(`Duration ${duration.toFixed(2)}s differs materially from expected ${expected.toFixed(2)}s.`);
-  }
-  if(shot&&probe.video){
-    if(probe.video.width!==shot.generation.width||probe.video.height!==shot.generation.height)issues.push(`Resolution is ${probe.video.width}×${probe.video.height}; expected ${shot.generation.width}×${shot.generation.height}.`);
-    if(Math.abs(probe.video.fps-shot.generation.fps)>0.5)issues.push(`FPS is ${probe.video.fps.toFixed(2)}; expected ${shot.generation.fps}.`);
-    if(shot.generation.includeAudio&&!probe.hasAudio)issues.push('Shot requested audio but output has no audio stream.');
-  }
+  if(shot)issues.push(...technicalQcStructuralIssues(shot,probe));
+
   try{
     const visual=await detectVisualProblems(machine.ffmpeg.path,path);
     if(visual.black)warnings.push('Black segment ≥0.5s detected; verify that the blackout/fade is intentional.');
     if(visual.freeze)warnings.push('Frozen segment ≥2s detected; verify that the held frame is intentional.');
   }catch(error){issues.push(`Visual QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
-  let audioPeakDb:number|undefined;
+  let audioPeakDb:number|undefined,audioSilent=false;
   if(probe.hasAudio){
-    try{audioPeakDb=await detectPeak(machine.ffmpeg.path,path);}
+    try{const peak=await detectPeak(machine.ffmpeg.path,path);audioPeakDb=peak.peakDb;audioSilent=peak.silent;}
     catch(error){issues.push(`Audio QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
   }
+  if(shot?.generation.includeAudio&&probe.hasAudio&&audioSilent)issues.push('Shot requested audio, but the output audio stream is silent.');
   if(audioPeakDb!=null&&audioPeakDb>-0.1)warnings.push(`Audio peak is ${audioPeakDb.toFixed(1)} dB; clipping risk.`);
   return{checkedAt:new Date().toISOString(),passed:issues.length===0,warnings,durationSec:duration,width:probe.video?.width,height:probe.video?.height,fps:probe.video?.fps,hasAudio:probe.hasAudio,audioPeakDb,issues};
+}
+
+export function technicalQcStructuralIssues(
+  shot:Shot,
+  probe:{durationSec?:number;video?:{width:number;height:number;fps:number};hasAudio:boolean}
+):string[]{
+  const issues:string[]=[];
+  if(probe.durationSec==null)issues.push('Video duration could not be measured.');
+  else{
+    const expected=shot.generation.frames/Math.max(1,shot.generation.fps);
+    if(Math.abs(probe.durationSec-expected)>Math.max(0.75,expected*0.2))issues.push(`Duration ${probe.durationSec.toFixed(2)}s differs materially from expected ${expected.toFixed(2)}s.`);
+  }
+  if(probe.video){
+    if(probe.video.width!==shot.generation.width||probe.video.height!==shot.generation.height)issues.push(`Resolution is ${probe.video.width}×${probe.video.height}; expected ${shot.generation.width}×${shot.generation.height}.`);
+    if(Math.abs(probe.video.fps-shot.generation.fps)>0.5)issues.push(`FPS is ${probe.video.fps.toFixed(2)}; expected ${shot.generation.fps}.`);
+  }
+  if(shot.generation.includeAudio&&!probe.hasAudio)issues.push('Shot requested audio but output has no audio stream.');
+  return issues;
+}
+
+export function parseVolumeDetectPeak(text:string):{peakDb?:number;silent:boolean}{
+  if(/max_volume:\s*-inf\s*dB/i.test(text))return{silent:true};
+  const match=text.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/i);
+  return{peakDb:match?Number(match[1]):undefined,silent:false};
 }
 
 async function probeMedia(ffprobe:string,path:string):Promise<{durationSec?:number;video?:{width:number;height:number;fps:number};hasAudio:boolean}>{
@@ -45,7 +63,7 @@ async function detectVisualProblems(ffmpeg:string,path:string):Promise<{black:bo
   return{black:/black_start:/i.test(stderr),freeze:/freeze_start:/i.test(stderr)};
 }
 
-async function detectPeak(ffmpeg:string,path:string):Promise<number|undefined>{
+async function detectPeak(ffmpeg:string,path:string):Promise<{peakDb?:number;silent:boolean}>{
   const result=await execFileAsync(ffmpeg,['-hide_banner','-nostats','-i',path,'-vn','-af','volumedetect','-f','null','-'],{timeout:120_000,maxBuffer:8*1024*1024});
-  const text=String(result.stderr||'');const match=text.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/i);return match?Number(match[1]):undefined;
+  return parseVolumeDetectPeak(String(result.stderr||''));
 }

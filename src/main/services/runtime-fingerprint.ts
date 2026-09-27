@@ -1,15 +1,19 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { createReadStream } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
+import { extname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { AppMachineSettings, RenderRuntimeFingerprint, WorkflowProfile } from '../../shared/types';
 import { ComfyClient } from './comfy-client';
+import { assertPathInside } from './path-safety';
 
 const execFileAsync = promisify(execFile);
 
 export async function sha256File(path: string): Promise<string> {
-  return createHash('sha256').update(await readFile(path)).digest('hex');
+  const hash=createHash('sha256');
+  for await(const chunk of createReadStream(path))hash.update(chunk as Buffer);
+  return hash.digest('hex');
 }
 
 export function sha256Json(value: unknown): string {
@@ -40,35 +44,34 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
     const image = machine.wangp.docker.image.trim();
     let imageId = '';
     if (image) {
-      try {
-        const { stdout } = await execFileAsync(machine.wangp.docker.command, ['image','inspect','--format','{{.Id}}',image], { timeout: 10_000 });
-        imageId = stdout.trim();
-      } catch {}
+      const { stdout } = await execFileAsync(machine.wangp.docker.command, ['image','inspect','--format','{{.Id}}',image], { timeout: 10_000 });
+      imageId = stdout.trim();
+      if(!imageId)throw new Error(`Docker image inspect returned no immutable image ID for ${image}.`);
     }
+    const sourceSha256=await fingerprintWanGpSourceTree(machine.wangp.rootPath,machine.wangp.entrypoint);
     const runtimeVersion = image ? `docker:${image}${imageId ? `@${imageId}` : ''}` : 'docker:unconfigured';
     return {
       backend,
       executionMode: 'docker',
       runtimeVersion,
+      runtimeSha256:sourceSha256,
       environmentSha256: sha256Json({
-        backend, executionMode:'docker', runtimeVersion,
+        backend, executionMode:'docker', runtimeVersion, sourceSha256,
         profile:machine.wangp.profile, attention:machine.wangp.attention,
         projectMount:machine.wangp.docker.projectMount, wangpMount:machine.wangp.docker.wangpMount
       })
     };
   }
 
-  const entrypoint = resolve(machine.wangp.rootPath, machine.wangp.entrypoint);
-  let runtimeSha256: string | undefined;
-  try { runtimeSha256 = await sha256File(entrypoint); } catch {}
+  const runtimeSha256=await fingerprintWanGpSourceTree(machine.wangp.rootPath,machine.wangp.entrypoint);
   const [gitCommit, pythonVersion, torchInfo, packages] = await Promise.all([
     commandText('git',['-C',machine.wangp.rootPath,'rev-parse','HEAD']),
-    commandText(machine.wangp.pythonPath,['--version']),
-    commandText(machine.wangp.pythonPath,['-c',"import json,torch; print(json.dumps({'torch':torch.__version__,'cuda':torch.version.cuda,'cuda_available':torch.cuda.is_available(),'device':torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}))"]),
-    commandText(machine.wangp.pythonPath,['-m','pip','freeze','--disable-pip-version-check'],20_000,true)
+    requiredCommandText(machine.wangp.pythonPath,['--version'],'WanGP Python version'),
+    requiredCommandText(machine.wangp.pythonPath,['-c',"import json,torch; print(json.dumps({'torch':torch.__version__,'cuda':torch.version.cuda,'cuda_available':torch.cuda.is_available(),'device':torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}))"],'WanGP PyTorch/CUDA runtime'),
+    requiredCommandText(machine.wangp.pythonPath,['-m','pip','freeze','--disable-pip-version-check'],'WanGP Python package set',20_000,true)
   ]);
-  const packagesSha256=packages?createHash('sha256').update(packages.split(/\r?\n/).filter(Boolean).sort().join('\n')).digest('hex'):undefined;
-  const runtimeVersion = [gitCommit && `git:${gitCommit}`, pythonVersion, torchInfo].filter(Boolean).join(' · ') || 'native:unknown';
+  const packagesSha256=createHash('sha256').update(packages.split(/\r?\n/).filter(Boolean).sort().join('\n')).digest('hex');
+  const runtimeVersion = [gitCommit && `git:${gitCommit}`, pythonVersion, torchInfo].filter(Boolean).join(' · ');
   return {
     backend,
     executionMode: 'native',
@@ -81,6 +84,35 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
   };
 }
 
+const WANGP_SOURCE_EXTENSIONS=new Set(['.py','.pyi','.json','.yaml','.yml','.toml','.cfg','.ini','.txt','.c','.cc','.cpp','.h','.hpp','.cu','.cuh']);
+const WANGP_SOURCE_SKIP_DIRS=new Set(['.git','.venv','venv','env','models','model','checkpoints','checkpoint','ckpts','loras','lora','outputs','output','cache','.cache','__pycache__','node_modules']);
+
+export async function fingerprintWanGpSourceTree(rootPath:string,entrypointName:string):Promise<string>{
+  const root=resolve(rootPath);if(!rootPath.trim())throw new Error('WanGP root path is not configured.');
+  const entrypoint=assertPathInside(root,resolve(root,entrypointName),'WanGP entrypoint');
+  await stat(entrypoint);
+  const records:Array<{path:string;sha256:string;size:number}>=[],pending=[root];let entriesSeen=0,totalSourceBytes=0;
+  while(pending.length){
+    const dir=pending.pop()!;
+    for(const entry of await readdir(dir,{withFileTypes:true})){
+      entriesSeen+=1;if(entriesSeen>50_000)throw new Error('WanGP source tree exceeds the 50,000-entry fingerprint safety limit.');
+      const lower=entry.name.toLowerCase(),path=join(dir,entry.name);
+      if(entry.isDirectory()){if(!WANGP_SOURCE_SKIP_DIRS.has(lower))pending.push(path);continue;}
+      if(entry.isSymbolicLink()){
+        if(WANGP_SOURCE_SKIP_DIRS.has(lower))continue;
+        throw new Error(`WanGP source fingerprint refuses symbolic-link source entries: ${path}`);
+      }
+      if(!entry.isFile()||!WANGP_SOURCE_EXTENSIONS.has(extname(lower)))continue;
+      const info=await stat(path);totalSourceBytes+=info.size;
+      if(totalSourceBytes>512*1024*1024)throw new Error('WanGP source/config files exceed the 512 MiB fingerprint safety limit.');
+      records.push({path:relative(root,path).replace(/\\/g,'/'),sha256:await sha256File(path),size:info.size});
+    }
+  }
+  if(!records.some(record=>resolve(root,record.path)===entrypoint))records.push({path:relative(root,entrypoint).replace(/\\/g,'/'),sha256:await sha256File(entrypoint),size:(await stat(entrypoint)).size});
+  records.sort((a,b)=>a.path.localeCompare(b.path));
+  return sha256Json(records);
+}
+
 async function commandText(command:string,args:string[],timeout=10_000,full=false):Promise<string>{
   try {
     const { stdout, stderr } = await execFileAsync(command,args,{timeout,maxBuffer:8*1024*1024});
@@ -88,6 +120,15 @@ async function commandText(command:string,args:string[],timeout=10_000,full=fals
     if(full)return out;
     return (out||err).split(/\r?\n/).filter(Boolean)[0] || '';
   } catch { return ''; }
+}
+
+async function requiredCommandText(command:string,args:string[],label:string,timeout=10_000,full=false):Promise<string>{
+  try{
+    const {stdout,stderr}=await execFileAsync(command,args,{timeout,maxBuffer:8*1024*1024});
+    const out=stdout.trim(),err=stderr.trim(),value=full?out:(out||err).split(/\r?\n/).filter(Boolean)[0]||'';
+    if(!value)throw new Error('command returned no usable output');
+    return value;
+  }catch(error){throw new Error(`${label} could not be fingerprinted: ${error instanceof Error?error.message:String(error)}`);}
 }
 
 function extractComfyVersion(stats: unknown): string {

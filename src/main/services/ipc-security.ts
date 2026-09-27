@@ -1,6 +1,13 @@
 import type { IpcMainInvokeEvent, WebContents } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { assertLocalUrl } from './local-url';
+
+export function resolveTrustedRendererUrl(isPackaged:boolean,environmentUrl:string|undefined,bundledFileUrl:string):string{
+  if(isPackaged||!environmentUrl)return bundledFileUrl;
+  const url=assertLocalUrl(environmentUrl,true);
+  return url.toString();
+}
 
 export function assertTrustedIpcSender(event:IpcMainInvokeEvent,trustedRendererUrl:string):void{
   const frame=event.senderFrame;

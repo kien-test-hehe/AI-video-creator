@@ -1,4 +1,4 @@
-import { access, realpath } from 'node:fs/promises';
+import { access, lstat, mkdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export function isPathInside(root: string, candidate: string): boolean {
@@ -43,6 +43,16 @@ export async function assertExistingProjectMediaPath(root:string,relativePath:st
 export async function assertSafeWritePath(root: string, candidate: string, label = 'write path'): Promise<string> {
   const lexical = assertPathInside(root, candidate, label);
   const realRoot = await realpath(resolve(root));
+  try{
+    const targetInfo=await lstat(lexical);
+    if(targetInfo.isSymbolicLink())throw new Error(`Blocked symbolic-link target for ${label}: ${candidate}`);
+    const realTarget=await realpath(lexical);
+    if(!isPathInside(realRoot,realTarget))throw new Error(`Blocked symlink escape for ${label}: ${candidate}`);
+    return lexical;
+  }catch(error:any){
+    if(error?.message?.startsWith('Blocked symbolic-link target')||error?.message?.startsWith('Blocked symlink escape'))throw error;
+    if(error?.code!=='ENOENT')throw error;
+  }
   let ancestor = dirname(lexical);
   while (true) {
     try {
@@ -57,6 +67,12 @@ export async function assertSafeWritePath(root: string, candidate: string, label
       ancestor = parent;
     }
   }
+}
+
+export async function ensureSafeDirectory(root:string,candidate:string,label='directory'):Promise<string>{
+  const safe=await assertSafeWritePath(root,candidate,label);
+  await mkdir(safe,{recursive:true});
+  return assertExistingPathInside(root,safe,label);
 }
 
 export function assertSafeRelativePath(value: string, label = 'relative path'): string {

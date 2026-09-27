@@ -5,6 +5,7 @@ import type {
 } from '../../shared/types';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
+import { assertSafeJsonPath, assertSafeObjectKey } from '../../shared/safe-object';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 const MODEL_FAMILIES = new Set<ModelFamily>(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom']);
@@ -76,12 +77,25 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const duplicateTimelineOrder=duplicateTimelineOrderKey(timeline);
   if(duplicateTimelineOrder)throw new Error(`Duplicate timeline track/order slot: ${duplicateTimelineOrder}`);
 
-  for (const scene of scenes) scene.shotIds = scene.shotIds.filter(shotId => shotIds.has(shotId));
+  const shotsByScene=new Map<string,Shot[]>();
+  for(const shot of shots){const list=shotsByScene.get(shot.sceneId)??[];list.push(shot);shotsByScene.set(shot.sceneId,list);}
+  for(const scene of scenes)scene.shotIds=(shotsByScene.get(scene.id)??[]).sort((a,b)=>a.index-b.index).map(shot=>shot.id);
+
   for(const shot of shots){
-    if(shot.latestRenderId&&!renderOutputs.some(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video'))shot.latestRenderId=undefined;
+    const latest=shot.latestRenderId?outputById.get(shot.latestRenderId):undefined;
+    const validLatest=latest&&latest.shotId===shot.id&&latest.mediaType==='video'?latest:undefined;
+    if(!validLatest){
+      shot.latestRenderId=undefined;
+      if(shot.status==='rendered')shot.status='ready';
+    }
   }
-  for(const job of renderJobs)job.outputs=renderOutputs.filter(output=>output.jobId===job.id&&output.shotId===job.shotId);
-  for(const output of renderOutputs)if(!jobIds.has(output.jobId))output.jobId='orphaned';
+
+  const jobShotById=new Map(renderJobs.map(job=>[job.id,job.shotId] as const)),outputsByJobShot=new Map<string,RenderOutput[]>();
+  for(const output of renderOutputs){
+    if(!jobIds.has(output.jobId)||jobShotById.get(output.jobId)!==output.shotId){output.jobId='orphaned';continue;}
+    const key=`${output.jobId}\u0000${output.shotId}`,list=outputsByJobShot.get(key)??[];list.push(output);outputsByJobShot.set(key,list);
+  }
+  for(const job of renderJobs)job.outputs=outputsByJobShot.get(`${job.id}\u0000${job.shotId}`)??[];
   return {
     schemaVersion: 2,
     id,
@@ -107,10 +121,10 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
   return {
     costPolicy: {
       mode: 'codex-capcut-only',
-      allowCapcutAiCredits: Boolean(source.costPolicy?.allowCapcutAiCredits)
+      allowCapcutAiCredits: source.costPolicy?.allowCapcutAiCredits===true
     },
     capcut: {
-      enabled: source.capcut?.enabled !== false,
+      enabled: typeof source.capcut?.enabled==='boolean'?source.capcut.enabled:true,
       pro: source.capcut?.pro === true
     },
     defaultFps: clampInt(source.defaultFps, 1, 120, 24),
@@ -121,8 +135,8 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
 
 function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
   const source = asObject(value, 'workflow profile');
-  const runtime = source.runtime === 'wangp' ? 'wangp' : 'comfyui';
   const format = source.workflowFormat === 'wangp-settings' ? 'wangp-settings' : source.workflowFormat === 'ui' ? 'ui' : 'api';
+  const runtime = source.runtime === 'wangp' ? 'wangp' : source.runtime === 'comfyui' ? 'comfyui' : format === 'wangp-settings' ? 'wangp' : 'comfyui';
   const validationSource = source.validation && typeof source.validation === 'object' ? source.validation : {};
   return {
     id: safeId(source.id),
@@ -133,8 +147,8 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
     mode: MODES.has(source.mode) ? source.mode : 'i2v',
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
-    bindings: array(source.bindings).map(sanitizeBinding),
-    enabled: Boolean(source.enabled),
+    bindings: array(source.bindings).slice(0,256).map(sanitizeBinding),
+    enabled: source.enabled===true,
     notes: str(source.notes, '', 20_000) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
     validation: {
@@ -157,13 +171,16 @@ function sanitizeBinding(value: unknown): WorkflowBinding {
     ...(str(source.selector.classType, '', 256) ? { classType: str(source.selector.classType, '', 256) } : {}),
     ...(str(source.selector.titleIncludes, '', 256) ? { titleIncludes: str(source.selector.titleIncludes, '', 256) } : {})
   } : undefined;
+  const input=str(source.input,'',256)||undefined,jsonPath=str(source.jsonPath,'',1024)||undefined;
+  if(input)assertSafeObjectKey(input,'Workflow binding input');
+  if(jsonPath)assertSafeJsonPath(jsonPath,'Workflow binding JSON path');
   return {
     key: source.key,
     selector,
-    input: str(source.input, '', 256) || undefined,
-    jsonPath: str(source.jsonPath, '', 1024) || undefined,
+    input,
+    jsonPath,
     transform: ['integer','float','boolean','string'].includes(source.transform) ? source.transform : 'identity',
-    required: Boolean(source.required)
+    required: source.required===true
   } as WorkflowBinding;
 }
 
@@ -192,7 +209,7 @@ function sanitizeAsset(value: unknown): Asset {
     sourcePath: sourceLabel(source.sourcePath),
     projectPath: path,
     mimeType: str(source.mimeType, '', 512) || undefined,
-    tags: array(source.tags).map(v=>str(v,'',256)).filter(Boolean).slice(0,128),
+    tags: array(source.tags).slice(0,128).map(v=>str(v,'',256)).filter(Boolean),
     notes: str(source.notes, '', 100_000),
     createdAt: iso(source.createdAt, new Date().toISOString())
   };
@@ -206,7 +223,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const rawModelFamily=typeof generationSource.modelFamily==='string'?generationSource.modelFamily:'';
   const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
   const defaults = MODEL_DEFAULTS[modelFamily];
-  const rawIds = (value: unknown) => array(value).map(safeId).filter(id=>assetIds.has(id));
+  const rawIds = (value: unknown) => array(value).slice(0,128).map(safeId).filter(id=>assetIds.has(id));
   const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!)).slice(0,max);
   const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
     if (typeof value !== 'string' || !value) return undefined;
@@ -248,7 +265,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
       cfg: generationSource.cfg == null ? defaults.cfg : clampNumber(generationSource.cfg,0,100,defaults.cfg ?? 1),
       seed: clampInt(generationSource.seed,0,2_147_483_647,Math.floor(Math.random()*2_147_483_647)),
       negativePrompt: str(generationSource.negativePrompt,'',100_000),
-      includeAudio: Boolean(generationSource.includeAudio),
+      includeAudio: typeof generationSource.includeAudio==='boolean'?generationSource.includeAudio:(defaults.includeAudio??false),
       workflowProfileId: typeof generationSource.workflowProfileId === 'string' ? generationSource.workflowProfileId : undefined
     },
     latestRenderId: typeof source.latestRenderId === 'string' ? source.latestRenderId : undefined
@@ -257,11 +274,12 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
 
 function sanitizeRenderOutput(value: unknown, shotIds: Set<string>): RenderOutput {
   const source = asObject(value, 'render output');
-  const shotId = safeId(source.shotId);
+  const shotId = safeId(source.shotId),path=str(source.path,'',4096);
   if (!shotIds.has(shotId)) throw new Error(`Render output references unknown shot: ${shotId}`);
+  if(!path)throw new Error('Render output path is required.');
   return {
     id:safeId(source.id), jobId:safeId(source.jobId), shotId,
-    path:str(source.path,'',4096), filename:str(source.filename,'output',2048),
+    path, filename:str(source.filename,'output',2048),
     mediaType:['video','image','audio'].includes(source.mediaType) ? source.mediaType : 'unknown',
     createdAt:iso(source.createdAt,new Date().toISOString()),
     comfyMeta:sanitizeComfyMeta(source.comfyMeta),
@@ -279,8 +297,10 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
     const rawSpec=asObject(source.spec,'render job spec');
     const workflowProfile=sanitizeWorkflowProfile(rawSpec.workflowProfile);
     const runtimeRaw=rawSpec.runtimeFingerprint&&typeof rawSpec.runtimeFingerprint==='object'?rawSpec.runtimeFingerprint:{};
+    const specShot=sanitizeShot(rawSpec.shot,sceneIds,assetIds,assetKinds);
+    if(specShot.id!==shotId)throw new Error(`Render job ${String(source.id)} immutable spec shot id ${specShot.id} does not match job shotId ${shotId}.`);
     spec={
-      shot:sanitizeShot(rawSpec.shot,sceneIds,assetIds,assetKinds),
+      shot:specShot,
       workflowProfile,
       effectivePrompt:str(rawSpec.effectivePrompt,'',300_000),
       queuedProjectUpdatedAt:iso(rawSpec.queuedProjectUpdatedAt,new Date().toISOString()),
@@ -336,7 +356,7 @@ function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
   const source=value as Record<string,unknown>;
   return{
     checkedAt:iso(source.checkedAt,new Date().toISOString()),
-    passed:Boolean(source.passed),
+    passed:source.passed===true,
     durationSec:finiteOptional(source.durationSec,0,1_000_000),
     width:intOptional(source.width,1,16384),
     height:intOptional(source.height,1,16384),

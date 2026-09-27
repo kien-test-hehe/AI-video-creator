@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type {
@@ -16,7 +16,7 @@ import { collectWanGpOutputs, isWanGpDockerRunning, outputMediaType, startWanGp,
 import { routeWorkflow } from './model-router';
 import { collectComfyHistoryOutputRefs, inferMediaType } from './comfy-output';
 import { waitForComfyCompletion, waitForComfyPromptRelease } from './comfy-runner';
-import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
+import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { JobJournal } from './job-journal';
@@ -25,9 +25,10 @@ import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './proc
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
 import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
-import { selectRecoveryJob } from '../../shared/recovery-policy';
+import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../../shared/recovery-policy';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { RenderLeaseStore } from './render-lease';
+import { AdmissionGate } from './admission-gate';
 
 const ACTIVE = new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 const TERMINAL = new Set(['done','failed','cancelled','orphaned']);
@@ -36,11 +37,14 @@ export class RenderQueueService extends EventEmitter {
   private pending:string[]=[];
   private recoveryPending:string[]=[];
   private runningJobId?:string;
+  private pumping=false;
+  private recoveryBlockedError?:string;
   private cancelled=new Set<string>();
   private wanGpProcesses=new Map<string,ChildProcess>();
   private comfyCancelPromises=new Map<string,Promise<void>>();
   private liveJobs=new Map<string,RenderJob>();
   private lastJournalWrite=new Map<string,number>();
+  private admission=new AdmissionGate();
   private journal:JobJournal;
 
   constructor(private projects:ProjectService,private settings:AppSettingsService,private renderLeases:RenderLeaseStore){
@@ -53,13 +57,15 @@ export class RenderQueueService extends EventEmitter {
     const jobs=(project?.renderJobs??[]).map(job=>structuredClone(this.liveJobs.get(job.id)??job));
     for(const live of this.liveJobs.values())if(!jobs.some(j=>j.id===live.id))jobs.push(structuredClone(live));
     jobs.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
-    return{runningJobId:this.runningJobId,jobs};
+    return{runningJobId:this.runningJobId,blockedReason:this.recoveryBlockedError,jobs};
   }
 
-  isBusy():boolean{return Boolean(this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
+  isBusy():boolean{return Boolean(this.admission.busy||this.recoveryBlockedError||this.runningJobId||this.pending.length||this.recoveryPending.length||this.snapshot().jobs.some(j=>ACTIVE.has(j.status)));}
 
-  async enqueue(request:RenderRequest):Promise<QueueSnapshot>{
-    const project=this.requireProject();
+  async enqueue(request:RenderRequest):Promise<QueueSnapshot>{return this.admission.run(()=>this.enqueueInternal(request));}
+
+  private async enqueueInternal(request:RenderRequest):Promise<QueueSnapshot>{
+    this.assertRecoveryOperational();const project=this.requireProject();
     if(project.rootPath!==request.projectRoot)throw new Error('Render request does not match the open project.');
     const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');
     if(this.hasActiveJobForShot(shot.id))throw new Error(`An active render already exists for ${shot.title}.`);
@@ -70,8 +76,10 @@ export class RenderQueueService extends EventEmitter {
     await this.commitQueuedJobs([job]);return this.snapshot();
   }
 
-  async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{
-    const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
+  async enqueueBatch(request:RenderBatchRequest):Promise<QueueSnapshot>{return this.admission.run(()=>this.enqueueBatchInternal(request));}
+
+  private async enqueueBatchInternal(request:RenderBatchRequest):Promise<QueueSnapshot>{
+    this.assertRecoveryOperational();const project=this.requireProject();if(project.rootPath!==request.projectRoot)throw new Error('Batch render request does not match the open project.');
     const jobs:RenderJob[]=[];
     const machine=this.settings.get(),probe=await probeSystem(project,machine),runtimeFingerprints=new Map<string,Promise<RenderRuntimeFingerprint>>();
     const fingerprintFor=(profile:WorkflowProfile)=>{
@@ -81,7 +89,13 @@ export class RenderQueueService extends EventEmitter {
     };
     for(const id of [...new Set(request.shotIds)]){
       const shot=project.shots.find(s=>s.id===id);if(!shot)throw new Error(`Shot not found: ${id}`);
-      if(request.skipIfRendered&&shot.latestRenderId)continue;
+      if(request.skipIfRendered&&shot.latestRenderId){
+        const preferred=project.renderOutputs.find(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video');
+        if(preferred){
+          try{await assertExistingPathInside(join(project.rootPath,'renders'),preferred.path,`preferred render for ${shot.title}`);continue;}
+          catch(error:any){if(error?.code!=='ENOENT')throw error;}
+        }
+      }
       if(this.hasActiveJobForShot(shot.id))continue;
       const profile=routeWorkflow(project,shot);
       this.assertExecutionEnvironment(machine,profile,probe);
@@ -90,10 +104,14 @@ export class RenderQueueService extends EventEmitter {
     if(jobs.length)await this.commitQueuedJobs(jobs);return this.snapshot();
   }
 
-  async retry(jobId:string):Promise<QueueSnapshot>{
-    const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
+  async retry(jobId:string):Promise<QueueSnapshot>{return this.admission.run(()=>this.retryInternal(jobId));}
+
+  private async retryInternal(jobId:string):Promise<QueueSnapshot>{
+    this.assertRecoveryOperational();const prior=this.snapshot().jobs.find(j=>j.id===jobId);if(!prior)throw new Error('Render job not found.');
     if(ACTIVE.has(prior.status))throw new Error('Cannot retry an active job.');
-    if(!prior.spec)return this.enqueue({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
+    if(this.hasActiveJobForShot(prior.shotId))throw new Error('Cannot retry this snapshot while another render for the same shot is active.');
+    if(!prior.spec)return this.enqueueInternal({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
+    if(prior.spec.shot.id!==prior.shotId)throw new Error('Render job immutable spec shot identity does not match the job shot. Refusing unsafe exact retry.');
     const project=this.requireProject(),machine=this.settings.get(),probe=await probeSystem(project,machine);
     this.assertExecutionEnvironment(machine,prior.spec.workflowProfile,probe);
     await this.verifyImmutableSpec(project,prior);
@@ -103,7 +121,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   async cancel(jobId:string):Promise<QueueSnapshot>{
-    this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
+    this.assertRecoveryOperational();this.requireProject();const job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job)throw new Error('Render job not found.');if(TERMINAL.has(job.status))return this.snapshot();
     const wasRunning=this.runningJobId===jobId;
     if(this.recoveryPending.includes(jobId))throw new Error('This backend-active job is waiting for serialized recovery. Let it become the active recovery job before cancelling so CineForge can confirm the backend stop safely.');
     const runtime=job.spec?.workflowProfile.runtime??(job.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
@@ -139,19 +157,23 @@ export class RenderQueueService extends EventEmitter {
       }
     }else this.cancelled.add(jobId);
     await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled'},true,true);
-    await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shot.latestRenderId?'rendered':currentSpec&&job.spec?.shot.status==='draft'?'draft':'ready';});
+    await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'cancelled');});
     if(!wasRunning){this.cancelled.delete(jobId);void this.pump();}
     return this.snapshot();
   }
 
   async reconcileAfterProjectOpen():Promise<void>{
-    this.pending=[];this.recoveryPending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
-    const project=this.projects.getCurrent();if(!project)return;
+    this.recoveryBlockedError=undefined;
+    try{
+      this.pending=[];this.recoveryPending=[];this.runningJobId=undefined;this.liveJobs.clear();this.cancelled.clear();
+      const project=this.projects.getCurrent();if(!project)return;
     const activeLease=await this.renderLeases.read();
     if(activeLease&&(activeLease.projectId!==project.id||activeLease.projectRoot!==project.rootPath))throw new Error('A signed active-render lease belongs to a different project. Open/recover that project before starting any new GPU work.');
     if(activeLease&&!project.renderJobs.some(job=>job.id===activeLease.jobId))throw new Error(`Signed active-render lease references missing job ${activeLease.jobId}. GPU ownership is uncertain; do not start new generation until the prior backend work is stopped and the lease is cleared deliberately.`);
-    const journals=await this.journal.readAll(project.rootPath,project.renderJobs.filter(job=>!TERMINAL.has(job.status)).map(job=>job.id));const byId=new Map(journals.map(j=>[j.id,j]));
-    const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id))).sort((a,b)=>{
+    const journalIds=new Set(project.renderJobs.filter(job=>!TERMINAL.has(job.status)).map(job=>job.id));if(activeLease)journalIds.add(activeLease.jobId);
+    const journals=await this.journal.readAll(project.rootPath,journalIds),byId=new Map(journals.map(j=>[j.id,j]));
+    if(activeLease&&!byId.has(activeLease.jobId))throw new Error(`Signed active-render lease exists for ${activeLease.jobId}, but its signed project journal is missing or invalid. Recovery is blocked to avoid releasing an unknown GPU backend.`);
+    const selections=project.renderJobs.map(projectJob=>selectRecoveryJob(projectJob,byId.get(projectJob.id),activeLease?.jobId===projectJob.id)).sort((a,b)=>{
       if(activeLease){if(a.job.id===activeLease.jobId)return-1;if(b.job.id===activeLease.jobId)return 1;}
       return a.job.createdAt.localeCompare(b.job.createdAt);
     });
@@ -164,7 +186,11 @@ export class RenderQueueService extends EventEmitter {
           await this.projects.mutate(p=>{
             const target=p.renderJobs.find(item=>item.id===job.id);if(target)Object.assign(target,structuredClone(job));
             const shot=p.shots.find(item=>item.id===job.shotId);
-            if(shot&&['queued','rendering'].includes(shot.status))shot.status=shot.latestRenderId?'rendered':job.status==='failed'?'failed':'ready';
+            if(shot&&['queued','rendering'].includes(shot.status)){
+              const currentSpec=this.isCurrentJobSpec(p,job,shot);
+              if(job.status==='failed'||job.status==='cancelled'||job.status==='orphaned')shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,job.status);
+              else shot.status=shot.latestRenderId?'rendered':'ready';
+            }
           });
         }
         continue;
@@ -172,6 +198,7 @@ export class RenderQueueService extends EventEmitter {
       if(!signed){
         if(activeLease?.jobId===job.id)throw new Error(`Signed active-render lease exists for ${job.id}, but its signed project journal is missing or invalid. Recovery is blocked to avoid releasing an unknown GPU backend.`);
         await this.updateJob(job.id,{status:'orphaned',progress:0,message:'Untrusted runtime state was not resumed',error:'No valid installation-signed job journal exists for this active job. Queue a new render explicitly.'},true,false);
+        await this.restoreShotAfterOrphan(job);
         continue;
       }
       if(['queued','preparing','uploading'].includes(job.status)){
@@ -181,7 +208,7 @@ export class RenderQueueService extends EventEmitter {
       if(['submitted','running','recovering','stalled','downloading'].includes(job.status)){
         if(!recoveryStarted){
           recoveryStarted=true;this.runningJobId=job.id;
-          await this.acquireRenderLease(project,job.id);
+          await this.acquireRecoveryRenderLease(project,job.id);
           void this.recoverActiveJob(job.id);continue;
         }
         await this.updateJob(job.id,{status:'recovering',message:'Waiting for serialized backend recovery; no new GPU work will start before this backend identity is resolved.'},true,true);
@@ -190,31 +217,57 @@ export class RenderQueueService extends EventEmitter {
       await this.updateJob(job.id,{status:'queued',progress:0,message:'Recovered after restart · queued again'},true,true);
       this.pending.push(job.id);
     }
-    if(!this.runningJobId&&activeLease)await this.releaseRenderLease(activeLease.jobId);
-    this.emitSnapshot();if(!this.runningJobId)void this.pump();
+      if(!this.runningJobId&&activeLease)await this.releaseRenderLease(activeLease.jobId);
+      this.emitSnapshot();if(!this.runningJobId)void this.pump();
+    }catch(error){
+      this.recoveryBlockedError=error instanceof Error?error.message:String(error);
+      this.emitSnapshot();
+      throw error;
+    }
   }
 
   private async recoverActiveJob(jobId:string):Promise<void>{
-    let recoveredJob:RenderJob|undefined;
+    let recoveredJob:RenderJob|undefined,releaseAllowed=false;
     try{
-      const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job?.spec)throw new Error('Recovered job has no immutable spec.');
+      const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);
+      if(!job)throw new Error('Recovered job is missing from the project queue.');
       recoveredJob=job;
+      if(!job.spec)throw new Error('Recovered active job has no immutable spec, so its backend runtime cannot be identified safely.');
       const runtime=job.spec.workflowProfile.runtime??(job.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
       await this.updateJob(jobId,{status:'recovering',message:`Recovering ${runtime} job after restart`},true,true);
       if(runtime==='wangp')await this.recoverWanGp(project,job);
       else await this.recoverComfy(project,job);
+      releaseAllowed=true;
     }catch(error){
-      if(this.cancelled.has(jobId))await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled',error:undefined},true,true);
-      else{
-        if(recoveredJob)await this.cleanupRejectedRecovery(recoveredJob);
-        await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
+      if(this.cancelled.has(jobId)){
+        await this.updateJob(jobId,{status:'cancelled',progress:0,message:'Cancelled',error:undefined},true,true);
+        releaseAllowed=true;
+      }else{
+        try{
+          if(!recoveredJob)throw new Error('Recovered job identity is unavailable, so backend cleanup cannot be confirmed.');
+          await this.cleanupRejectedRecovery(recoveredJob);
+          await this.updateJob(jobId,{status:'orphaned',progress:0,message:'Recovery failed',error:error instanceof Error?error.message:String(error)},true,true);
+          await this.restoreShotAfterOrphan(recoveredJob);
+          releaseAllowed=true;
+        }catch(cleanupError){
+          const reason=`Recovery failed and backend cleanup could not be confirmed for ${jobId}: ${cleanupError instanceof Error?cleanupError.message:String(cleanupError)}`;
+          this.recoveryBlockedError=reason;
+          await this.updateJob(jobId,{status:'stalled',message:'Recovery cleanup is unconfirmed; GPU ownership remains locked',error:reason},true,true).catch(updateError=>console.warn('Could not persist blocked recovery state:',updateError));
+          this.emitSnapshot();
+        }
       }
     }finally{
+      this.comfyCancelPromises.delete(jobId);
+      if(!releaseAllowed){
+        this.runningJobId=jobId;
+        this.emitSnapshot();
+        return;
+      }
       await this.cleanupJobSnapshots(jobId);
-      this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);this.runningJobId=undefined;
+      this.cancelled.delete(jobId);this.runningJobId=undefined;
       const nextRecovery=this.recoveryPending.shift();
       if(nextRecovery){
-        const project=this.requireProject();await this.acquireRenderLease(project,nextRecovery);
+        const project=this.requireProject();await this.acquireRecoveryRenderLease(project,nextRecovery);
         this.runningJobId=nextRecovery;this.emitSnapshot();void this.recoverActiveJob(nextRecovery);
       }else{
         await this.releaseRenderLease(jobId);
@@ -223,9 +276,18 @@ export class RenderQueueService extends EventEmitter {
     }
   }
 
+  private async restoreShotAfterOrphan(job:RenderJob):Promise<void>{
+    await this.projects.mutate(project=>{
+      const shot=project.shots.find(item=>item.id===job.shotId);if(!shot)return;
+      const currentSpec=this.isCurrentJobSpec(project,job,shot);
+      shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'orphaned');
+    });
+  }
+
   private async cleanupRejectedRecovery(job:RenderJob):Promise<void>{
     const latest=this.snapshot().jobs.find(item=>item.id===job.id)??job;
-    const runtime=latest.spec?.workflowProfile.runtime??(latest.spec?.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),machine=this.settings.get();
+    if(!latest.spec)throw new Error('Cannot clean up recovered backend safely because the immutable job spec/runtime identity is missing.');
+    const runtime=latest.spec.workflowProfile.runtime??(latest.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui'),machine=this.settings.get();
     if(runtime==='comfyui'){
       let promptId=latest.comfyPromptId;
       if(!promptId){
@@ -361,11 +423,25 @@ export class RenderQueueService extends EventEmitter {
     await this.renderLeases.write({version:1,projectId:project.id,projectRoot:project.rootPath,jobId,createdAt:new Date().toISOString()});
   }
 
+  private async acquireRecoveryRenderLease(project:FilmProject,jobId:string):Promise<void>{
+    while(true){
+      try{await this.acquireRenderLease(project,jobId);return;}
+      catch(error){
+        await this.updateJob(jobId,{status:'stalled',message:`Cannot persist machine GPU ownership for recovered job; GPU remains locked · ${error instanceof Error?error.message:String(error)}`},false).catch(()=>undefined);
+        this.emitSnapshot();await sleep(2000);
+      }
+    }
+  }
+
   private async releaseRenderLease(jobId:string):Promise<void>{
     while(true){
       try{await this.renderLeases.clearIfJob(jobId);return;}
       catch(error){console.warn('Active-render lease could not be cleared; GPU queue remains locked.',error);await sleep(2000);}
     }
+  }
+
+  private assertRecoveryOperational():void{
+    if(this.recoveryBlockedError)throw new Error(`Render queue is blocked because recovery or durable queue state is uncertain: ${this.recoveryBlockedError}. Resolve the underlying storage/backend problem and restart/reopen the project before queueing, retrying, or cancelling renders.`);
   }
 
   private requireProject():FilmProject{const project=this.projects.getCurrent();if(!project)throw new Error('Open a project first.');return project;}
@@ -379,12 +455,12 @@ export class RenderQueueService extends EventEmitter {
     this.comfyCancelPromises.set(jobId,pending);return pending;
   }
 
-  private async waitForComfyPromptOrExit(jobId:string,timeoutMs=35_000):Promise<string|undefined>{
+  private async waitForComfyPromptOrExit(jobId:string,timeoutMs=35_000):Promise<string>{
     const deadline=Date.now()+timeoutMs;
     while(Date.now()<deadline){
       const live=this.snapshot().jobs.find(job=>job.id===jobId);
       if(live?.comfyPromptId)return live.comfyPromptId;
-      if(this.runningJobId!==jobId)return undefined;
+      if(this.runningJobId!==jobId)throw new Error('ComfyUI job left the active submission state before its prompt identity was durably confirmed. Cancellation cannot be claimed safely; refresh/recover the queue state.');
       await sleep(100);
     }
     throw new Error('ComfyUI submission is still unresolved; cancellation was not confirmed, so the GPU slot remains reserved.');
@@ -464,7 +540,7 @@ export class RenderQueueService extends EventEmitter {
     const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(runtime==='wangp'){
       if(!probe.wangp.available)throw new Error(`WanGP is unavailable: ${probe.wangp.error||'not configured'}`);
-      if(machine.wangp.executionMode==='docker'){if(!probe.docker?.available)throw new Error(`Docker is unavailable for the selected WanGP runtime: ${probe.docker?.error||'not running'}`);if(probe.docker.gpuAccessible===false)throw new Error('Docker is running but no NVIDIA GPU runtime is available to WanGP.');}
+      if(machine.wangp.executionMode==='docker'){if(!probe.docker?.available)throw new Error(`Docker is unavailable for the selected WanGP runtime: ${probe.docker?.error||'not running'}`);if(probe.docker.gpuAccessible!==true)throw new Error('Docker NVIDIA GPU runtime could not be confirmed for WanGP.');}
     }else{
       if(!machine.comfy.dedicatedInstance)throw new Error('Production ComfyUI jobs require a dedicated CineForge instance.');
       if(!probe.comfy.reachable)throw new Error(`ComfyUI is unavailable: ${probe.comfy.error||machine.comfy.url}`);
@@ -491,29 +567,58 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private async pump():Promise<void>{
-    if(this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
-    const jobId=this.pending.shift()!;if(this.cancelled.has(jobId)){this.cancelled.delete(jobId);return void this.pump();}
-    const project=this.requireProject();await this.acquireRenderLease(project,jobId);
-    this.runningJobId=jobId;this.emitSnapshot();
-    try{await this.run(jobId);}
-    catch(error){
-      if(!this.cancelled.has(jobId)){
-        const message=error instanceof Error?error.message:String(error);
-        await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed',error:message},true,true);
-        const current=this.projects.getCurrent(),job=current?.renderJobs.find(j=>j.id===jobId);
-        const externalSpecCurrent=job&&current?await this.immutableFilesStillCurrent(current,job):false;
-        if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;shot.status=externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot)?'failed':shot.latestRenderId?'rendered':'ready';});
+    if(this.pumping)return;
+    this.pumping=true;
+    try{
+      if(this.recoveryBlockedError||this.runningJobId||this.recoveryPending.length||!this.pending.length)return;
+      const jobId=this.pending[0];
+      if(this.cancelled.has(jobId)){
+        this.pending=this.pending.filter(id=>id!==jobId);this.cancelled.delete(jobId);return;
+      }
+      const project=this.requireProject();
+      try{await this.acquireRenderLease(project,jobId);}
+      catch(error){
+        const cancelledWhileAcquiring=this.cancelled.has(jobId)||!this.pending.includes(jobId);
+        this.pending=this.pending.filter(id=>id!==jobId);
+        if(cancelledWhileAcquiring){this.cancelled.delete(jobId);this.emitSnapshot();return;}
+        const message=`Render did not start because CineForge could not persist the machine GPU ownership lease: ${error instanceof Error?error.message:String(error)}`;
+        const persistenceErrors:string[]=[];
+        try{await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed before GPU start',error:message},true,true);}
+        catch(updateError){persistenceErrors.push(`job failure state: ${updateError instanceof Error?updateError.message:String(updateError)}`);}
+        try{await this.projects.mutate(p=>{const job=p.renderJobs.find(item=>item.id===jobId),shot=job?p.shots.find(item=>item.id===job.shotId):undefined;if(shot&&job){const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'orphaned');}});}
+        catch(updateError){persistenceErrors.push(`shot recovery state: ${updateError instanceof Error?updateError.message:String(updateError)}`);}
+        if(persistenceErrors.length)this.recoveryBlockedError=`Render never reached the backend, but CineForge could not persist a trustworthy failure state (${persistenceErrors.join(' | ')}). Reopen the project after resolving storage errors before queueing more work.`;
+        this.emitSnapshot();return;
+      }
+      if(this.cancelled.has(jobId)||!this.pending.includes(jobId)){
+        await this.releaseRenderLease(jobId);this.pending=this.pending.filter(id=>id!==jobId);this.cancelled.delete(jobId);return;
+      }
+      this.pending=this.pending.filter(id=>id!==jobId);
+      this.runningJobId=jobId;this.emitSnapshot();
+      try{await this.run(jobId);}
+      catch(error){
+        if(!this.cancelled.has(jobId)){
+          const message=error instanceof Error?error.message:String(error);
+          await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed',error:message},true,true);
+          const current=this.projects.getCurrent(),job=current?.renderJobs.find(j=>j.id===jobId);
+          const externalSpecCurrent=job&&current?await this.immutableFilesStillCurrent(current,job):false;
+          if(job)await this.projects.mutate(p=>{const shot=p.shots.find(s=>s.id===job.shotId);if(!shot)return;const currentSpec=Boolean(externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot));shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'failed');});
+        }
+      }finally{
+        await this.cleanupJobSnapshots(jobId);
+        this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);
+        await this.releaseRenderLease(jobId);
+        this.runningJobId=undefined;this.emitSnapshot();
       }
     }finally{
-      await this.cleanupJobSnapshots(jobId);
-      this.wanGpProcesses.delete(jobId);this.comfyCancelPromises.delete(jobId);this.cancelled.delete(jobId);
-      await this.releaseRenderLease(jobId);
-      this.runningJobId=undefined;this.emitSnapshot();void this.pump();
+      this.pumping=false;
+      if(!this.recoveryBlockedError&&!this.runningJobId&&!this.recoveryPending.length&&this.pending.length)void this.pump();
     }
   }
 
   private async run(jobId:string):Promise<void>{
     const project=this.requireProject(),job=this.snapshot().jobs.find(j=>j.id===jobId);if(!job?.spec)throw new Error('Render job has no immutable spec.');
+    if(job.spec.shot.id!==job.shotId)throw new Error('Render job immutable spec shot identity does not match the job shot.');
     const currentShot=project.shots.find(s=>s.id===job.shotId);if(!currentShot)throw new Error('Shot not found.');
     await this.verifyImmutableSpec(project,job);
     const runtime=job.spec.workflowProfile.runtime??(job.spec.workflowProfile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
@@ -553,6 +658,8 @@ export class RenderQueueService extends EventEmitter {
         const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
         if(await sha256File(path)!==fingerprint.sha256)return false;
       }
+      const runtime=await fingerprintRuntime(this.settings.get(),spec.workflowProfile);
+      if(runtime.environmentSha256!==spec.runtimeFingerprint.environmentSha256)return false;
       return true;
     }catch{return false;}
   }
@@ -585,7 +692,7 @@ export class RenderQueueService extends EventEmitter {
       const source=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
       expectedByPath.set(source,fingerprint.sha256);
     }
-    const root=join(project.rootPath,'cache','wangp-inputs',job.id);await mkdir(root,{recursive:true});
+    const root=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','wangp-inputs',job.id),'WanGP immutable input directory');
     const staged=new Map<string,string>();let index=0;
     const stage=async(source:string):Promise<string>=>{
       const cached=staged.get(source);if(cached)return cached;
@@ -608,8 +715,10 @@ export class RenderQueueService extends EventEmitter {
     const snapshotProfile=await stageWorkflowProfileSnapshot(project.rootPath,profile,job.spec!.workflowSha256,workflowSnapshotRoot);
     let compiled=await compileWanGpProfile(snapshotProfile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
     await this.verifyImmutableSpec(this.requireProject(),job);
-    const cacheDir=join(project.rootPath,'cache','wangp'),outputDir=join(project.rootPath,'renders',shot.id,job.id);
-    await Promise.all([mkdir(cacheDir,{recursive:true}),mkdir(outputDir,{recursive:true})]);
+    const [cacheDir,outputDir]=await Promise.all([
+      ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','wangp'),'WanGP cache directory'),
+      ensureSafeDirectory(join(project.rootPath,'renders'),join(project.rootPath,'renders',shot.id,job.id),'WanGP render output directory')
+    ]);
     const settingsPath=await assertSafeWritePath(cacheDir,join(cacheDir,`${job.id}.json`),'WanGP job settings');
     await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
 
@@ -694,12 +803,17 @@ export class RenderQueueService extends EventEmitter {
     const machine=this.settings.get(),shot=job.spec!.shot;
     await this.updateJob(job.id,{status:'downloading',progress:.92,message:'Saving and QC-checking ComfyUI outputs'},true,true);
     const refs=collectComfyHistoryOutputRefs(history);if(!refs.length)throw new Error('ComfyUI finished but no downloadable output files were found in history.outputs.');
-    const outputDir=join(project.rootPath,'renders',shot.id,job.id);await mkdir(outputDir,{recursive:true});const outputs:RenderOutput[]=[];
-    for(const ref of refs){
-      const safeLeaf=ref.filename.replace(/[\\/]/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');const safeSub=(ref.subfolder||'').replace(/[\\/]+/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');
-      const destination=await assertSafeWritePath(outputDir,join(outputDir,`${String(outputs.length).padStart(2,'0')}-${safeSub?`${safeSub}-`:''}${safeLeaf}`),'ComfyUI output');
-      await client.downloadToFile(ref,destination);const mediaType=inferMediaType(ref.filename);const output:RenderOutput={id:randomUUID(),jobId:job.id,shotId:shot.id,path:destination,filename:ref.filename,mediaType,createdAt:new Date().toISOString(),comfyMeta:{...ref,runtime:'comfyui'}};
-      if(mediaType==='video')output.technicalQc=await technicalQcVideo(machine,destination,shot);outputs.push(output);
+    const outputDir=await ensureSafeDirectory(join(project.rootPath,'renders'),join(project.rootPath,'renders',shot.id,job.id),'ComfyUI render output directory');const outputs:RenderOutput[]=[];
+    try{
+      for(const ref of refs){
+        const safeLeaf=ref.filename.replace(/[\\/]/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');const safeSub=(ref.subfolder||'').replace(/[\\/]+/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');
+        const destination=await assertSafeWritePath(outputDir,join(outputDir,`${String(outputs.length).padStart(2,'0')}-${safeSub?`${safeSub}-`:''}${safeLeaf}`),'ComfyUI output');
+        await client.downloadToFile(ref,destination);const mediaType=inferMediaType(ref.filename);const output:RenderOutput={id:randomUUID(),jobId:job.id,shotId:shot.id,path:destination,filename:ref.filename,mediaType,createdAt:new Date().toISOString(),comfyMeta:{...ref,runtime:'comfyui'}};
+        if(mediaType==='video')output.technicalQc=await technicalQcVideo(machine,destination,shot);outputs.push(output);
+      }
+    }catch(error){
+      await rm(outputDir,{recursive:true,force:true}).catch(cleanupError=>console.warn('Could not remove partial ComfyUI render outputs:',outputDir,cleanupError));
+      throw error;
     }
     await this.commitOutputs(job,outputs);
   }
@@ -722,6 +836,10 @@ export class RenderQueueService extends EventEmitter {
       if(shot){if(!currentSpec){if(shot.latestRenderId)shot.status='rendered';else if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(!qcFailed&&canRefreshProfileValidationFromRender(profile,job.spec)){profile!.validation={...profile!.validation!,lastSuccessfulRenderAt:now};}
     });
+    // The backend is already terminal and the project summary is durable. Clear the machine
+    // GPU lease before the final signed-journal refresh so a crash here cannot make an older
+    // active journal outrank this newer terminal project state solely because a stale lease survived.
+    await this.releaseRenderLease(job.id);
     const current=this.projects.getCurrent()?.renderJobs.find(j=>j.id===job.id);if(current){this.liveJobs.set(job.id,structuredClone(current));await this.journal.write(this.requireProject().rootPath,current);}
     this.emitSnapshot();
   }
@@ -733,14 +851,14 @@ export class RenderQueueService extends EventEmitter {
     const absolute=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`),machine=this.settings.get();
     const safeName=`${asset.id}-${basename(asset.projectPath).replace(/[^a-zA-Z0-9._-]+/g,'_')}`;
     if(machine.comfy.inputDir){
-      const subfolder=join('cineforge',project.id),targetDir=join(machine.comfy.inputDir,subfolder);await mkdir(targetDir,{recursive:true});
+      const subfolder=join('cineforge',project.id),targetDir=await ensureSafeDirectory(machine.comfy.inputDir,join(machine.comfy.inputDir,subfolder),'ComfyUI input staging directory');
       const target=await assertSafeWritePath(machine.comfy.inputDir,join(targetDir,safeName),'ComfyUI input staging');
       await copyFile(absolute,target);
       if(await sha256File(target)!==fingerprint.sha256){await rm(target,{force:true}).catch(()=>undefined);throw new Error(`Referenced asset changed while staging the immutable ComfyUI snapshot: ${asset.name}. Queue a new render.`);}
       return`${subfolder.replace(/\\/g,'/')}/${safeName}`;
     }
     if(kind==='image'){
-      const snapshotRoot=join(project.rootPath,'cache','comfy-inputs',job.id);await mkdir(snapshotRoot,{recursive:true});
+      const snapshotRoot=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','comfy-inputs',job.id),'ComfyUI immutable upload snapshot directory');
       const snapshot=await assertSafeWritePath(snapshotRoot,join(snapshotRoot,safeName),'ComfyUI immutable upload snapshot');
       try{
         await copyFile(absolute,snapshot);
@@ -753,9 +871,10 @@ export class RenderQueueService extends EventEmitter {
 
   private async updateJob(jobId:string,patch:Partial<RenderJob>,persistSummary=false,forceJournal=false):Promise<void>{
     const project=this.requireProject(),base=this.liveJobs.get(jobId)??project.renderJobs.find(j=>j.id===jobId);if(!base)return;
-    const next={...structuredClone(base),...patch,updatedAt:new Date().toISOString()} as RenderJob;this.liveJobs.set(jobId,next);
-    const now=Date.now(),last=this.lastJournalWrite.get(jobId)??0;
-    if(forceJournal||now-last>=1500){this.lastJournalWrite.set(jobId,now);await this.journal.write(project.rootPath,next);}
+    const next={...structuredClone(base),...patch,updatedAt:new Date().toISOString()} as RenderJob;
+    const now=Date.now(),last=this.lastJournalWrite.get(jobId)??0,writeJournal=forceJournal||now-last>=1500;
+    if(writeJournal){await this.journal.write(project.rootPath,next);this.lastJournalWrite.set(jobId,now);}
+    this.liveJobs.set(jobId,next);
     if(persistSummary)await this.projects.mutate(p=>{const target=p.renderJobs.find(j=>j.id===jobId);if(target)Object.assign(target,next);const shot=p.shots.find(s=>s.id===next.shotId);if(shot&&['preparing','uploading','submitted','running','recovering','stalled','downloading'].includes(next.status))shot.status='rendering';});
     this.emitSnapshot();
   }

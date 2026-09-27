@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import type { AppMachineSettings, Asset, FilmProject, KeyframeRequest, Shot, WorkflowProfile } from '../../shared/types';
 import { ProjectService } from './project-service';
@@ -10,7 +10,7 @@ import { collectWanGpOutputs, outputMediaType, startWanGp, stopWanGpDocker, wait
 import { mapJsonHostPathsForWanGp } from './runtime-path-mapper';
 import { collectComfyHistoryOutputRefs, inferMediaType } from './comfy-output';
 import { waitForComfyCompletion, waitForComfyPromptRelease } from './comfy-runner';
-import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath } from './path-safety';
+import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { killProcessTree } from './process-utils';
 import { planShotReferences } from './reference-plan';
@@ -116,11 +116,12 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   }finally{await rm(workflowSnapshotRoot,{recursive:true,force:true}).catch(()=>undefined);}
   throwIfAborted(signal);
 
-  try{await assertCurrent(false);}
+  try{await assertCurrent(true);}
   catch(error){await rm(generatedPath,{force:true}).catch(()=>undefined);throw error;}
   const assetId=randomUUID(),extension=extname(generatedPath)||'.png',relativePath=join('assets','keyframe',`${shot.id}-${request.role}-${assetId}${extension}`);
-  const target=await assertSafeWritePath(join(project.rootPath,'assets'),join(project.rootPath,relativePath),'generated keyframe');
-  await mkdir(join(project.rootPath,'assets','keyframe'),{recursive:true});await copyFile(generatedPath,target);await rm(generatedPath,{force:true}).catch(()=>undefined);
+  const keyframeAssetDir=await ensureSafeDirectory(join(project.rootPath,'assets'),join(project.rootPath,'assets','keyframe'),'generated keyframe directory');
+  const target=await assertSafeWritePath(keyframeAssetDir,join(project.rootPath,relativePath),'generated keyframe');
+  await copyFile(generatedPath,target);await rm(generatedPath,{force:true}).catch(()=>undefined);
   const asset:Asset={id:assetId,kind:'keyframe',name:`${shot.title} ${request.role} keyframe`,sourcePath:`generated-${request.role}${extension}`,projectPath:relativePath,tags:['generated','keyframe',request.role,profile.modelFamily],notes:`Generated locally with profile ${profile.name}.`,createdAt:new Date().toISOString()};
   try{
     return await projects.mutate(p=>{
@@ -141,7 +142,7 @@ async function stageWanGpKeyframeInputs(project:FilmProject,values:WorkflowValue
     const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
     expectedByPath.set(path,fp.sha256);
   }
-  await mkdir(root,{recursive:true});
+  root=await ensureSafeDirectory(join(project.rootPath,'cache'),root,'keyframe immutable input directory');
   const staged=new Map<string,string>();let index=0;
   const stage=async(source:string)=>{
     const cached=staged.get(source);if(cached)return cached;
@@ -157,16 +158,17 @@ async function stageWanGpKeyframeInputs(project:FilmProject,values:WorkflowValue
 }
 
 async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,profile:WorkflowProfile,values:WorkflowValues,shot:Shot,role:'start'|'end',assetFingerprints:Map<string,KeyframeAssetFingerprint>,assertCurrent:(checkRuntime?:boolean)=>Promise<void>,runId:string,markSubmitting:()=>Promise<void>,signal?:AbortSignal):Promise<string>{
-  const cache=join(project.rootPath,'cache','keyframes',runId);await mkdir(cache,{recursive:true});
+  const cache=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','keyframes',runId),'WanGP keyframe cache directory');
   try{
     await stageWanGpKeyframeInputs(project,values,join(cache,'inputs'),assetFingerprints);
     let compiled=await compileWanGpProfile(profile,values);compiled=mapJsonHostPathsForWanGp(project,machine,compiled);
-    const settingsPath=join(cache,'settings.json'),outputDir=join(cache,'output');await mkdir(outputDir,{recursive:true});await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
+    const settingsPath=await assertSafeWritePath(cache,join(cache,'settings.json'),'WanGP keyframe settings'),outputDir=await ensureSafeDirectory(cache,join(cache,'output'),'WanGP keyframe output directory');await writeFile(settingsPath,JSON.stringify(compiled,null,2),'utf8');
     const run=async(dryRun:boolean)=>{
-      throwIfAborted(signal);await assertCurrent(true);await markSubmitting();
+      throwIfAborted(signal);await assertCurrent(true);await markSubmitting();throwIfAborted(signal);
       const child=startWanGp(project,machine,{settingsPath,outputDir,dryRun,runId});
-      const onAbort=()=>{if(machine.wangp.executionMode==='docker')void stopWanGpDocker(machine,runId);else if(child.pid)void killProcessTree(child.pid);};
+      const onAbort=()=>{if(machine.wangp.executionMode==='docker')void stopWanGpDocker(machine,runId).catch(error=>console.warn('WanGP keyframe Docker stop request failed; signed lease recovery will verify backend ownership.',error));else if(child.pid)void killProcessTree(child.pid).catch(error=>console.warn('WanGP keyframe process stop request failed; signed lease recovery will verify backend ownership.',error));};
       signal?.addEventListener('abort',onAbort,{once:true});
+      if(signal?.aborted)onAbort();
       try{await waitWanGp(child);throwIfAborted(signal);}
       catch(error){if(signal?.aborted)throw new Error('Keyframe generation cancelled.');throw error;}
       finally{signal?.removeEventListener('abort',onAbort);}
@@ -174,7 +176,7 @@ async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,
     if(machine.wangp.dryRunBeforeRender)await run(true);
     await run(false);
     const files=await collectWanGpOutputs(outputDir);const image=files.find(path=>outputMediaType(path)==='image');if(!image)throw new Error(`WanGP keyframe profile completed but returned no image for ${shot.title} ${role}.`);
-    const durable=join(project.rootPath,'cache','keyframe-stage',`${randomUUID()}${extname(image)||'.png'}`);await mkdir(join(project.rootPath,'cache','keyframe-stage'),{recursive:true});await copyFile(image,durable);return durable;
+    const stageDir=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','keyframe-stage'),'keyframe staging directory'),durable=await assertSafeWritePath(stageDir,join(stageDir,`${randomUUID()}${extname(image)||'.png'}`),'staged keyframe output');await copyFile(image,durable);return durable;
   }finally{await rm(cache,{recursive:true,force:true}).catch(()=>undefined);}
 }
 
@@ -189,7 +191,7 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
     expectedByPath.set(path,fp.sha256);
   }
-  const snapshotRoot=join(project.rootPath,'cache','keyframe-comfy-inputs',randomUUID());await mkdir(snapshotRoot,{recursive:true});
+  const snapshotRoot=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','keyframe-comfy-inputs',randomUUID()),'ComfyUI keyframe immutable input directory');
   const stagedBySource=new Map<string,string>();let snapshotIndex=0;
   const stageImage=async(path:string)=>{
     const cached=stagedBySource.get(path);if(cached)return cached;
@@ -206,7 +208,7 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     for(const key of scalarKeys){const value=values[key];if(typeof value==='string'&&value)(values as any)[key]=await stageImage(value);}
     if(values.referenceImages?.length)values.referenceImages=await Promise.all(values.referenceImages.map(stageImage));
     throwIfAborted(signal);
-    const workflow=await compileProfile(profile,values);await assertCurrent(true);await markSubmitting();
+    const workflow=await compileProfile(profile,values);await assertCurrent(true);await markSubmitting();throwIfAborted(signal);
     let queued:{prompt_id:string}|undefined;
     try{queued=await client.queuePrompt(workflow,{cineforge:{projectId:project.id,shotId:shot.id,purpose:'keyframe',role,submissionId}});}
     catch(submitError){
@@ -235,6 +237,11 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     let cancelPromise:Promise<void>|undefined;
     const requestCancel=()=>cancelPromise??=client.cancelPrompt(queued.prompt_id);
     const onAbort=()=>{void requestCancel().catch(()=>undefined);};signal?.addEventListener('abort',onAbort,{once:true});
+    if(signal?.aborted){
+      try{await requestCancel();}
+      catch{await waitForComfyPromptRelease(client,queued.prompt_id);}
+      throw new Error('Keyframe generation cancelled after ComfyUI released the submitted prompt.');
+    }
     let history:any;
     try{history=await waitForComfyCompletion(client,queued.prompt_id,{timeoutMs:60*60_000,cancelled:()=>Boolean(signal?.aborted)});throwIfAborted(signal);}
     catch(error){
@@ -253,7 +260,8 @@ async function generateWithComfy(project:FilmProject,machine:AppMachineSettings,
     }
     finally{signal?.removeEventListener('abort',onAbort);}
     const refs=collectComfyHistoryOutputRefs(history);const imageRef=refs.find(r=>inferMediaType(r.filename)==='image');if(!imageRef)throw new Error('Image workflow completed but returned no image output in history.outputs.');
-    const bytes=await client.download(imageRef),durable=join(project.rootPath,'cache','keyframe-stage',`${randomUUID()}${extname(imageRef.filename)||'.png'}`);await mkdir(join(project.rootPath,'cache','keyframe-stage'),{recursive:true});await writeFile(durable,bytes);return durable;
+    const stageDir=await ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache','keyframe-stage'),'keyframe staging directory'),durable=await assertSafeWritePath(stageDir,join(stageDir,`${randomUUID()}${extname(imageRef.filename)||'.png'}`),'staged ComfyUI keyframe output');
+    await client.downloadToFile(imageRef,durable);return durable;
   }finally{await rm(snapshotRoot,{recursive:true,force:true}).catch(()=>undefined);}
 }
 

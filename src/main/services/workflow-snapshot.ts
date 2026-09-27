@@ -1,7 +1,7 @@
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { WorkflowProfile } from '../../shared/types';
-import { assertExistingPathInside, assertSafeWritePath } from './path-safety';
+import { assertExistingPathInside, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { sha256File } from './runtime-fingerprint';
 
 export async function stageWorkflowProfileSnapshot(
@@ -11,7 +11,7 @@ export async function stageWorkflowProfileSnapshot(
   snapshotRoot:string
 ):Promise<WorkflowProfile>{
   const source=await assertExistingPathInside(join(projectRoot,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`);
-  await mkdir(snapshotRoot,{recursive:true});
+  snapshotRoot=await ensureSafeDirectory(join(projectRoot,'cache'),snapshotRoot,'immutable workflow snapshot directory');
   const safeName=basename(source).replace(/[^a-zA-Z0-9._-]+/g,'_')||'workflow.json';
   const target=await assertSafeWritePath(snapshotRoot,join(snapshotRoot,safeName),'immutable workflow snapshot');
   await copyFile(source,target);
