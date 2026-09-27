@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { assertExistingPathInside } from '../src/main/services/path-safety';
+import { writeCodexMachineContext } from '../src/main/services/machine-context';
 import { analyzeWanGpBindings } from '../src/main/services/wangp-engine';
 import { profileCompatibilityErrors } from '../src/main/services/profile-validation';
 import { isTrustedRendererNavigation } from '../src/main/services/ipc-security';
@@ -92,6 +93,25 @@ describe('canonical filesystem containment',()=>{
   });
 });
 
+
+describe('machine context containment',()=>{
+  it('refuses a .cineforge directory swapped to a symlink outside the project',async()=>{
+    if(process.platform==='win32')return;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-context-root-')),outside=await mkdtemp(join(tmpdir(),'cineforge-context-outside-'));
+    try{
+      await symlink(outside,join(root,'.cineforge'),'dir');
+      const project={id:'project-1',rootPath:root,settings:{capcut:{pro:false},costPolicy:{allowCapcutAiCredits:false}}} as any;
+      const machine={wangp:{executionMode:'native'},comfy:{dedicatedInstance:true}} as any;
+      const probe={
+        platform:{platform:'linux',release:'test',arch:'x64'},cpu:{model:'CPU',logicalCores:1},memory:{totalMb:1024,freeMb:512},
+        ffmpeg:{available:true,ffprobeAvailable:true},capcut:{installed:false,configuredTier:'free'},
+        wangp:{configured:false,available:false,executionMode:'native',rootPath:''},
+        hardwarePlan:{tier:'test',recommendedWanGpProfile:4,recommendedAttention:'auto',defaultVideoModel:'ltx-2.5-fast',defaultStillStrategy:'local',notes:[]}
+      } as any;
+      await expect(writeCodexMachineContext(project,machine,probe)).rejects.toThrow(/symlink escape|outside/i);
+    }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
+  });
+});
 
 describe('renderer navigation trust',()=>{
   it('accepts only the exact packaged renderer file in production mode',()=>{
