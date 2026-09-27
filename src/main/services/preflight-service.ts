@@ -80,6 +80,17 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
     catch(error){issues.push({level:'error',code:'ASSET_PATH_INVALID',assetId:asset.id,message:`${asset.name}: ${error instanceof Error?error.message:String(error)}`});}
   }
 
+  const canonicalOutputIds=new Set<string>([
+    ...project.timeline.map(clip=>clip.renderOutputId),
+    ...project.shots.map(shot=>shot.latestRenderId).filter((id):id is string=>Boolean(id))
+  ]);
+  for(const outputId of canonicalOutputIds){
+    const output=project.renderOutputs.find(item=>item.id===outputId);
+    if(!output){issues.push({level:'error',code:'CANONICAL_RENDER_MISSING',message:`Canonical render output record is missing: ${outputId}.`});continue;}
+    try{await assertExistingPathInside(join(project.rootPath,'renders'),output.path,`canonical render output ${output.filename}`);}
+    catch(error){issues.push({level:'error',code:'CANONICAL_RENDER_FILE_MISSING',shotId:output.shotId,message:`${output.filename}: ${error instanceof Error?error.message:String(error)}`});}
+  }
+
   const currentRuntimeFingerprints=new Map<string,Promise<string>>();
   const runtimeFingerprintFor=(profile:WorkflowProfile)=>{
     const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
