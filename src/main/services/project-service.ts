@@ -144,22 +144,28 @@ export class ProjectService {
     if (!this.current) throw new Error('Open a project first.');
     const result = await dialog.showOpenDialog({ title: `Import ${kind}`, properties: ['openFile', 'multiSelections'], filters: assetImportFilters(kind) });
     if (result.canceled || result.filePaths.length === 0) return null;
-    return this.mutate(async project => {
-      for (const sourcePath of result.filePaths) {
-        const id = randomUUID();
-        const original = basename(sourcePath);
-        const safeName = original.replace(/[^a-zA-Z0-9._-]+/g, '_');
-        const relativePath = join('assets', kind, `${id}-${safeName}`);
-        const target = await assertSafeWritePath(join(project.rootPath,'assets'), join(project.rootPath,relativePath), 'asset import target');
-        await mkdir(join(project.rootPath, 'assets', kind), { recursive: true });
-        await copyFile(sourcePath, target);
-        project.assets.push({
-          id, kind,
-          name: original.slice(0, Math.max(1, original.length - extname(original).length)),
-          sourcePath: original, projectPath: relativePath, tags: [], notes: '', createdAt: new Date().toISOString()
-        });
-      }
-    });
+    const copied:string[]=[];
+    try{
+      return await this.mutate(async project => {
+        for (const sourcePath of result.filePaths) {
+          const id = randomUUID();
+          const original = basename(sourcePath);
+          const safeName = original.replace(/[^a-zA-Z0-9._-]+/g, '_');
+          const relativePath = join('assets', kind, `${id}-${safeName}`);
+          const target = await assertSafeWritePath(join(project.rootPath,'assets'), join(project.rootPath,relativePath), 'asset import target');
+          await mkdir(join(project.rootPath, 'assets', kind), { recursive: true });
+          await copyFile(sourcePath, target);copied.push(target);
+          project.assets.push({
+            id, kind,
+            name: original.slice(0, Math.max(1, original.length - extname(original).length)),
+            sourcePath: original, projectPath: relativePath, tags: [], notes: '', createdAt: new Date().toISOString()
+          });
+        }
+      });
+    }catch(error){
+      for(const path of copied)await rm(path,{force:true}).catch(cleanupError=>console.warn(`Could not remove rolled-back asset import: ${path}`,cleanupError));
+      throw error;
+    }
   }
 
   async deleteAsset(assetId:string):Promise<FilmProject>{
