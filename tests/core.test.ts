@@ -84,6 +84,12 @@ describe('project schema canonicalization',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/render output path is required/i);
   });
+  it('infers WanGP runtime for legacy profiles that only declare wangp-settings format',()=>{
+    const raw:any=baseProject();
+    raw.settings={workflowProfiles:[{id:'legacy-wangp',purpose:'video',name:'Legacy WanGP',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/project/workflows/legacy.json',workflowFormat:'wangp-settings',bindings:[],enabled:true}]};
+    const loaded=loadPortableProject(raw,'/project').project;
+    expect(loaded.settings.workflowProfiles.find(profile=>profile.id==='legacy-wangp')?.runtime).toBe('wangp');
+  });
   it('rejects render jobs whose immutable spec targets a different shot id',()=>{
     const raw:any=baseProject(),specShot=structuredClone(raw.shots[0]);specShot.id='shot-2';
     raw.renderJobs=[{
