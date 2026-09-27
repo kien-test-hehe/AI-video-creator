@@ -4,16 +4,16 @@ import { shotProjectRenderInputKey } from '../../shared/shot-signature';
 
 export type ViewId='studio'|'dashboard'|'story'|'assets'|'storyboard'|'shots'|'queue'|'timeline'|'finishing'|'settings';
 interface AppState{
-  project:FilmProject|null;machine:AppMachineSettings|null;activeView:ViewId;selectedShotId?:string;queue:QueueSnapshot;probe?:SystemProbe;busy:boolean;projectDirty:boolean;machineDirty:boolean;error?:string;notice?:string;
-  setProject(project:FilmProject|null):void;syncRuntime(project:FilmProject):void;updateProject(mutator:(project:FilmProject)=>void):void;persist():Promise<void>;
+  project:FilmProject|null;machine:AppMachineSettings|null;activeView:ViewId;selectedShotId?:string;queue:QueueSnapshot;probe?:SystemProbe;busy:boolean;projectWriteLocked:boolean;projectDirty:boolean;machineDirty:boolean;error?:string;notice?:string;
+  setProject(project:FilmProject|null):void;syncRuntime(project:FilmProject):void;updateProject(mutator:(project:FilmProject)=>void):void;persist():Promise<void>;runProjectMutation<T>(operation:()=>Promise<T>):Promise<T>;
   setMachine(machine:AppMachineSettings):void;updateMachine(mutator:(machine:AppMachineSettings)=>void):void;persistMachine():Promise<void>;
   setView(view:ViewId):void;selectShot(id?:string):void;setQueue(queue:QueueSnapshot):void;setProbe(probe?:SystemProbe):void;setBusy(busy:boolean):void;setError(error?:string):void;setNotice(notice?:string):void;
 }
 let projectTimer:ReturnType<typeof setTimeout>|undefined,machineTimer:ReturnType<typeof setTimeout>|undefined;
-let projectEditRevision=0,machineEditRevision=0,busyCount=0;
+let projectEditRevision=0,machineEditRevision=0,busyCount=0,projectWriteLockCount=0;
 
 export const useAppStore=create<AppState>((set,get)=>({
-  project:null,machine:null,activeView:'studio',queue:{jobs:[]},busy:false,projectDirty:false,machineDirty:false,
+  project:null,machine:null,activeView:'studio',queue:{jobs:[]},busy:false,projectWriteLocked:false,projectDirty:false,machineDirty:false,
   setProject:project=>{clearTimeout(projectTimer);projectTimer=undefined;projectEditRevision+=1;set({project,projectDirty:false,selectedShotId:undefined,probe:undefined});},
   syncRuntime:mainProject=>set(state=>{
     const current=state.project;if(!current||current.id!==mainProject.id)return{project:mainProject,projectDirty:false,selectedShotId:undefined,probe:undefined};
@@ -30,7 +30,8 @@ export const useAppStore=create<AppState>((set,get)=>({
     if(!state.projectDirty)for(const server of mainProject.settings.workflowProfiles)if(!next.settings.workflowProfiles.some(local=>local.id===server.id))next.settings.workflowProfiles.push(structuredClone(server));
     return{project:next};
   }),
-  updateProject:mutator=>{const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotProjectRenderInputKey(current,shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotProjectRenderInputKey(next,shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist().catch(()=>undefined),450);},
+  updateProject:mutator=>{if(get().projectWriteLocked){set({error:'A project-changing operation is still applying. Wait for it to finish or cancel it before editing the project.'});return;}const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotProjectRenderInputKey(current,shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotProjectRenderInputKey(next,shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist().catch(()=>undefined),450);},
+  runProjectMutation:async operation=>{projectWriteLockCount+=1;set({projectWriteLocked:true});try{return await operation();}finally{projectWriteLockCount=Math.max(0,projectWriteLockCount-1);set({projectWriteLocked:projectWriteLockCount>0});}},
   persist:async()=>{
     clearTimeout(projectTimer);projectTimer=undefined;
     try{
