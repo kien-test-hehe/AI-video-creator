@@ -76,18 +76,25 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const duplicateTimelineOrder=duplicateTimelineOrderKey(timeline);
   if(duplicateTimelineOrder)throw new Error(`Duplicate timeline track/order slot: ${duplicateTimelineOrder}`);
 
-  for (const scene of scenes){
-    scene.shotIds=shots.filter(shot=>shot.sceneId===scene.id).sort((a,b)=>a.index-b.index).map(shot=>shot.id);
-  }
+  const shotsByScene=new Map<string,Shot[]>();
+  for(const shot of shots){const list=shotsByScene.get(shot.sceneId)??[];list.push(shot);shotsByScene.set(shot.sceneId,list);}
+  for(const scene of scenes)scene.shotIds=(shotsByScene.get(scene.id)??[]).sort((a,b)=>a.index-b.index).map(shot=>shot.id);
+
   for(const shot of shots){
-    const validLatest=shot.latestRenderId?renderOutputs.find(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video'):undefined;
+    const latest=shot.latestRenderId?outputById.get(shot.latestRenderId):undefined;
+    const validLatest=latest&&latest.shotId===shot.id&&latest.mediaType==='video'?latest:undefined;
     if(!validLatest){
       shot.latestRenderId=undefined;
       if(shot.status==='rendered')shot.status='ready';
     }
   }
-  for(const job of renderJobs)job.outputs=renderOutputs.filter(output=>output.jobId===job.id&&output.shotId===job.shotId);
-  for(const output of renderOutputs)if(!jobIds.has(output.jobId))output.jobId='orphaned';
+
+  const outputsByJobShot=new Map<string,RenderOutput[]>();
+  for(const output of renderOutputs){
+    if(!jobIds.has(output.jobId)){output.jobId='orphaned';continue;}
+    const key=`${output.jobId}\u0000${output.shotId}`,list=outputsByJobShot.get(key)??[];list.push(output);outputsByJobShot.set(key,list);
+  }
+  for(const job of renderJobs)job.outputs=outputsByJobShot.get(`${job.id}\u0000${job.shotId}`)??[];
   return {
     schemaVersion: 2,
     id,
