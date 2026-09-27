@@ -128,8 +128,8 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
 
 function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
   const source = asObject(value, 'workflow profile');
-  const runtime = source.runtime === 'wangp' ? 'wangp' : 'comfyui';
   const format = source.workflowFormat === 'wangp-settings' ? 'wangp-settings' : source.workflowFormat === 'ui' ? 'ui' : 'api';
+  const runtime = source.runtime === 'wangp' ? 'wangp' : source.runtime === 'comfyui' ? 'comfyui' : format === 'wangp-settings' ? 'wangp' : 'comfyui';
   const validationSource = source.validation && typeof source.validation === 'object' ? source.validation : {};
   return {
     id: safeId(source.id),
