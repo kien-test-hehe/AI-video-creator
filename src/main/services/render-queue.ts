@@ -436,7 +436,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private assertRecoveryOperational():void{
-    if(this.recoveryBlockedError)throw new Error(`Render recovery is blocked and GPU ownership is uncertain: ${this.recoveryBlockedError}. Resolve the recovery problem and restart/reopen the project before queueing, retrying, or cancelling renders.`);
+    if(this.recoveryBlockedError)throw new Error(`Render queue is blocked because recovery or durable queue state is uncertain: ${this.recoveryBlockedError}. Resolve the underlying storage/backend problem and restart/reopen the project before queueing, retrying, or cancelling renders.`);
   }
 
   private requireProject():FilmProject{const project=this.projects.getCurrent();if(!project)throw new Error('Open a project first.');return project;}
@@ -450,12 +450,12 @@ export class RenderQueueService extends EventEmitter {
     this.comfyCancelPromises.set(jobId,pending);return pending;
   }
 
-  private async waitForComfyPromptOrExit(jobId:string,timeoutMs=35_000):Promise<string|undefined>{
+  private async waitForComfyPromptOrExit(jobId:string,timeoutMs=35_000):Promise<string>{
     const deadline=Date.now()+timeoutMs;
     while(Date.now()<deadline){
       const live=this.snapshot().jobs.find(job=>job.id===jobId);
       if(live?.comfyPromptId)return live.comfyPromptId;
-      if(this.runningJobId!==jobId)return undefined;
+      if(this.runningJobId!==jobId)throw new Error('ComfyUI job left the active submission state before its prompt identity was durably confirmed. Cancellation cannot be claimed safely; refresh/recover the queue state.');
       await sleep(100);
     }
     throw new Error('ComfyUI submission is still unresolved; cancellation was not confirmed, so the GPU slot remains reserved.');
@@ -577,8 +577,12 @@ export class RenderQueueService extends EventEmitter {
         this.pending=this.pending.filter(id=>id!==jobId);
         if(cancelledWhileAcquiring){this.cancelled.delete(jobId);this.emitSnapshot();return;}
         const message=`Render did not start because CineForge could not persist the machine GPU ownership lease: ${error instanceof Error?error.message:String(error)}`;
-        await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed before GPU start',error:message},true,true).catch(updateError=>console.warn('Could not persist render-lease acquisition failure:',updateError));
-        await this.projects.mutate(p=>{const job=p.renderJobs.find(item=>item.id===jobId),shot=job?p.shots.find(item=>item.id===job.shotId):undefined;if(shot&&job){const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'orphaned');}}).catch(updateError=>console.warn('Could not restore shot state after render-lease acquisition failure:',updateError));
+        const persistenceErrors:string[]=[];
+        try{await this.updateJob(jobId,{status:'failed',progress:0,message:'Failed before GPU start',error:message},true,true);}
+        catch(updateError){persistenceErrors.push(`job failure state: ${updateError instanceof Error?updateError.message:String(updateError)}`);}
+        try{await this.projects.mutate(p=>{const job=p.renderJobs.find(item=>item.id===jobId),shot=job?p.shots.find(item=>item.id===job.shotId):undefined;if(shot&&job){const currentSpec=this.isCurrentJobSpec(p,job,shot);shot.status=shotStatusAfterJobSettlement(shot.status,Boolean(shot.latestRenderId),currentSpec,job.spec?.shot.status,'orphaned');}});}
+        catch(updateError){persistenceErrors.push(`shot recovery state: ${updateError instanceof Error?updateError.message:String(updateError)}`);}
+        if(persistenceErrors.length)this.recoveryBlockedError=`Render never reached the backend, but CineForge could not persist a trustworthy failure state (${persistenceErrors.join(' | ')}). Reopen the project after resolving storage errors before queueing more work.`;
         this.emitSnapshot();return;
       }
       if(this.cancelled.has(jobId)||!this.pending.includes(jobId)){
