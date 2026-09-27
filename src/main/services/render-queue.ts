@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type {
