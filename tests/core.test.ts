@@ -86,6 +86,25 @@ describe('project schema canonicalization',()=>{
   });
 });
 describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
+describe('strict workflow boolean transforms',()=>{
+  it('does not coerce the string "false" to true in ComfyUI bindings',()=>{
+    const workflow:ApiWorkflow={'1':{class_type:'Switch',inputs:{enabled:true}}};
+    const out=applyBindings(workflow,[{key:'prompt',selector:{nodeId:'1'},input:'enabled',transform:'boolean',required:true}],{prompt:'false',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:1,filenamePrefix:'x'});
+    expect(out['1'].inputs.enabled).toBe(false);
+    expect(()=>applyBindings(workflow,[{key:'prompt',selector:{nodeId:'1'},input:'enabled',transform:'boolean',required:true}],{prompt:'maybe',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:1,filenamePrefix:'x'})).toThrow(/Cannot transform value to boolean safely/);
+  });
+  it('does not coerce the string "false" to true in WanGP bindings',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-wangp-bool-')),path=join(root,'settings.json');
+    try{
+      await writeFile(path,JSON.stringify({prompt:'old',seed:1,enabled:true}),'utf8');
+      const profile={id:'p',runtime:'wangp' as const,purpose:'video' as const,name:'bool',modelFamily:'custom' as const,mode:'t2v' as const,workflowPath:path,workflowFormat:'wangp-settings' as const,enabled:true,bindings:[
+        {key:'prompt' as const,jsonPath:'enabled',transform:'boolean' as const,required:true}
+      ]};
+      const compiled=await compileWanGpProfile(profile,{prompt:'false',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:1,filenamePrefix:'x'});
+      expect(compiled.enabled).toBe(false);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('workflow engine',()=>{
  it('detects and binds API workflow',()=>{expect(detectWorkflowFormat(api)).toBe('api');const suggestions=suggestBindings(api);expect(suggestions.some(b=>b.key==='prompt')).toBe(true);const out=applyBindings(api,[{key:'prompt',selector:{nodeId:'1'},input:'text',required:true}],{prompt:'new',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:2,filenamePrefix:'x'});expect(out['1'].inputs.text).toBe('new');expect(api['1'].inputs.text).toBe('old');});
  it('converts a minimal UI graph using object_info',()=>{const ui={nodes:[{id:1,type:'PrimitiveNode',mode:0,inputs:[],widgets_values:[7]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,0,2,0,'INT']]};const info={PrimitiveNode:{input:{required:{value:['INT',{}]}}},Consumer:{input:{required:{value:['INT',{forceInput:true}]}}}};const converted=uiWorkflowToApi(ui,info);expect(converted.workflow['1'].inputs.value).toBe(7);expect(converted.workflow['2'].inputs.value).toEqual(['1',0]);expect(converted.requiresApiExport).toBe(false);});
