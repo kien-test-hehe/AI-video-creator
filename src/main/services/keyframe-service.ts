@@ -166,7 +166,7 @@ async function generateWithWanGp(project:FilmProject,machine:AppMachineSettings,
     const run=async(dryRun:boolean)=>{
       throwIfAborted(signal);await assertCurrent(true);await markSubmitting();throwIfAborted(signal);
       const child=startWanGp(project,machine,{settingsPath,outputDir,dryRun,runId});
-      const onAbort=()=>{if(machine.wangp.executionMode==='docker')void stopWanGpDocker(machine,runId);else if(child.pid)void killProcessTree(child.pid);};
+      const onAbort=()=>{if(machine.wangp.executionMode==='docker')void stopWanGpDocker(machine,runId).catch(error=>console.warn('WanGP keyframe Docker stop request failed; signed lease recovery will verify backend ownership.',error));else if(child.pid)void killProcessTree(child.pid).catch(error=>console.warn('WanGP keyframe process stop request failed; signed lease recovery will verify backend ownership.',error));};
       signal?.addEventListener('abort',onAbort,{once:true});
       if(signal?.aborted)onAbort();
       try{await waitWanGp(child);throwIfAborted(signal);}
