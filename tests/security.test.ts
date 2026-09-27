@@ -143,7 +143,7 @@ describe('managed directory containment',()=>{
     try{
       const cache=join(root,'cache');await mkdir(cache,{recursive:true});
       await symlink(outside,join(cache,'job'),'dir');
-      await expect(ensureSafeDirectory(cache,join(cache,'job','nested'),'render cache directory')).rejects.toThrow(/symlink escape|outside/i);
+      await expect(ensureSafeDirectory(cache,join(cache,'job','nested'),'render cache directory')).rejects.toThrow(/symbolic-link|symlink escape|outside/i);
       await expect(import('node:fs/promises').then(fs=>fs.stat(join(outside,'nested')))).rejects.toThrow();
     }finally{await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
   });
