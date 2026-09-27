@@ -43,11 +43,21 @@ export async function readWorkflow(path: string): Promise<any> {
   return readJsonFileLimited(path,'ComfyUI workflow JSON');
 }
 
+function parseBooleanTransform(value:unknown):boolean{
+  if(typeof value==='boolean')return value;
+  if(typeof value==='number'){if(value===1)return true;if(value===0)return false;}
+  if(typeof value==='string'){
+    const normalized=value.trim().toLowerCase();
+    if(['true','1','yes','on'].includes(normalized))return true;
+    if(['false','0','no','off',''].includes(normalized))return false;
+  }
+  throw new Error(`Cannot transform value to boolean safely: ${String(value)}`);
+}
 function transformValue(value: unknown, transform: WorkflowBinding['transform']): unknown {
   switch (transform) {
     case 'integer': return Math.round(Number(value));
     case 'float': return Number(value);
-    case 'boolean': return Boolean(value);
+    case 'boolean': return parseBooleanTransform(value);
     case 'string': return value == null ? '' : String(value);
     default: return value;
   }
