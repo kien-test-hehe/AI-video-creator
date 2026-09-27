@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { assertLocalUrl } from './local-url';
+import { assertLocalUrl, fetchLocalUrl } from './local-url';
 import { readFileBufferLimited } from './json-file';
 import { readResponseBufferLimited, readResponseJsonLimited, readResponseTextLimited } from './http-response';
 
@@ -41,7 +41,7 @@ export class ComfyClient {
 
   private request(path: string, init: RequestInit = {}, timeoutMs = 30_000): Promise<Response> {
     const timeout = AbortSignal.timeout(timeoutMs);
-    return fetch(this.url(path), { ...init, signal: timeout });
+    return fetchLocalUrl(this.url(path), { ...init, signal: timeout }, this.localOnly);
   }
 
   async ping(): Promise<{ reachable: boolean; url: string; systemStats?: unknown; error?: string }> {
@@ -179,7 +179,7 @@ export class ComfyClient {
     url.searchParams.set('filename',ref.filename);
     if(ref.subfolder)url.searchParams.set('subfolder',ref.subfolder);
     if(ref.type)url.searchParams.set('type',ref.type);
-    const res=await fetch(url,{signal:AbortSignal.timeout(timeoutMs)});
+    const res=await fetchLocalUrl(url,{signal:AbortSignal.timeout(timeoutMs)},this.localOnly);
     if(!res.ok)throw new Error(`ComfyUI output download failed: ${res.status} ${(await readResponseTextLimited(res,'ComfyUI output error',1024*1024)).slice(0,1000)}`);
     return res;
   }
