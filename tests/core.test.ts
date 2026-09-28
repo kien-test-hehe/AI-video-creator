@@ -34,7 +34,7 @@ import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services/json-file';
+import { readFileBufferLimited, readJsonFileLimited, stringifyJsonLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
 import { buildRenderPrompt } from '../src/main/services/render-queue';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
@@ -117,6 +117,7 @@ describe('bounded workflow JSON reads',()=>{
       await writeFile(large,JSON.stringify({payload:'x'.repeat(256)}),'utf8');
       expect(await readJsonFileLimited<{ok:boolean}>(small,'test JSON',128)).toEqual({ok:true});
       await expect(readJsonFileLimited(large,'test JSON',64)).rejects.toThrow(/too large|safety limit/i);
+      expect(()=>stringifyJsonLimited({payload:'x'.repeat(256)},'Converted ComfyUI API workflow',64)).toThrow(/storage safety limit/i);
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
@@ -524,6 +525,20 @@ describe('workflow engine',()=>{
 
    const wrongTarget=uiWorkflowToApi({nodes:[{id:1,type:'Source',mode:0,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,0,99,0,'INT']]},info);
    expect(wrongTarget.requiresApiExport).toBe(true);expect(wrongTarget.warnings.join(' ')).toMatch(/targets node 99/i);
+ });
+ it('refuses ambiguous or malformed UI node identity/input graphs',()=>{
+   const info={Source:{input:{required:{value:['INT',{}]}}},Consumer:{input:{required:{a:['INT',{forceInput:true}],b:['INT',{forceInput:true}]}}}};
+   const duplicateNode=uiWorkflowToApi({nodes:[{id:1,type:'Source',mode:0,inputs:[],widgets_values:[1]},{id:1,type:'Source',mode:0,inputs:[],widgets_values:[2]}],links:[]},info);
+   expect(duplicateNode.requiresApiExport).toBe(true);expect(duplicateNode.warnings.join(' ')).toMatch(/duplicate node id 1/i);
+
+   const duplicateInput=uiWorkflowToApi({nodes:[{id:1,type:'Consumer',mode:0,inputs:[{name:'a'},{name:'a'}],widgets_values:[]}],links:[]},info);
+   expect(duplicateInput.requiresApiExport).toBe(true);expect(duplicateInput.warnings.join(' ')).toMatch(/duplicate input name a/i);
+
+   const reusedLink=uiWorkflowToApi({nodes:[{id:1,type:'Source',mode:0,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'a',link:3},{name:'b',link:3}],widgets_values:[]}],links:[[3,1,0,2,0,'INT']]},info);
+   expect(reusedLink.requiresApiExport).toBe(true);expect(reusedLink.warnings.join(' ')).toMatch(/more than one target input/i);
+
+   const malformedNode=uiWorkflowToApi({nodes:[{id:'',type:'Source',mode:0,inputs:[],widgets_values:[]}],links:[]},info);
+   expect(malformedNode.requiresApiExport).toBe(true);expect(malformedNode.warnings.join(' ')).toMatch(/invalid id/i);
  });
  it('refuses UI conversion when a required dependency originates from a disabled node',()=>{
    const ui={nodes:[{id:1,type:'Source',mode:2,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,0,2,0,'INT']]};
