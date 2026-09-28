@@ -385,6 +385,16 @@ describe('project schema canonicalization',()=>{
     const badHash:any=baseProject();badHash.settings={workflowProfiles:[{id:'wf',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/project/workflows/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:false,validation:{structuralStatus:'valid',sourceSha256:'not-a-sha'}}]};
     expect(()=>loadPortableProject(badHash,'/project')).toThrow(/invalid SHA-256 project fingerprint/i);
   });
+  it('rejects malformed nested story/settings objects instead of replacing them with defaults',()=>{
+    const badStory:any=baseProject();badStory.story='lost story';
+    expect(()=>loadPortableProject(badStory,'/project')).toThrow(/invalid story.*expected an object/i);
+
+    const badPolicy:any=baseProject();badPolicy.settings={costPolicy:'free-for-all'};
+    expect(()=>loadPortableProject(badPolicy,'/project')).toThrow(/invalid project cost policy.*expected an object/i);
+
+    const badCapcut:any=baseProject();badCapcut.settings={capcut:'pro-ish'};
+    expect(()=>loadPortableProject(badCapcut,'/project')).toThrow(/invalid CapCut project settings.*expected an object/i);
+  });
   it('rejects render outputs that do not have a durable path',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/render output path is required/i);
