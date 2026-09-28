@@ -46,6 +46,7 @@ import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTE
 import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, latestShotQcResult, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 import { advisePreviz } from '../src/main/services/previz-service';
+import { AutomationJournal } from '../src/main/services/automation-journal';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1962,5 +1963,53 @@ describe('previz human-task lifecycle',()=>{
       expect(resolved.shots.find(item=>item.id==='shot')?.previz).toMatchObject({requirement:'required',status:'ready'});
       expect(resolved.shots.find(item=>item.id==='shot')?.previz?.reason).toMatch(/Human override: previz approved/i);
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+
+describe('autonomous production journal',()=>{
+  it('round-trips a recoverable run and filters stale ids against the open project',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-auto-journal-'));
+    const service=new ProjectService();
+    try{
+      const project=await service.createAt(root,'Auto Journal');
+      await service.mutate(next=>{
+        next.scenes.push({id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['shot']});
+        next.shots.push({
+          id:'shot',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+          characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+          generation:{modelFamily:'ltx-2.5-fast',mode:'t2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+        });
+      });
+      const current=service.getCurrent()!;
+      const journal=new AutomationJournal();
+      await journal.write(current,{
+        schemaVersion:1,projectId:current.id,projectRoot:root,targetShotIds:['shot'],maxAutoRetries:2,buildTimeline:true,
+        status:{running:true,paused:false,phase:'waiting-render',projectRoot:root,currentShotId:'shot',message:'waiting',startedAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:01.000Z',completedShotIds:[],retryCounts:{shot:1},blockedHumanTaskIds:[]}
+      });
+      const restored=await journal.read(service.getCurrent()!);
+      expect(restored).toMatchObject({targetShotIds:['shot'],maxAutoRetries:2,buildTimeline:true});
+      expect(restored?.status).toMatchObject({running:true,currentShotId:'shot',retryCounts:{shot:1}});
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+describe('renderer autonomous edit lock',()=>{
+  it('blocks project edits while AUTO RUN owns production and permits them once paused',()=>{
+    const project={
+      schemaVersion:3,id:'lock-project',name:'Lock',rootPath:'/tmp/lock',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'Before',logline:'',script:'',notes:''},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    useAppStore.setState({project,projectDirty:false,automation:{running:true,paused:false,phase:'planning',message:'running',updatedAt:'2026-01-01T00:00:00.000Z',completedShotIds:[],retryCounts:{},blockedHumanTaskIds:[]}});
+    useAppStore.getState().updateProject(next=>{next.story.title='Blocked';});
+    expect(useAppStore.getState().project?.story.title).toBe('Before');
+    expect(useAppStore.getState().projectDirty).toBe(false);
+    useAppStore.setState(state=>({automation:{...state.automation!,paused:true,phase:'paused'}}));
+    useAppStore.getState().updateProject(next=>{next.story.title='Allowed';});
+    expect(useAppStore.getState().project?.story.title).toBe('Allowed');
+    expect(useAppStore.getState().projectDirty).toBe(true);
+    useAppStore.getState().setProject(null);
+    useAppStore.setState({automation:undefined});
   });
 });
