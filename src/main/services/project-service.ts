@@ -132,6 +132,7 @@ export class ProjectService {
         return edited ? { ...structuredClone(original), name: edited.name, tags: [...edited.tags], notes: edited.notes } : structuredClone(original);
       });
       const currentShots = new Map(this.current.shots.map(shot => [shot.id, shot]));
+      const changedRenderInputShotIds:string[]=[];
       for (const shot of incoming.shots) {
         const currentShot=currentShots.get(shot.id);
         if(!currentShot){
@@ -154,13 +155,14 @@ export class ProjectService {
         if(shotProjectRenderInputKey(incoming,shot)!==shotProjectRenderInputKey(this.current,currentShot)){
           shot.latestRenderId=undefined;
           shot.canonicalRenderId=undefined;
-          invalidateObservedFinalState(incoming,shot.id,'Shot render inputs changed in the renderer.');
+          changedRenderInputShotIds.push(shot.id);
           shot.status=currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
         }else{
           shot.status=currentShot.status;
           shot.latestRenderId=currentShot.latestRenderId;
         }
       }
+      for(const shotId of changedRenderInputShotIds)invalidateObservedFinalState(incoming,shotId,'Shot render inputs changed in the renderer.');
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
       incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>preserveTrustedProfileValidation(currentProfiles.get(profile.id),profile));
       await this.validateStoragePaths(incoming);
