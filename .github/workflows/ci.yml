@@ -71,6 +71,7 @@ jobs:
         run: |
           [scriptblock]::Create((Get-Content -Raw scripts/setup-windows.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw scripts/run-windows.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw scripts/verify-windows.ps1)) | Out-Null
       - name: Build renderer/main/preload
         run: npm run build
       - name: Build NSIS installer
