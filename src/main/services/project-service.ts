@@ -9,7 +9,7 @@ import { loadPortableProject, UnsupportedProjectSchemaError } from './project-sc
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
 import { readJsonFileLimited, stringifyJsonLimited } from './json-file';
-import { defaultSequentialDependencies, invalidateObservedFinalState, refreshCanonicalRender } from '../../shared/production-state';
+import { invalidateObservedFinalState, invalidateStateCascade, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, refreshCanonicalRender, shotStateFingerprint } from '../../shared/production-state';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -114,9 +114,35 @@ export class ProjectService {
       if (!this.current) throw new Error('No project is open.');
       const candidate=structuredClone(project);
       const proposedShotIds=new Set(Array.isArray(candidate.shots)?candidate.shots.map(shot=>shot?.id).filter((id):id is string=>typeof id==='string'):[]);
+      const currentShotIds=new Set(this.current.shots.map(shot=>shot.id));
+      for(const shot of candidate.shots){
+        if(currentShotIds.has(shot.id))continue;
+        shot.latestRenderId=undefined;
+        shot.latestAttemptRenderId=undefined;
+        shot.canonicalRenderId=undefined;
+        shot.plannedStartStateId=undefined;
+        shot.plannedEndStateId=undefined;
+        shot.actualStartStateId=undefined;
+        shot.observedFinalStateId=undefined;
+        shot.status=shot.status==='ready'?'ready':'draft';
+      }
       candidate.renderJobs=this.current.renderJobs.filter(job=>proposedShotIds.has(job.shotId));
       candidate.renderOutputs=this.current.renderOutputs.filter(output=>proposedShotIds.has(output.shotId));
       candidate.shotStates=this.current.shotStates.filter(state=>proposedShotIds.has(state.shotId));
+      let retainedStateIds=new Set(candidate.shotStates.map(state=>state.id));
+      let pruned=true;
+      while(pruned){
+        const before=candidate.shotStates.length;
+        candidate.shotStates=candidate.shotStates.filter(state=>!state.derivedFromStateId||retainedStateIds.has(state.derivedFromStateId));
+        retainedStateIds=new Set(candidate.shotStates.map(state=>state.id));
+        pruned=candidate.shotStates.length!==before;
+      }
+      for(const shot of candidate.shots){
+        if(shot.plannedStartStateId&&!retainedStateIds.has(shot.plannedStartStateId))shot.plannedStartStateId=undefined;
+        if(shot.plannedEndStateId&&!retainedStateIds.has(shot.plannedEndStateId))shot.plannedEndStateId=undefined;
+        if(shot.actualStartStateId&&!retainedStateIds.has(shot.actualStartStateId))shot.actualStartStateId=undefined;
+        if(shot.observedFinalStateId&&!retainedStateIds.has(shot.observedFinalStateId))shot.observedFinalStateId=undefined;
+      }
       candidate.shotDependencies=this.current.shotDependencies.filter(edge=>proposedShotIds.has(edge.fromShotId)&&proposedShotIds.has(edge.toShotId));
       candidate.qcResults=this.current.qcResults.filter(result=>proposedShotIds.has(result.shotId));
       candidate.humanTasks=this.current.humanTasks.filter(task=>!task.shotId||proposedShotIds.has(task.shotId));
@@ -132,8 +158,7 @@ export class ProjectService {
         return edited ? { ...structuredClone(original), name: edited.name, tags: [...edited.tags], notes: edited.notes } : structuredClone(original);
       });
       const currentShots = new Map(this.current.shots.map(shot => [shot.id, shot]));
-      const changedRenderInputShotIds:string[]=[];
-      for (const shot of incoming.shots) {
+      for(const shot of incoming.shots){
         const currentShot=currentShots.get(shot.id);
         if(!currentShot){
           shot.latestRenderId=undefined;
@@ -148,21 +173,48 @@ export class ProjectService {
         }
         shot.latestAttemptRenderId=currentShot.latestAttemptRenderId;
         shot.canonicalRenderId=currentShot.canonicalRenderId;
-        shot.plannedStartStateId=currentShot.plannedStartStateId;
-        shot.plannedEndStateId=currentShot.plannedEndStateId;
-        shot.actualStartStateId=currentShot.actualStartStateId;
-        shot.observedFinalStateId=currentShot.observedFinalStateId;
+        const retainedState=(id:string|undefined)=>id?incoming.shotStates.find(state=>state.id===id&&state.status!=='stale'):undefined;
+        shot.plannedStartStateId=retainedState(currentShot.plannedStartStateId)?.id;
+        shot.plannedEndStateId=retainedState(currentShot.plannedEndStateId)?.id;
+        const manualStartFrameChanged=shot.startFrameAssetId!==currentShot.startFrameAssetId;
+        const retainedActualId=retainedState(currentShot.actualStartStateId)?.id;
+        if(manualStartFrameChanged){
+          const prior=retainedActualId?incoming.shotStates.find(state=>state.id===retainedActualId):undefined;
+          if(prior)invalidateStateCascade(incoming,[prior.id],'Start frame was manually changed; prior propagated start state is stale.');
+          if(shot.startFrameAssetId){
+            const now=new Date().toISOString(),humanState:FilmProject['shotStates'][number]={
+              id:randomUUID(),shotId:shot.id,role:'actual-start' as const,source:'human' as const,status:'current' as const,
+              frameAssetId:shot.startFrameAssetId,
+              characters:structuredClone(prior?.characters??[]),props:structuredClone(prior?.props??[]),
+              environment:structuredClone(prior?.environment??{}),camera:structuredClone(prior?.camera??{}),
+              actionPhase:prior?.actionPhase??'',dialogueState:prior?.dialogueState??'',confidence:prior?.confidence,createdAt:now
+            };
+            humanState.fingerprint=shotStateFingerprint(humanState);
+            incoming.shotStates.push(humanState);shot.actualStartStateId=humanState.id;
+          }else shot.actualStartStateId=undefined;
+        }else shot.actualStartStateId=retainedActualId;
+        shot.observedFinalStateId=retainedState(currentShot.observedFinalStateId)?.id;
+      }
+      rebuildDefaultSequentialDependencies(incoming,undefined,new Date().toISOString());
+      const changedRenderInputShotIds:string[]=[];
+      for(const shot of incoming.shots){
+        const currentShot=currentShots.get(shot.id);
+        if(!currentShot)continue;
         if(shotProjectRenderInputKey(incoming,shot)!==shotProjectRenderInputKey(this.current,currentShot)){
           shot.latestRenderId=undefined;
           shot.canonicalRenderId=undefined;
           changedRenderInputShotIds.push(shot.id);
           shot.status=currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
         }else{
-          shot.status=currentShot.status;
-          shot.latestRenderId=currentShot.latestRenderId;
+          const requestedLatest=shot.latestRenderId
+            ? incoming.renderOutputs.find(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video')
+            : undefined;
+          shot.latestRenderId=requestedLatest?.id??currentShot.latestRenderId;
+          shot.status=shot.latestRenderId?'rendered':currentShot.status;
         }
       }
-      for(const shotId of changedRenderInputShotIds)invalidateObservedFinalState(incoming,shotId,'Shot render inputs changed in the renderer.');
+      for(const shotId of changedRenderInputShotIds)invalidateObservedFinalState(incoming,shotId,'Shot render inputs or dependency topology changed in the renderer.');
+      reconcileHumanQcTasks(incoming,changedRenderInputShotIds);
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
       incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>preserveTrustedProfileValidation(currentProfiles.get(profile.id),profile));
       await this.validateStoragePaths(incoming);
@@ -280,10 +332,12 @@ export class ProjectService {
       for(const job of project.renderJobs)job.outputs=job.outputs.filter(item=>item.id!==outputId);
       project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId);
       project.qcResults=project.qcResults.filter(result=>result.renderOutputId!==outputId);
-      for(const state of project.shotStates){
-        if(state.sourceRenderOutputId!==outputId)continue;
-        state.status='stale';state.staleReason=`Source render output ${outputId} was deleted.`;state.sourceRenderOutputId=undefined;
+      for(const task of project.humanTasks){
+        if(task.status!=='open'||!task.relatedRenderOutputIds.includes(outputId))continue;
+        task.status='dismissed';task.resolvedAt=new Date().toISOString();task.resolution=`Automatically dismissed because render output ${outputId} was deleted.`;
       }
+      const outputStateIds=project.shotStates.filter(state=>state.sourceRenderOutputId===outputId).map(state=>state.id);
+      if(outputStateIds.length)invalidateStateCascade(project,outputStateIds,`Source render output ${outputId} was deleted.`);
       for(const revision of project.cutRevisions)revision.clipIds=revision.clipIds.filter(id=>project.timeline.some(clip=>clip.id===id));
       const shot=project.shots.find(item=>item.id===output.shotId);
       if(shot?.latestAttemptRenderId===outputId)shot.latestAttemptRenderId=undefined;
@@ -338,8 +392,7 @@ export class ProjectService {
       };
       project.shots.push(shot);
       scene.shotIds.push(id);
-      const defaults=defaultSequentialDependencies(project.shots.filter(item=>item.sceneId===sceneId),new Date().toISOString());
-      for(const edge of defaults)if(!project.shotDependencies.some(existing=>existing.id===edge.id))project.shotDependencies.push(edge);
+      rebuildDefaultSequentialDependencies(project,[sceneId],new Date().toISOString());
     });
   }
 

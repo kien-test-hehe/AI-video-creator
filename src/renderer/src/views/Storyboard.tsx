@@ -5,6 +5,7 @@ import { filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForMo
 import { useAppStore } from '../store';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { Card, Empty, Page, Pill } from '../components/Ui';
+import { rebuildDefaultSequentialDependencies } from '../../../shared/production-state';
 
 export function Storyboard(){
   const{project,updateProject,selectShot,setView,setNotice,setError,setBusy}=useAppStore();
@@ -19,7 +20,7 @@ export function Storyboard(){
     const scene=p.scenes.find(s=>s.id===sceneId);if(!scene)return;
     const index=p.shots.filter(s=>s.sceneId===sceneId).length+1,id=crypto.randomUUID(),d=MODEL_DEFAULTS[PRIMARY_VIDEO_MODEL];
     const shot:Shot={id,sceneId,index,title:'Shot '+scene.index+'.'+index,prompt:scene.body,camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'draft',generation:{modelFamily:PRIMARY_VIDEO_MODEL,mode:d.mode||'i2v',quality:'balanced',width:d.width!,height:d.height!,frames:d.frames!,fps:d.fps!,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??true}};
-    p.shots.push(shot);scene.shotIds.push(id);
+    p.shots.push(shot);scene.shotIds.push(id);rebuildDefaultSequentialDependencies(p,[sceneId]);
     });
   };
 
@@ -51,6 +52,7 @@ export function Storyboard(){
           p.shots.push(shot);scene.shotIds.push(id);
         }
         if(!added)throw new Error('Director returned no shot compatible with the currently validated local video routes.');
+        rebuildDefaultSequentialDependencies(p,[sceneId]);
       });
       setNotice('Local Director shot drafts were applied to the unchanged scene.');
     }catch(e){setError(e instanceof Error?e.message:String(e));}finally{setPlanningSceneId(undefined);setBusy(false);}
@@ -68,6 +70,7 @@ export function Storyboard(){
         const from=siblings.findIndex(s=>s.id===source.id),to=siblings.findIndex(s=>s.id===target.id);
         const [moved]=siblings.splice(from,1);siblings.splice(to,0,moved);siblings.forEach((s,i)=>s.index=i+1);
         const scene=p.scenes.find(s=>s.id===source.sceneId);if(scene)scene.shotIds=siblings.map(s=>s.id);
+        rebuildDefaultSequentialDependencies(p,[source.sceneId]);
       });
       return;
     }

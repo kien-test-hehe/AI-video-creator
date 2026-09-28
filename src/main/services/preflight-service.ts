@@ -81,7 +81,7 @@ export async function preflightProject(project:FilmProject,machine:AppMachineSet
 
   const canonicalOutputIds=new Set<string>([
     ...project.timeline.map(clip=>clip.renderOutputId),
-    ...project.shots.map(shot=>shot.latestRenderId).filter((id):id is string=>Boolean(id))
+    ...project.shots.flatMap(shot=>[shot.latestRenderId,shot.canonicalRenderId]).filter((id):id is string=>Boolean(id))
   ]);
   for(const outputId of canonicalOutputIds){
     const output=outputById.get(outputId);

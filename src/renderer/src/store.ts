@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { AppMachineSettings, FilmProject, QueueSnapshot, SystemProbe } from '../../shared/types';
 import { shotProjectRenderInputKey } from '../../shared/shot-signature';
+import { invalidateObservedFinalState } from '../../shared/production-state';
 
 export type ViewId='studio'|'dashboard'|'story'|'assets'|'storyboard'|'shots'|'queue'|'timeline'|'finishing'|'settings';
 interface AppState{
@@ -20,22 +21,28 @@ export const useAppStore=create<AppState>((set,get)=>({
     const next=structuredClone(current);
     next.renderJobs=structuredClone(mainProject.renderJobs);
     next.renderOutputs=structuredClone(mainProject.renderOutputs);
-    next.shotStates=structuredClone(mainProject.shotStates);
-    next.shotDependencies=structuredClone(mainProject.shotDependencies);
-    next.qcResults=structuredClone(mainProject.qcResults);
-    next.humanTasks=structuredClone(mainProject.humanTasks);
-    next.cutRevisions=structuredClone(mainProject.cutRevisions);
+    if(!state.projectDirty){
+      next.shotStates=structuredClone(mainProject.shotStates);
+      next.shotDependencies=structuredClone(mainProject.shotDependencies);
+      next.qcResults=structuredClone(mainProject.qcResults);
+      next.humanTasks=structuredClone(mainProject.humanTasks);
+      next.cutRevisions=structuredClone(mainProject.cutRevisions);
+    }
     const runtime=new Map(mainProject.shots.map(shot=>[shot.id,shot]));
     for(const shot of next.shots){
       const server=runtime.get(shot.id);if(!server)continue;
+      const localInputKey=shotProjectRenderInputKey(next,shot);
+      const serverInputKey=shotProjectRenderInputKey(mainProject,server);
+      if(state.projectDirty&&localInputKey!==serverInputKey)continue;
       shot.latestAttemptRenderId=server.latestAttemptRenderId;
       shot.canonicalRenderId=server.canonicalRenderId;
-      shot.plannedStartStateId=server.plannedStartStateId;
-      shot.plannedEndStateId=server.plannedEndStateId;
-      shot.actualStartStateId=server.actualStartStateId;
-      shot.observedFinalStateId=server.observedFinalStateId;
-      if(!state.projectDirty&&server.actualStartStateId)shot.startFrameAssetId=server.startFrameAssetId;
-      if(shotProjectRenderInputKey(next,shot)!==shotProjectRenderInputKey(mainProject,server))continue;
+      if(!state.projectDirty){
+        shot.plannedStartStateId=server.plannedStartStateId;
+        shot.plannedEndStateId=server.plannedEndStateId;
+        shot.actualStartStateId=server.actualStartStateId;
+        shot.observedFinalStateId=server.observedFinalStateId;
+        if(server.actualStartStateId)shot.startFrameAssetId=server.startFrameAssetId;
+      }
       shot.status=server.status;
       shot.latestRenderId=server.latestRenderId;
     }
@@ -48,7 +55,7 @@ export const useAppStore=create<AppState>((set,get)=>({
     if(!state.projectDirty)for(const server of mainProject.settings.workflowProfiles)if(!next.settings.workflowProfiles.some(local=>local.id===server.id))next.settings.workflowProfiles.push(structuredClone(server));
     return{project:next};
   }),
-  updateProject:mutator=>{if(get().projectWriteLocked){set({error:'A project-changing operation is still applying. Wait for it to finish or cancel it before editing the project.'});return;}const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotProjectRenderInputKey(current,shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotProjectRenderInputKey(next,shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist().catch(()=>undefined),450);},
+  updateProject:mutator=>{if(get().projectWriteLocked){set({error:'A project-changing operation is still applying. Wait for it to finish or cancel it before editing the project.'});return;}const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotProjectRenderInputKey(current,shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotProjectRenderInputKey(next,shot)){shot.latestRenderId=undefined;shot.canonicalRenderId=undefined;invalidateObservedFinalState(next,shot.id,'Shot render inputs changed in the renderer.');if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist().catch(()=>undefined),450);},
   runProjectMutation:async operation=>{projectWriteLockCount+=1;set({projectWriteLocked:true});try{return await operation();}finally{projectWriteLockCount=Math.max(0,projectWriteLockCount-1);set({projectWriteLocked:projectWriteLockCount>0});}},
   persist:async()=>{
     clearTimeout(projectTimer);projectTimer=undefined;
