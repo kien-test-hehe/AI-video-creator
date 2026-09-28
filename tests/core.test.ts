@@ -1522,6 +1522,7 @@ describe('production topology and destructive mutation regression guards',()=>{
       const current=await service.mutate(project=>{
         project.scenes.push({id:'scene-topology',index:1,heading:'',body:'',shotIds:['a']});
         const a=shot('a',1);a.latestRenderId='out';a.latestAttemptRenderId='out';a.canonicalRenderId='out';a.observedFinalStateId='state-a';project.shots.push(a);
+        project.renderOutputs.push({id:'out',jobId:'orphaned',shotId:'a',path:join(root,'renders','out.mp4'),filename:'out.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'});
         project.shotStates.push({id:'state-a',shotId:'a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'});
       });
       const edited=structuredClone(current),copy=structuredClone(edited.shots[0]);copy.id='copy';copy.index=2;edited.shots.push(copy);edited.scenes[0].shotIds.push('copy');
