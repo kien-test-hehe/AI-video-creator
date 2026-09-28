@@ -1309,7 +1309,21 @@ describe('production state core',()=>{
     expect(project.shotStates.find(item=>item.id==='state-final-a')?.status).toBe('stale');
     expect(state.status).toBe('stale');
     expect(next.actualStartStateId).toBeUndefined();
+    expect(next.startFrameAssetId).toBeUndefined();
     expect(project.shots[0].observedFinalStateId).toBeUndefined();
+  });
+
+  it('does not overwrite an explicit human-owned start frame during automatic propagation',()=>{
+    const project=loadPortableProject(rawTwoShotProject(),'/project').project;
+    project.shotStates.push({
+      id:'state-final-a',shotId:'shot-a',role:'observed-final',source:'generated',status:'current',frameAssetId:'frame-a',
+      characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'
+    });
+    project.shots[0].observedFinalStateId='state-final-a';
+    project.shots[1].startFrameAssetId='human-frame';
+    expect(propagateObservedFinalState(project,'shot-a')).toEqual([]);
+    expect(project.shots[1].startFrameAssetId).toBe('human-frame');
+    expect(project.shots[1].actualStartStateId).toBeUndefined();
   });
 
   it('keeps canonical take promotion fail-closed until technical, visual, semantic and continuity QC all pass',()=>{
