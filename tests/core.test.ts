@@ -741,6 +741,19 @@ describe('WanGP Docker image argument safety',()=>{
     }
   });
 });
+describe('WanGP Docker mount argument safety',()=>{
+  it('rejects container mount paths that can inject docker volume options',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-docker-mount-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,JSON.stringify({schemaVersion:1,wangp:{executionMode:'docker',docker:{image:'wan2gp:test',projectMount:'/workspace/project:ro'}}}),'utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      await expect(new AppSettingsService(join(root,'userdata')).load()).rejects.toThrow(/volume-option delimiters/i);
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+});
 describe('machine settings bootstrap failure',()=>{
   it('fails closed when an explicit bootstrap file exists but is invalid',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-bootstrap-invalid-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
