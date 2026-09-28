@@ -11,6 +11,19 @@ export type RuntimeBackend = 'wangp' | 'comfyui';
 export type QualityIntent = 'preview' | 'balanced' | 'hero';
 export type WanGpExecutionMode = 'native' | 'docker';
 
+export type ShotStateRole = 'planned-start' | 'planned-end' | 'actual-start' | 'observed-final';
+export type ShotStateSource = 'planned' | 'keyframe' | 'generated' | 'human' | 'previz';
+export type ShotStateStatus = 'current' | 'stale' | 'unreviewed';
+export type ShotDependencyRelation = 'continuity' | 'temporal' | 'parallel' | 'cutaway' | 'reverse-angle' | 'insert' | 'montage';
+export type ShotDependencyStrength = 'soft' | 'hard';
+export type ContinuityField = 'character' | 'wardrobe' | 'prop' | 'location' | 'lighting' | 'action' | 'camera' | 'dialogue';
+export type QcLayer = 'technical' | 'visual' | 'semantic' | 'continuity';
+export type QcStatus = 'pass' | 'fail' | 'unknown' | 'human-verify';
+export type HumanTaskType = 'create-asset' | 'approve-asset' | 'verify-keyframe' | 'verify-previz' | 'verify-continuity' | 'choose-take' | 'manual-qc' | 'route-unsupported';
+export type HumanTaskStatus = 'open' | 'resolved' | 'dismissed';
+export type PrevizRequirement = 'none' | 'optional' | 'required';
+export type PrevizStatus = 'not-needed' | 'pending' | 'ready' | 'failed' | 'human-verify';
+
 export interface AppMachineSettings {
   schemaVersion: 1;
   endpointPolicy: 'loopback-only';
@@ -58,10 +71,134 @@ export interface ProjectSettings {
 }
 
 export interface StoryDocument { title:string;logline:string;script:string;notes:string; }
+
+export interface CharacterContinuityState {
+  characterAssetId?: UUID;
+  label?: string;
+  visible?: boolean;
+  screenPosition?: 'left' | 'center' | 'right' | 'offscreen' | 'unknown';
+  pose?: string;
+  facing?: string;
+  gaze?: string;
+  expression?: string;
+  wardrobeAssetId?: UUID;
+  heldPropAssetIds: UUID[];
+  notes?: string;
+}
+
+export interface PropContinuityState {
+  propAssetId?: UUID;
+  label?: string;
+  holderCharacterAssetId?: UUID;
+  position?: string;
+  state?: string;
+  notes?: string;
+}
+
+export interface EnvironmentContinuityState {
+  locationAssetId?: UUID;
+  timeOfDay?: string;
+  lighting?: string;
+  weather?: string;
+  notes?: string;
+}
+
+export interface CameraContinuityState {
+  shotSize?: string;
+  angle?: string;
+  screenDirection?: string;
+  movement?: string;
+  lensMm?: number;
+  notes?: string;
+}
+
+export interface ShotState {
+  id: UUID;
+  shotId: UUID;
+  role: ShotStateRole;
+  source: ShotStateSource;
+  status: ShotStateStatus;
+  frameAssetId?: UUID;
+  sourceRenderOutputId?: UUID;
+  derivedFromStateId?: UUID;
+  characters: CharacterContinuityState[];
+  props: PropContinuityState[];
+  environment: EnvironmentContinuityState;
+  camera: CameraContinuityState;
+  actionPhase: string;
+  dialogueState: string;
+  confidence?: number;
+  fingerprint?: string;
+  staleReason?: string;
+  createdAt: ISODate;
+}
+
+export interface ShotDependency {
+  id: UUID;
+  fromShotId: UUID;
+  toShotId: UUID;
+  relation: ShotDependencyRelation;
+  strength: ShotDependencyStrength;
+  propagate: ContinuityField[];
+  createdAt: ISODate;
+}
+
+export interface QcIssue {
+  code: string;
+  severity: 'info' | 'warning' | 'major' | 'blocker';
+  message: string;
+  expected?: string;
+  observed?: string;
+}
+
+export interface ShotQcResult {
+  id: UUID;
+  shotId: UUID;
+  renderOutputId?: UUID;
+  layer: QcLayer;
+  status: QcStatus;
+  issues: QcIssue[];
+  inputKey?: string;
+  createdAt: ISODate;
+  humanOverrideTaskId?: UUID;
+}
+
+export interface HumanTask {
+  id: UUID;
+  type: HumanTaskType;
+  status: HumanTaskStatus;
+  shotId?: UUID;
+  title: string;
+  reason: string;
+  recommendedAction?: string;
+  relatedAssetIds: UUID[];
+  relatedRenderOutputIds: UUID[];
+  createdAt: ISODate;
+  resolvedAt?: ISODate;
+  resolution?: string;
+}
+
+export interface PrevizSpec {
+  requirement: PrevizRequirement;
+  status: PrevizStatus;
+  reason?: string;
+  manifestPath?: string;
+  previewAssetId?: UUID;
+  createdAt?: ISODate;
+  updatedAt?: ISODate;
+}
+
+export interface CutRevision {
+  id: UUID;
+  name: string;
+  clipIds: UUID[];
+  locked: boolean;
+  createdAt: ISODate;
+}
 export interface Scene { id:UUID;index:number;heading:string;body:string;location?:string;timeOfDay?:string;shotIds:UUID[]; }
 export interface Asset { id:UUID;kind:AssetKind;name:string;sourcePath:string;projectPath:string;mimeType?:string;tags:string[];notes:string;createdAt:ISODate; }
 export interface ShotGenerationSettings { modelFamily:ModelFamily;mode:GenerationMode;quality:QualityIntent;width:number;height:number;frames:number;fps:number;steps?:number;cfg?:number;seed:number;negativePrompt:string;includeAudio:boolean;workflowProfileId?:UUID; }
-export interface Shot { id:UUID;sceneId:UUID;index:number;title:string;prompt:string;camera:string;action:string;dialogue:string;continuityNotes:string;characterAssetIds:UUID[];locationAssetId?:UUID;propAssetIds:UUID[];referenceAssetIds?:UUID[];startFrameAssetId?:UUID;endFrameAssetId?:UUID;referenceVideoAssetId?:UUID;audioAssetId?:UUID;status:ShotStatus;generation:ShotGenerationSettings;latestRenderId?:UUID; }
+export interface Shot { id:UUID;sceneId:UUID;index:number;title:string;prompt:string;camera:string;action:string;dialogue:string;continuityNotes:string;characterAssetIds:UUID[];locationAssetId?:UUID;propAssetIds:UUID[];referenceAssetIds?:UUID[];startFrameAssetId?:UUID;endFrameAssetId?:UUID;referenceVideoAssetId?:UUID;audioAssetId?:UUID;status:ShotStatus;generation:ShotGenerationSettings;latestRenderId?:UUID;latestAttemptRenderId?:UUID;canonicalRenderId?:UUID;plannedStartStateId?:UUID;plannedEndStateId?:UUID;actualStartStateId?:UUID;observedFinalStateId?:UUID;previz?:PrevizSpec; }
 
 export interface WorkflowValidation {
   structuralStatus: 'unvalidated' | 'valid' | 'invalid';
@@ -115,9 +252,9 @@ export interface RenderJob {
   modelFamily:ModelFamily;workflowProfileId?:UUID;comfyPromptId?:string;backendPid?:number;lastHeartbeatAt?:ISODate;
   error?:string;outputs:RenderOutput[];spec?:RenderJobSpec;
 }
-export interface TimelineClip { id:UUID;shotId:UUID;renderOutputId:UUID;track:number;order:number;trimInSec:number;trimOutSec?:number;volume:number; }
+export interface TimelineClip { id:UUID;shotId:UUID;renderOutputId:UUID;track:number;order:number;trimInSec:number;trimOutSec?:number;volume:number;approval?:'legacy'|'canonical'|'human-override';approvalReason?:string; }
 export interface FilmProject {
-  schemaVersion:2;
+  schemaVersion:3;
   id:UUID;
   name:string;
   createdAt:ISODate;
@@ -130,7 +267,60 @@ export interface FilmProject {
   renderJobs:RenderJob[];
   renderOutputs:RenderOutput[];
   timeline:TimelineClip[];
+  shotStates:ShotState[];
+  shotDependencies:ShotDependency[];
+  qcResults:ShotQcResult[];
+  humanTasks:HumanTask[];
+  cutRevisions:CutRevision[];
   settings:ProjectSettings;
+}
+
+export interface RecordObservedFinalStateRequest {
+  projectRoot:string;
+  shotId:UUID;
+  renderOutputId:UUID;
+  frameAssetId?:UUID;
+  characters:CharacterContinuityState[];
+  props:PropContinuityState[];
+  environment:EnvironmentContinuityState;
+  camera:CameraContinuityState;
+  actionPhase:string;
+  dialogueState:string;
+  confidence?:number;
+}
+
+export interface RecordShotQcRequest {
+  projectRoot:string;
+  shotId:UUID;
+  renderOutputId:UUID;
+  layer:Exclude<QcLayer,'technical'>;
+  status:QcStatus;
+  issues:QcIssue[];
+  inputKey?:string;
+}
+
+export interface CreateHumanTaskRequest {
+  projectRoot:string;
+  type:HumanTaskType;
+  shotId?:UUID;
+  title:string;
+  reason:string;
+  recommendedAction?:string;
+  relatedAssetIds?:UUID[];
+  relatedRenderOutputIds?:UUID[];
+}
+
+export interface ResolveHumanTaskRequest {
+  projectRoot:string;
+  taskId:UUID;
+  status:'resolved'|'dismissed';
+  resolution:string;
+}
+
+export interface PromoteCanonicalTakeRequest {
+  projectRoot:string;
+  shotId:UUID;
+  renderOutputId:UUID;
 }
 
 export interface KeyframeRequest { projectRoot:string;shotId:UUID;role:'start'|'end';workflowProfileId:UUID; }

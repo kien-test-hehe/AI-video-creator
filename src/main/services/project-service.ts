@@ -9,6 +9,7 @@ import { loadPortableProject, UnsupportedProjectSchemaError } from './project-sc
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
 import { readJsonFileLimited, stringifyJsonLimited } from './json-file';
+import { defaultSequentialDependencies, invalidateObservedFinalState, refreshCanonicalRender } from '../../shared/production-state';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -45,7 +46,7 @@ export class ProjectService {
     await this.ensureFolders(resolvedRoot);
     const now = new Date().toISOString();
     const project: FilmProject = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       id: randomUUID(),
       name,
       rootPath: resolvedRoot,
@@ -53,6 +54,7 @@ export class ProjectService {
       updatedAt: now,
       story: { title: name, logline: '', script: '', notes: '' },
       scenes: [], assets: [], shots: [], renderJobs: [], renderOutputs: [], timeline: [],
+      shotStates: [], shotDependencies: [], qcResults: [], humanTasks: [], cutRevisions: [],
       settings: {
         costPolicy: { mode: 'codex-capcut-only', allowCapcutAiCredits: false },
         capcut: { enabled: true, pro: false },
@@ -114,6 +116,11 @@ export class ProjectService {
       const proposedShotIds=new Set(Array.isArray(candidate.shots)?candidate.shots.map(shot=>shot?.id).filter((id):id is string=>typeof id==='string'):[]);
       candidate.renderJobs=this.current.renderJobs.filter(job=>proposedShotIds.has(job.shotId));
       candidate.renderOutputs=this.current.renderOutputs.filter(output=>proposedShotIds.has(output.shotId));
+      candidate.shotStates=this.current.shotStates.filter(state=>proposedShotIds.has(state.shotId));
+      candidate.shotDependencies=this.current.shotDependencies.filter(edge=>proposedShotIds.has(edge.fromShotId)&&proposedShotIds.has(edge.toShotId));
+      candidate.qcResults=this.current.qcResults.filter(result=>proposedShotIds.has(result.shotId));
+      candidate.humanTasks=this.current.humanTasks.filter(task=>!task.shotId||proposedShotIds.has(task.shotId));
+      candidate.cutRevisions=structuredClone(this.current.cutRevisions);
       const incoming = loadPortableProject(candidate, this.current.rootPath).project;
       if (incoming.id !== this.current.id) throw new Error('Renderer project does not match the open main-process project.');
       incoming.rootPath = this.current.rootPath;
@@ -125,21 +132,37 @@ export class ProjectService {
         return edited ? { ...structuredClone(original), name: edited.name, tags: [...edited.tags], notes: edited.notes } : structuredClone(original);
       });
       const currentShots = new Map(this.current.shots.map(shot => [shot.id, shot]));
+      const changedRenderInputShotIds:string[]=[];
       for (const shot of incoming.shots) {
         const currentShot=currentShots.get(shot.id);
         if(!currentShot){
           shot.latestRenderId=undefined;
+          shot.latestAttemptRenderId=undefined;
+          shot.canonicalRenderId=undefined;
+          shot.plannedStartStateId=undefined;
+          shot.plannedEndStateId=undefined;
+          shot.actualStartStateId=undefined;
+          shot.observedFinalStateId=undefined;
           shot.status=shot.status==='ready'?'ready':'draft';
           continue;
         }
+        shot.latestAttemptRenderId=currentShot.latestAttemptRenderId;
+        shot.canonicalRenderId=currentShot.canonicalRenderId;
+        shot.plannedStartStateId=currentShot.plannedStartStateId;
+        shot.plannedEndStateId=currentShot.plannedEndStateId;
+        shot.actualStartStateId=currentShot.actualStartStateId;
+        shot.observedFinalStateId=currentShot.observedFinalStateId;
         if(shotProjectRenderInputKey(incoming,shot)!==shotProjectRenderInputKey(this.current,currentShot)){
           shot.latestRenderId=undefined;
+          shot.canonicalRenderId=undefined;
+          changedRenderInputShotIds.push(shot.id);
           shot.status=currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
         }else{
           shot.status=currentShot.status;
           shot.latestRenderId=currentShot.latestRenderId;
         }
       }
+      for(const shotId of changedRenderInputShotIds)invalidateObservedFinalState(incoming,shotId,'Shot render inputs changed in the renderer.');
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
       incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>preserveTrustedProfileValidation(currentProfiles.get(profile.id),profile));
       await this.validateStoragePaths(incoming);
@@ -201,6 +224,22 @@ export class ProjectService {
       if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while deleting the asset. Delete was cancelled.');
       const before=new Map(project.shots.map(shot=>[shot.id,shotProjectRenderInputKey(project,shot)]));
       project.assets=project.assets.filter(item=>item.id!==assetId);
+      const affectedStateIds=new Set<string>();
+      for(const state of project.shotStates){
+        let affected=false;
+        if(state.frameAssetId===assetId){state.frameAssetId=undefined;affected=true;}
+        for(const character of state.characters){
+          if(character.characterAssetId===assetId){character.characterAssetId=undefined;affected=true;}
+          if(character.wardrobeAssetId===assetId){character.wardrobeAssetId=undefined;affected=true;}
+          const nextHeld=character.heldPropAssetIds.filter(id=>id!==assetId);if(nextHeld.length!==character.heldPropAssetIds.length){character.heldPropAssetIds=nextHeld;affected=true;}
+        }
+        for(const prop of state.props){
+          if(prop.propAssetId===assetId){prop.propAssetId=undefined;affected=true;}
+          if(prop.holderCharacterAssetId===assetId){prop.holderCharacterAssetId=undefined;affected=true;}
+        }
+        if(state.environment.locationAssetId===assetId){state.environment.locationAssetId=undefined;affected=true;}
+        if(affected){state.status='stale';state.staleReason=`Referenced asset ${assetId} was deleted.`;affectedStateIds.add(state.id);}
+      }
       for(const shot of project.shots){
         shot.characterAssetIds=shot.characterAssetIds.filter(id=>id!==assetId);
         shot.propAssetIds=shot.propAssetIds.filter(id=>id!==assetId);
@@ -210,7 +249,15 @@ export class ProjectService {
         if(shot.endFrameAssetId===assetId)shot.endFrameAssetId=undefined;
         if(shot.referenceVideoAssetId===assetId)shot.referenceVideoAssetId=undefined;
         if(shot.audioAssetId===assetId)shot.audioAssetId=undefined;
-        if(before.get(shot.id)!==shotProjectRenderInputKey(project,shot)){shot.latestRenderId=undefined;if(['rendered','failed'].includes(shot.status))shot.status='ready';}
+        if(shot.plannedStartStateId&&affectedStateIds.has(shot.plannedStartStateId))shot.plannedStartStateId=undefined;
+        if(shot.plannedEndStateId&&affectedStateIds.has(shot.plannedEndStateId))shot.plannedEndStateId=undefined;
+        if(shot.actualStartStateId&&affectedStateIds.has(shot.actualStartStateId))shot.actualStartStateId=undefined;
+        if(shot.observedFinalStateId&&affectedStateIds.has(shot.observedFinalStateId))shot.observedFinalStateId=undefined;
+        if(before.get(shot.id)!==shotProjectRenderInputKey(project,shot)){
+          shot.latestRenderId=undefined;shot.canonicalRenderId=undefined;
+          invalidateObservedFinalState(project,shot.id,`Referenced asset ${assetId} was deleted.`);
+          if(['rendered','failed'].includes(shot.status))shot.status='ready';
+        }
       }
     });
     if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete asset file after removing it from the project: ${absolute}`,error));
@@ -232,12 +279,22 @@ export class ProjectService {
       project.renderOutputs=project.renderOutputs.filter(item=>item.id!==outputId);
       for(const job of project.renderJobs)job.outputs=job.outputs.filter(item=>item.id!==outputId);
       project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId);
+      project.qcResults=project.qcResults.filter(result=>result.renderOutputId!==outputId);
+      for(const state of project.shotStates){
+        if(state.sourceRenderOutputId!==outputId)continue;
+        state.status='stale';state.staleReason=`Source render output ${outputId} was deleted.`;state.sourceRenderOutputId=undefined;
+      }
+      for(const revision of project.cutRevisions)revision.clipIds=revision.clipIds.filter(id=>project.timeline.some(clip=>clip.id===id));
       const shot=project.shots.find(item=>item.id===output.shotId);
+      if(shot?.latestAttemptRenderId===outputId)shot.latestAttemptRenderId=undefined;
+      if(shot?.canonicalRenderId===outputId)shot.canonicalRenderId=undefined;
+      if(shot?.observedFinalStateId&&project.shotStates.find(state=>state.id===shot.observedFinalStateId)?.status==='stale')shot.observedFinalStateId=undefined;
       if(shot?.latestRenderId===outputId){
         const fallback=latestPassingVideoTake(project.renderOutputs.filter(item=>item.shotId===shot.id));
         shot.latestRenderId=fallback?.id;
         if(!fallback&&shot.status==='rendered')shot.status='ready';
       }
+      if(shot)refreshCanonicalRender(project,shot.id);
     });
     if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete render output file after removing it from the project: ${absolute}`,error));
     return updated;
@@ -252,6 +309,11 @@ export class ProjectService {
       project.renderJobs = [];
       project.renderOutputs = [];
       project.timeline = [];
+      project.shotStates = [];
+      project.shotDependencies = [];
+      project.qcResults = [];
+      project.humanTasks = [];
+      project.cutRevisions = [];
     });
   }
 
@@ -267,6 +329,7 @@ export class ProjectService {
       const shot: Shot = {
         id, sceneId, index, title: `Shot ${scene.index}.${index}`, prompt: scene.body, camera: '', action: '', dialogue: '', continuityNotes: '',
         characterAssetIds: [], propAssetIds: [], referenceAssetIds: [], status: 'draft',
+        previz:{requirement:'none',status:'not-needed'},
         generation: {
           modelFamily: PRIMARY_VIDEO_MODEL, mode: base.mode || 'i2v', quality: base.quality || 'balanced',
           width: base.width || 768, height: base.height || 432, frames: base.frames || 121, fps: base.fps || 24,
@@ -275,6 +338,8 @@ export class ProjectService {
       };
       project.shots.push(shot);
       scene.shotIds.push(id);
+      const defaults=defaultSequentialDependencies(project.shots.filter(item=>item.sceneId===sceneId),new Date().toISOString());
+      for(const edge of defaults)if(!project.shotDependencies.some(existing=>existing.id===edge.id))project.shotDependencies.push(edge);
     });
   }
 

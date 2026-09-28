@@ -6,5 +6,10 @@ export const IPC = {
   systemProbe: 'system:probe', systemReveal: 'system:reveal', comfyPing: 'comfy:ping',
   renderEnqueue: 'render:enqueue', renderEnqueueBatch: 'render:enqueue-batch', renderRetry: 'render:retry', renderCancel: 'render:cancel', renderSnapshot: 'render:snapshot', renderOutputDelete: 'render:output-delete',
   timelineExport: 'timeline:export', timelineCancelExport: 'timeline:cancel-export', queueEvent: 'queue:event', directorPlanScene: 'director:plan-scene', directorReviewShot: 'director:review-shot', keyframeGenerate: 'keyframe:generate', keyframeCancel: 'keyframe:cancel',
+  productionRecordObservedFinal: 'production:record-observed-final',
+  productionRecordQc: 'production:record-qc',
+  productionCreateHumanTask: 'production:create-human-task',
+  productionResolveHumanTask: 'production:resolve-human-task',
+  productionPromoteCanonical: 'production:promote-canonical',
   capcutPrepareHandoff: 'capcut:prepare-handoff'
 } as const;

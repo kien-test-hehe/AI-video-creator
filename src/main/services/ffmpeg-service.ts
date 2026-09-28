@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import type { AppMachineSettings, FilmProject, TimelineClip } from '../../shared/types';
 import { assertExistingPathInside, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { isProcessAlive, killProcessTree } from './process-utils';
-import { compareTimelineClips, duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
+import { compareTimelineClips, duplicateTimelineOrderKey, timelineClipUseIssue } from '../../shared/timeline-policy';
 
 interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean;durationSec?:number}
 
@@ -19,7 +19,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
   const sources=[];
   for(const clip of clips){
     const output=project.renderOutputs.find(o=>o.id===clip.renderOutputId);
-    const issue=timelineOutputIssue(clip,output);if(issue||!output)throw new Error(issue||`Timeline clip ${clip.id} does not reference a valid video output.`);
+    const issue=timelineClipUseIssue(project,clip);if(issue||!output)throw new Error(issue||`Timeline clip ${clip.id} does not reference an approved video output.`);
     const path=await assertExistingPathInside(join(project.rootPath,'renders'),output.path,`timeline source ${output.filename}`);
     sources.push({clip,path});
   }

@@ -3,8 +3,7 @@ import type { TimelineClip } from '../../../shared/types';
 import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
-import { insertTimelineOutput, reorderTimeline, timelineInsertIssue } from '../studio-logic';
-import { takeUseConfirmationMessage } from '../../../shared/take-policy';
+import { insertTimelineOutput, reorderTimeline, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
 import { compareTimelineClips } from '../../../shared/timeline-policy';
 
 export function Timeline(){
@@ -13,12 +12,17 @@ export function Timeline(){
   if(!project)return <Page title="Timeline"><Empty>Open a project first.</Empty></Page>;
 
   const videoOutputs=project.renderOutputs.filter(output=>output.mediaType==='video');
-  const confirmTake=(outputId:string):boolean=>{
-    const output=project.renderOutputs.find(item=>item.id===outputId);if(!output)return false;
-    const message=takeUseConfirmationMessage(output,'timeline');
-    return !message||window.confirm(message);
+  const approveTake=(outputId:string):{allowed:boolean;overrideReason?:string}=>{
+    const issue=timelineTakeApprovalIssue(project,outputId);
+    if(!issue)return{allowed:true};
+    const allowed=window.confirm(`This take is not currently canonical-ready:\n\n${issue}\n\nUse it as an explicit human override? The override will be recorded on the timeline clip.`);
+    return allowed?{allowed:true,overrideReason:`Explicit human override in Timeline UI: ${issue}`}:{allowed:false};
   };
-  const add=(outputId:string)=>{const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});};
+  const add=(outputId:string)=>{
+    const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}
+    const decision=approveTake(outputId);if(!decision.allowed)return;
+    updateProject(next=>{insertTimelineOutput(next,outputId,undefined,decision.overrideReason);});
+  };
   const remove=(id:string)=>updateProject(next=>{const removed=next.timeline.find(clip=>clip.id===id);next.timeline=next.timeline.filter(clip=>clip.id!==id);if(removed){next.timeline.filter(clip=>clip.track===removed.track).sort(compareTimelineClips).forEach((clip,order)=>clip.order=order);}});
   const move=(id:string,delta:number)=>updateProject(next=>{
     const clip=next.timeline.find(item=>item.id===id);if(!clip)return;
@@ -30,7 +34,7 @@ export function Timeline(){
   const dropClip=(event:DragEvent<HTMLElement>,targetId:string)=>{
     event.preventDefault();event.stopPropagation();
     const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');
-    if(outputId){const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId,targetId);});setNotice('Inserted rendered take into the timeline.');return;}
+    if(outputId){const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}const decision=approveTake(outputId);if(!decision.allowed)return;updateProject(next=>{insertTimelineOutput(next,outputId,targetId,decision.overrideReason);});setNotice('Inserted rendered take into the timeline.');return;}
     const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');
     if(sourceId){
       const source=project.timeline.find(clip=>clip.id===sourceId),target=project.timeline.find(clip=>clip.id===targetId);
@@ -41,7 +45,7 @@ export function Timeline(){
   };
   const dropTrack=(event:DragEvent<HTMLElement>)=>{
     const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');if(!outputId)return;
-    event.preventDefault();const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});setNotice('Added rendered take to the end of the timeline.');
+    event.preventDefault();const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}const decision=approveTake(outputId);if(!decision.allowed)return;updateProject(next=>{insertTimelineOutput(next,outputId,undefined,decision.overrideReason);});setNotice('Added rendered take to the end of the timeline.');
   };
 
   const buildLatestCut=()=>{
@@ -52,17 +56,15 @@ export function Timeline(){
     });
     const skipped:string[]=[];
     const selected=ordered.map(shot=>{
-      const candidates=[...project.renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
-      const preferred=shot.latestRenderId?candidates.find(output=>output.id===shot.latestRenderId&&output.technicalQc?.passed===true):undefined;
-      const passing=preferred||candidates.find(output=>output.technicalQc?.passed===true);
-      if(!passing&&candidates.length)skipped.push(shot.title);
-      return{shot,output:passing};
+      const canonical=shot.canonicalRenderId?project.renderOutputs.find(output=>output.id===shot.canonicalRenderId&&output.shotId===shot.id&&output.mediaType==='video'):undefined;
+      if(!canonical)skipped.push(shot.title);
+      return{shot,output:canonical};
     }).filter((item):item is {shot:(typeof project.shots)[number];output:(typeof project.renderOutputs)[number]}=>Boolean(item.output));
-    if(!selected.length){setError('No QC-passing rendered video takes are available yet. Review failed/unknown takes manually if you intend to use them.');return;}
-    if(skipped.length&&!window.confirm(`Build the cut without ${skipped.length} shot(s) that have no QC-passing take?\n\n${skipped.slice(0,12).join('\n')}${skipped.length>12?'\n…':''}`))return;
-    if(project.timeline.length&&!window.confirm('Replace the current timeline with the preferred/latest take for each rendered shot?'))return;
-    updateProject(next=>{next.timeline=selected.map((item,order)=>({id:crypto.randomUUID(),shotId:item.shot.id,renderOutputId:item.output.id,track:0,order,trimInSec:0,volume:1}));});
-    setNotice(`Built a ${selected.length}-shot master cut from preferred/latest takes.`);
+    if(!selected.length){setError('No canonical takes are available yet. Visual, semantic and continuity QC must pass before automatic cut building.');return;}
+    if(skipped.length&&!window.confirm(`Build the cut without ${skipped.length} shot(s) that do not yet have a canonical take?\n\n${skipped.slice(0,12).join('\n')}${skipped.length>12?'\n…':''}`))return;
+    if(project.timeline.length&&!window.confirm('Replace the current timeline with the canonical take for each approved shot?'))return;
+    updateProject(next=>{next.timeline=selected.map((item,order)=>({id:crypto.randomUUID(),shotId:item.shot.id,renderOutputId:item.output.id,track:0,order,trimInSec:0,volume:1,approval:'canonical' as const}));});
+    setNotice(`Built a ${selected.length}-shot master cut from canonical takes.`);
   };
 
   const exportFilm=async()=>{
@@ -80,10 +82,10 @@ export function Timeline(){
     <div className="grid timeline-grid">
       <Card title="Available takes" kicker="RENDERS">
         {videoOutputs.length===0?<Empty>Render a shot to create takes.</Empty>:<div className="take-list">{videoOutputs.map(output=>{
-          const shot=project.shots.find(item=>item.id===output.shotId),duration=output.technicalQc?.durationSec;
+          const shot=project.shots.find(item=>item.id===output.shotId),duration=output.technicalQc?.durationSec,approvalIssue=timelineTakeApprovalIssue(project,output.id);
           return <div className="take-card" key={output.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-render-output',output.id);}}>
             <video src={projectMediaUrl(projectRelativeOutput(project.rootPath,output.path))} muted controls preload="none"/>
-            <button onClick={()=>add(output.id)} title={output.technicalQc&&!output.technicalQc.passed?'QC failed: review before using this take.':'Add this take to the end of the timeline'}><span>{shot?.title||'Shot'}</span><small>{output.filename}{duration?` · ${duration.toFixed(2)}s`:''}{output.technicalQc?(output.technicalQc.passed?(output.technicalQc.warnings?.length?` · QC pass/${output.technicalQc.warnings.length} warn`:' · QC pass'):' · QC FAIL'):' · QC unknown'}</small><b>+</b></button>
+            <button onClick={()=>add(output.id)} title={approvalIssue?`${approvalIssue} Adding it requires explicit human override.`:'Canonical take · add to timeline'}><span>{shot?.title||'Shot'}</span><small>{output.filename}{duration?` · ${duration.toFixed(2)}s`:''}{approvalIssue?' · not canonical':' · CANONICAL'}</small><b>+</b></button>
           </div>;
         })}</div>}
       </Card>
@@ -94,7 +96,7 @@ export function Timeline(){
             const duration=output?.technicalQc?.durationSec??Math.max(.01,(shot?.generation.frames||1)/Math.max(1,shot?.generation.fps||24));
             const maxIn=Math.max(0,duration-.01);
             return <div className="timeline-clip timeline-clip-edit" key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect=event.dataTransfer.types.includes('application/x-cineforge-render-output')?'copy':'move';}} onDrop={event=>dropClip(event,clip.id)}>
-              <span className="drag-handle" title="Drag to reorder within this track">⋮⋮</span><Pill>T{clip.track} · {clip.order+1}</Pill>
+              <span className="drag-handle" title="Drag to reorder within this track">⋮⋮</span><Pill>T{clip.track} · {clip.order+1}</Pill><Pill>{clip.approval??'legacy'}</Pill>
               <div className="clip-main"><strong>{shot?.title||'Shot'}</strong><small>{duration.toFixed(2)}s source{output?.technicalQc?' · measured':' · nominal'}</small>
                 <div className="clip-fields">
                   <label>In<input type="number" min="0" max={maxIn} step="0.1" value={clip.trimInSec} onChange={event=>patch(clip.id,target=>{const value=Math.max(0,Math.min(maxIn,Number(event.target.value)||0));target.trimInSec=value;if(target.trimOutSec!=null&&target.trimOutSec<=value)target.trimOutSec=Math.min(duration,value+.1);})}/></label>

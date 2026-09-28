@@ -834,11 +834,29 @@ export class RenderQueueService extends EventEmitter {
     const expectsVideo=(job.spec?.workflowProfile.purpose??'video')==='video';
     const qcFailed=expectsVideo&&(!videos.length||!passing);const now=new Date().toISOString();
     await this.projects.mutate(p=>{
-      for(const output of outputs)if(!p.renderOutputs.some(existing=>existing.id===output.id))p.renderOutputs.push(output);
+      for(const output of outputs){
+        if(!p.renderOutputs.some(existing=>existing.id===output.id))p.renderOutputs.push(output);
+        if(output.mediaType==='video'&&output.technicalQc){
+          const qcId=`qc:${output.id}:technical`;
+          const issues=[
+            ...output.technicalQc.issues.map(message=>({code:'TECHNICAL_QC',severity:'major' as const,message})),
+            ...(output.technicalQc.warnings??[]).map(message=>({code:'TECHNICAL_QC_WARNING',severity:'warning' as const,message}))
+          ];
+          const record={id:qcId,shotId:output.shotId,renderOutputId:output.id,layer:'technical' as const,status:output.technicalQc.passed?'pass' as const:'fail' as const,issues,createdAt:output.technicalQc.checkedAt};
+          const existing=p.qcResults.find(item=>item.id===qcId);
+          if(existing)Object.assign(existing,record);else p.qcResults.push(record);
+        }
+      }
       const target=p.renderJobs.find(j=>j.id===job.id);const shot=p.shots.find(s=>s.id===job.shotId);
       const currentSpec=Boolean(shot&&externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot));
       if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message=currentSpec?'Rendered but failed technical QC':'Historical snapshot rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message=currentSpec?'Done':'Done · shot changed after queue; take kept as historical output';target.error=undefined;}}
-      if(shot){if(!currentSpec){if(shot.latestRenderId)shot.status='rendered';else if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}else if(qcFailed)shot.status='failed';else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}}
+      if(shot){
+        const attempt=(videos[0]??outputs[0])?.id;
+        if(currentSpec&&attempt)shot.latestAttemptRenderId=attempt;
+        if(!currentSpec){if(shot.latestRenderId)shot.status='rendered';else if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}
+        else if(qcFailed)shot.status='failed';
+        else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}
+      }
       const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(!qcFailed&&canRefreshProfileValidationFromRender(profile,job.spec)){profile!.validation={...profile!.validation!,lastSuccessfulRenderAt:now};}
     });
     // The backend is already terminal and the project summary is durable. Clear the machine
