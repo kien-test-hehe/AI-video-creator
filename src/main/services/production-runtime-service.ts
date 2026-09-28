@@ -171,17 +171,20 @@ export class ProductionRuntimeService extends EventEmitter{
     const frameDir=join(project.rootPath,'cache','qc',output.id);
     const frames=await sampleVideoFrames(this.settings.get(),outputPath,frameDir);
 
+    await this.ensureQcLayer(shotId,outputId,'visual',frames);
+    await this.ensureQcLayer(shotId,outputId,'semantic',frames);
+    project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
+    if(!hasCurrentQcPass(project,shotId,outputId,'visual')||!hasCurrentQcPass(project,shotId,outputId,'semantic'))return;
+
     const observed=shot.observedFinalStateId?project.shotStates.find(state=>state.id===shot!.observedFinalStateId&&state.status==='current'&&state.sourceRenderOutputId===outputId):undefined;
     if(!observed){
       const frameAssetId=await this.ensureObservedFrameAsset(output,frames.finalFrame);
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
       const draft=await extractObservedStateDraft(this.settings.get(),project,shot,frames.finalFrame);
       await recordObservedFinalState(this.projects,{projectRoot:project.rootPath,shotId,renderOutputId:outputId,frameAssetId,...draft});
+      project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
     }
 
-    await this.ensureQcLayer(shotId,outputId,'visual',frames);
-    await this.ensureQcLayer(shotId,outputId,'semantic',frames);
-    project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
     if(project.shotDependencies.some(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0))await this.ensureQcLayer(shotId,outputId,'continuity',frames);
   }
 
@@ -288,6 +291,12 @@ function orderedShots(project:FilmProject):Shot[]{
 
 function findCurrentPassingTake(project:FilmProject,shot:Shot):RenderOutput|undefined{
   return[...project.renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video'&&output.technicalQc?.passed).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||b.id.localeCompare(a.id)).find(output=>{const current=currentProductionInputKeyForOutput(project,shot,output),recorded=renderOutputProductionInputKey(project,output);return Boolean(current&&recorded===current);});
+}
+
+function hasCurrentQcPass(project:FilmProject,shotId:string,outputId:string,layer:'visual'|'semantic'|'continuity'):boolean{
+  const key=shotQcInputKey(project,shotId,outputId,layer);
+  const result=project.qcResults.filter(item=>item.shotId===shotId&&item.renderOutputId===outputId&&item.layer===layer&&item.inputKey===key).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||b.id.localeCompare(a.id))[0];
+  return result?.status==='pass';
 }
 
 function latestCurrentFailure(project:FilmProject,shotId:string,outputId:string):{layer:string}|undefined{
