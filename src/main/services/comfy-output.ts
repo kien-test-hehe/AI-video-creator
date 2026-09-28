@@ -1,6 +1,6 @@
 import { extname } from 'node:path';
 import type { RenderOutput } from '../../shared/types';
-import type { ComfyFileRef } from './comfy-client';
+import { validateComfyFileRef, type ComfyFileRef } from './comfy-client';
 
 export function inferMediaType(filename: string): RenderOutput['mediaType'] {
   const ext = extname(filename).toLowerCase();
@@ -19,8 +19,8 @@ export function collectComfyFileRefs(value: unknown, out: ComfyFileRef[] = []): 
     if(!current||typeof current!=='object')continue;
     const obj=current as Record<string,unknown>;
     if(typeof obj.filename==='string'){
-      const type=typeof obj.type==='string'?obj.type:'output';
-      if(type!=='input')out.push({filename:obj.filename,subfolder:typeof obj.subfolder==='string'?obj.subfolder:undefined,type});
+      const ref=validateComfyFileRef({filename:obj.filename,subfolder:obj.subfolder,type:typeof obj.type==='string'?obj.type:'output'},'ComfyUI history output');
+      if(ref.type!=='input'){if(out.length>=4096)throw new Error('ComfyUI history exposes more than the 4096-output safety limit for one job.');out.push(ref);}
     }
     for(const child of Object.values(obj))stack.push(child);
   }
