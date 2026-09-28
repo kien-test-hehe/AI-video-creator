@@ -34,6 +34,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
+import { buildRenderPrompt } from '../src/main/services/render-queue';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
 import { loadPortableProject } from '../src/main/services/project-schema';
@@ -551,6 +552,13 @@ describe('stale creative result guards',()=>{
     const before=sceneDirectorInputKey(project,project.scenes[0]);project.assets[0].notes='blue coat';expect(sceneDirectorInputKey(project,project.scenes[0])).not.toBe(before);
     expect(filterDirectorAssetIds(project,'character',['char','loc','missing'])).toEqual(['char']);
     const review=continuityReviewInputKey(project,project.shots[0]);project.shots[0].prompt='new';expect(continuityReviewInputKey(project,project.shots[0])).not.toBe(review);
+  });
+});
+describe('immutable render prompt bounds',()=>{
+  it('rejects a valid shot whose combined effective prompt would exceed the job schema limit',()=>{
+    const shot:Shot={id:'s',sceneId:'scene',index:1,title:'Huge prompt',prompt:'p'.repeat(200_000),camera:'',action:'a'.repeat(100_000),dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}};
+    const project={assets:[]} as unknown as FilmProject;
+    expect(()=>buildRenderPrompt(project,shot)).toThrow(/300000-character immutable job safety limit/i);
   });
 });
 describe('active render project guards',()=>{
