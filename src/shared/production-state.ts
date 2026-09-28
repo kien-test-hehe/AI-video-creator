@@ -142,6 +142,7 @@ export function invalidateStateCascade(project:FilmProject,rootStateIds:Iterable
     shot.canonicalRenderId=undefined;
     if(['rendered','failed'].includes(shot.status))shot.status='ready';
   }
+  reconcileHumanQcTasks(project,new Set(project.shotStates.filter(state=>staleIds.has(state.id)).map(state=>state.shotId)));
   return staleIds;
 }
 
@@ -176,6 +177,7 @@ export function rebuildDefaultSequentialDependencies(project:FilmProject,sceneId
     ));
     if(!stillConnected)invalidateStateCascade(project,[state.id],'Shot order/dependency topology changed; propagated start state is no longer connected to its source shot.');
   }
+  reconcileHumanQcTasks(project,scope);
 }
 
 function selectFields(source:ShotState,fields:ReadonlySet<ContinuityField>):Pick<ShotState,'characters'|'props'|'environment'|'camera'|'actionPhase'|'dialogueState'>{
@@ -299,6 +301,27 @@ export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string
     currentShotInput:currentProductionInputKey,
     incident
   }));
+}
+
+export function reconcileHumanQcTasks(project:FilmProject,shotIds?:Iterable<string>):string[]{
+  const scope=shotIds?new Set(shotIds):undefined;
+  const qcByTask=new Map(project.qcResults.filter(result=>result.humanOverrideTaskId).map(result=>[result.humanOverrideTaskId!,result] as const));
+  const dismissed:string[]=[];
+  const now=new Date().toISOString();
+  for(const task of project.humanTasks){
+    if(task.status!=='open')continue;
+    const linked=qcByTask.get(task.id);
+    if(!linked||linked.layer==='technical'||!linked.renderOutputId||!linked.inputKey)continue;
+    if(scope&&!scope.has(linked.shotId))continue;
+    const shot=project.shots.find(item=>item.id===linked.shotId),output=project.renderOutputs.find(item=>item.id===linked.renderOutputId&&item.shotId===linked.shotId);
+    const currentKey=shot&&output?shotQcInputKey(project,linked.shotId,linked.renderOutputId,linked.layer):undefined;
+    if(currentKey===linked.inputKey)continue;
+    task.status='dismissed';
+    task.resolvedAt=now;
+    task.resolution='Automatically dismissed because the render/QC/state inputs changed and this review task became stale.';
+    dismissed.push(task.id);
+  }
+  return dismissed;
 }
 
 export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputId:string):{ready:boolean;blockers:string[]}{
