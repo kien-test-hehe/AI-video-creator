@@ -9,6 +9,7 @@ import { appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorder
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
 import { compareTimelineClips } from '../../../shared/timeline-policy';
+import { takeUseConfirmationMessage } from '../../../shared/take-policy';
 
 type Point={x:number;y:number};
 type StudioNodeKind='story'|'assets'|'system'|'scene'|'shot'|'workflow'|'queue'|'timeline'|'capcut';
