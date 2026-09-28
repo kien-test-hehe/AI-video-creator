@@ -648,7 +648,7 @@ describe('Studio workflow routing and timeline drag',()=>{
  });
  it('inserts a rendered take at the requested canonical timeline position',()=>{
    const project={shots:[{id:'s1'},{id:'s2'}],renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'}],timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}]} as unknown as FilmProject;
-   expect(insertTimelineOutput(project,'o2','a')).toBe(true);const canonical=[...project.timeline].sort(compareTimelineClips);expect(canonical.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(canonical.map(clip=>clip.order)).toEqual([0,1]);
+   expect(insertTimelineOutput(project,'o2','a','test override')).toBe(true);const canonical=[...project.timeline].sort(compareTimelineClips);expect(canonical.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(canonical.map(clip=>clip.order)).toEqual([0,1]);
  });
  it('refuses timeline insertion once the canonical 100000-clip limit is reached',()=>{
    const timeline:any[]=[];timeline.length=100_000;
@@ -831,7 +831,7 @@ describe('multi-track timeline editing',()=>{
     expect(reorderTimeline(p,'a','c')).toBe(false);expect(p.timeline.find(c=>c.id==='c')?.order).toBe(0);
   });
   it('inserts a take into the target clip track without renumbering other tracks',()=>{
-    const p=project();expect(insertTimelineOutput(p,'o1','c')).toBe(true);
+    const p=project();expect(insertTimelineOutput(p,'o1','c','test override')).toBe(true);
     const inserted=p.timeline.find(c=>c.id!=='a'&&c.id!=='b'&&c.id!=='c')!;
     expect(inserted.track).toBe(1);expect(inserted.order).toBe(0);expect(p.timeline.find(c=>c.id==='c')?.order).toBe(1);
     expect(p.timeline.find(c=>c.id==='a')?.order).toBe(0);expect(p.timeline.find(c=>c.id==='b')?.order).toBe(1);
