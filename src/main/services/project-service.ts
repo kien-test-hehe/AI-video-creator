@@ -27,6 +27,8 @@ export class ProjectService {
   }
 
   async createAt(rootPath: string, name: string): Promise<FilmProject> {
+    if(typeof name!=='string')throw new Error('Project name must be a string.');
+    if(name.length>240)throw new Error('Project name exceeds the 240-character project safety limit.');
     const resolvedRoot=resolve(rootPath),projectFile=join(resolvedRoot,PROJECT_FILE);
     try{await stat(projectFile);throw new Error('This folder already contains a CineForge project. Use Open instead, or choose a new/empty folder.');}
     catch(error:any){if(error?.code!=='ENOENT')throw error;}
