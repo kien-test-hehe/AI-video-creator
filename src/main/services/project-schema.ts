@@ -198,7 +198,7 @@ function sanitizeScene(value: unknown): Scene {
     body: str(source.body, '', 500_000),
     location: str(source.location, '', 2000) || undefined,
     timeOfDay: str(source.timeOfDay, '', 500) || undefined,
-    shotIds: boundedArray(source.shotIds,'scene shot ids',100_000).map(safeId)
+    shotIds: boundedArray(source.shotIds,'scene shot ids',100_000).map(value=>safeId(value))
   };
 }
 
@@ -227,7 +227,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const generationSource = asObject(source.generation ?? {}, 'shot generation');
   const modelFamily=enumOrDefault(generationSource.modelFamily,MODEL_FAMILIES,PRIMARY_VIDEO_MODEL,'shot model family');
   const defaults = MODEL_DEFAULTS[modelFamily];
-  const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(safeId).filter(id=>assetIds.has(id));
+  const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(item=>safeId(item)).filter(id=>assetIds.has(id));
   const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => {const filtered=rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!));if(filtered.length>max)throw new Error(`Shot asset role exceeds the ${max}-item safety limit.`);return filtered;};
   const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
     const id=optionalString(value,'shot asset reference');if(!id)return undefined;
