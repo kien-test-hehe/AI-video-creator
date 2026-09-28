@@ -51,7 +51,7 @@ function sanitizeJournal(raw:any,project:FilmProject):AutomationRunJournal{
   for(const id of rawTargetShotIds)if(typeof id==='string'&&shotIds.has(id)&&!targetShotIds.includes(id))targetShotIds.push(id);
   const status=raw.status;
   if(!status||typeof status!=='object'||typeof status.running!=='boolean'||typeof status.paused!=='boolean'||typeof status.phase!=='string'||typeof status.message!=='string')throw new Error('Automation run journal status is malformed.');
-  const phases=new Set(['idle','preflight','planning','waiting-render','qc','retrying','waiting-human','building-timeline','paused','complete','error']);
+  const phases=new Set(['idle','preflight','planning','keyframes','waiting-render','qc','retrying','waiting-human','building-timeline','paused','complete','error']);
   if(!phases.has(status.phase))throw new Error('Automation run journal contains an unknown phase.');
   const retryCounts:Record<string,number>={};
   if(status.retryCounts&&typeof status.retryCounts==='object'&&!Array.isArray(status.retryCounts)){for(const[id,value]of Object.entries(status.retryCounts)){const n=Number(value);if(shotIds.has(id)&&Number.isFinite(n)&&n>=0)retryCounts[id]=Math.min(5,Math.trunc(n));}}
