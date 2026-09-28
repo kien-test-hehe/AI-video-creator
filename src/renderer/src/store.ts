@@ -18,9 +18,27 @@ export const useAppStore=create<AppState>((set,get)=>({
   syncRuntime:mainProject=>set(state=>{
     const current=state.project;if(!current||current.id!==mainProject.id)return{project:mainProject,projectDirty:false,selectedShotId:undefined,probe:undefined};
     const next=structuredClone(current);
-    next.renderJobs=structuredClone(mainProject.renderJobs);next.renderOutputs=structuredClone(mainProject.renderOutputs);
+    next.renderJobs=structuredClone(mainProject.renderJobs);
+    next.renderOutputs=structuredClone(mainProject.renderOutputs);
+    next.shotStates=structuredClone(mainProject.shotStates);
+    next.shotDependencies=structuredClone(mainProject.shotDependencies);
+    next.qcResults=structuredClone(mainProject.qcResults);
+    next.humanTasks=structuredClone(mainProject.humanTasks);
+    next.cutRevisions=structuredClone(mainProject.cutRevisions);
     const runtime=new Map(mainProject.shots.map(shot=>[shot.id,shot]));
-    for(const shot of next.shots){const server=runtime.get(shot.id);if(!server)continue;if(shotProjectRenderInputKey(next,shot)!==shotProjectRenderInputKey(mainProject,server))continue;shot.status=server.status;shot.latestRenderId=server.latestRenderId;}
+    for(const shot of next.shots){
+      const server=runtime.get(shot.id);if(!server)continue;
+      shot.latestAttemptRenderId=server.latestAttemptRenderId;
+      shot.canonicalRenderId=server.canonicalRenderId;
+      shot.plannedStartStateId=server.plannedStartStateId;
+      shot.plannedEndStateId=server.plannedEndStateId;
+      shot.actualStartStateId=server.actualStartStateId;
+      shot.observedFinalStateId=server.observedFinalStateId;
+      if(!state.projectDirty&&server.actualStartStateId)shot.startFrameAssetId=server.startFrameAssetId;
+      if(shotProjectRenderInputKey(next,shot)!==shotProjectRenderInputKey(mainProject,server))continue;
+      shot.status=server.status;
+      shot.latestRenderId=server.latestRenderId;
+    }
     const serverProfiles=new Map(mainProject.settings.workflowProfiles.map(profile=>[profile.id,profile]));
     next.settings.workflowProfiles=next.settings.workflowProfiles.map(local=>{
       const server=serverProfiles.get(local.id);if(!server)return local;
