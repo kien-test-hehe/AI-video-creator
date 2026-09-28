@@ -124,11 +124,11 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
   return {
     costPolicy: {
       mode: 'codex-capcut-only',
-      allowCapcutAiCredits: source.costPolicy?.allowCapcutAiCredits===true
+      allowCapcutAiCredits: booleanOrDefault(source.costPolicy?.allowCapcutAiCredits,false,'CapCut AI credits policy')
     },
     capcut: {
-      enabled: typeof source.capcut?.enabled==='boolean'?source.capcut.enabled:true,
-      pro: source.capcut?.pro === true
+      enabled: booleanOrDefault(source.capcut?.enabled,true,'CapCut enabled setting'),
+      pro: booleanOrDefault(source.capcut?.pro,false,'CapCut Pro setting')
     },
     defaultFps: clampInt(source.defaultFps, 1, 120, 24),
     outputContainer: enumOrDefault(source.outputContainer,new Set(['mp4','mov','webm'] as const),'mp4','project output container'),
@@ -151,7 +151,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
     bindings: boundedArray(source.bindings,'workflow bindings',256).map(sanitizeBinding),
-    enabled: source.enabled===true,
+    enabled: booleanOrDefault(source.enabled,false,'workflow enabled flag'),
     notes: str(source.notes, '', 20_000) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
     validation: {
@@ -183,7 +183,7 @@ function sanitizeBinding(value: unknown): WorkflowBinding {
     input,
     jsonPath,
     transform: enumOrDefault(source.transform,new Set(['integer','float','boolean','string','identity'] as const),'identity','workflow binding transform'),
-    required: source.required===true
+    required: booleanOrDefault(source.required,false,'workflow binding required flag')
   } as WorkflowBinding;
 }
 
@@ -267,7 +267,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
       cfg: generationSource.cfg == null ? defaults.cfg : clampNumber(generationSource.cfg,0,100,defaults.cfg ?? 1),
       seed: clampInt(generationSource.seed,0,2_147_483_647,Math.floor(Math.random()*2_147_483_647)),
       negativePrompt: str(generationSource.negativePrompt,'',100_000),
-      includeAudio: typeof generationSource.includeAudio==='boolean'?generationSource.includeAudio:(defaults.includeAudio??false),
+      includeAudio: booleanOrDefault(generationSource.includeAudio,defaults.includeAudio??false,'shot includeAudio flag'),
       workflowProfileId: typeof generationSource.workflowProfileId === 'string' ? generationSource.workflowProfileId : undefined
     },
     latestRenderId: typeof source.latestRenderId === 'string' ? source.latestRenderId : undefined
@@ -358,19 +358,19 @@ function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
   const source=value as Record<string,unknown>;
   return{
     checkedAt:iso(source.checkedAt,new Date().toISOString()),
-    passed:source.passed===true,
+    passed:booleanOrDefault(source.passed,false,'technical QC passed flag'),
     durationSec:finiteOptional(source.durationSec,0,1_000_000),
     width:intOptional(source.width,1,16384),
     height:intOptional(source.height,1,16384),
     fps:finiteOptional(source.fps,0,1000),
-    hasAudio:typeof source.hasAudio==='boolean'?source.hasAudio:undefined,
+    hasAudio:optionalBoolean(source.hasAudio,'technical QC hasAudio flag'),
     audioPeakDb:finiteOptional(source.audioPeakDb,-300,100),
     issues:boundedArray(source.issues,'technical QC issues',128).map(item=>str(item,'',4096)).filter(Boolean),
     warnings:boundedArray(source.warnings,'technical QC warnings',128).map(item=>str(item,'',4096)).filter(Boolean)
   };
 }
-function finiteOptional(value:unknown,min:number,max:number):number|undefined{if(value==null||value==='')return undefined;const n=Number(value);if(!Number.isFinite(n))return undefined;if(n<min||n>max)throw new Error(`Project optional number is outside the allowed range ${min}..${max}: ${n}`);return n;}
-function intOptional(value:unknown,min:number,max:number):number|undefined{if(value==null||value==='')return undefined;const n=Number(value);if(!Number.isInteger(n))return undefined;if(n<min||n>max)throw new Error(`Project optional integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function finiteOptional(value:unknown,min:number,max:number):number|undefined{if(value==null||value==='')return undefined;const n=Number(value);if(!Number.isFinite(n))throw new Error(`Project optional number is not finite: ${String(value).slice(0,128)}`);if(n<min||n>max)throw new Error(`Project optional number is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function intOptional(value:unknown,min:number,max:number):number|undefined{if(value==null||value==='')return undefined;const n=Number(value);if(!Number.isInteger(n))throw new Error(`Project optional integer is invalid: ${String(value).slice(0,128)}`);if(n<min||n>max)throw new Error(`Project optional integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
 
 function assertUniqueIds(label:string,items:Array<{id:string}>):void{
   const seen=new Set<string>();for(const item of items){if(seen.has(item.id))throw new Error(`Duplicate ${label} id: ${item.id}`);seen.add(item.id);}
@@ -382,7 +382,17 @@ function asObject(value: unknown, label: string): Record<string, any> {
 }
 function array(value: unknown): any[] { return Array.isArray(value) ? value : []; }
 function boundedArray(value:unknown,label:string,max:number):any[]{const items=array(value);if(items.length>max)throw new Error(`${label} exceed the safety limit of ${max} items.`);return items;}
-function str(value: unknown, fallback: string, max: number): string { if(typeof value!=='string')return fallback;if(value.length>max)throw new Error(`Project string exceeds the ${max}-character safety limit.`);return value; }
+function str(value: unknown, fallback: string, max: number): string { if(value==null)return fallback;if(typeof value!=='string')throw new Error(`Project string must be a string, got ${typeof value}.`);if(value.length>max)throw new Error(`Project string exceeds the ${max}-character safety limit.`);return value; }
+function booleanOrDefault(value:unknown,fallback:boolean,label:string):boolean{
+  if(value==null||value==='')return fallback;
+  if(typeof value==='boolean')return value;
+  throw new Error(`Invalid ${label}: expected boolean.`);
+}
+function optionalBoolean(value:unknown,label:string):boolean|undefined{
+  if(value==null||value==='')return undefined;
+  if(typeof value==='boolean')return value;
+  throw new Error(`Invalid ${label}: expected boolean.`);
+}
 function enumOrDefault<T extends string>(value:unknown,allowed:ReadonlySet<T>,fallback:T,label:string):T{
   if(value==null||value==='')return fallback;
   if(typeof value==='string'&&allowed.has(value as T))return value as T;
@@ -398,8 +408,8 @@ function safeId(value: unknown): string {
   if (typeof value === 'string' && /^[a-zA-Z0-9._:-]{1,256}$/.test(value)) return value;
   throw new Error(`Invalid project identifier: ${typeof value==='string'?value.slice(0,128):String(value)}`);
 }
-function clampInt(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isInteger(n))return fallback;if(n<min||n>max)throw new Error(`Project integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
-function clampNumber(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isFinite(n))return fallback;if(n<min||n>max)throw new Error(`Project number is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function clampInt(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isInteger(n))throw new Error(`Project integer is invalid: ${String(value).slice(0,128)}`);if(n<min||n>max)throw new Error(`Project integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function clampNumber(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isFinite(n))throw new Error(`Project number is invalid: ${String(value).slice(0,128)}`);if(n<min||n>max)throw new Error(`Project number is outside the allowed range ${min}..${max}: ${n}`);return n;}
 function iso(value: unknown, fallback: string): string { if(value==null||value==='')return fallback;if(typeof value!=='string')throw new Error('Project timestamp must be an ISO-compatible string.');const time=Date.parse(value);if(!Number.isFinite(time))throw new Error(`Invalid project timestamp: ${value.slice(0,128)}`);return new Date(time).toISOString(); }
 function maybeIso(value: unknown): string | undefined { if(value==null||value==='')return undefined;if(typeof value!=='string')throw new Error('Optional project timestamp must be an ISO-compatible string.');const time=Date.parse(value);if(!Number.isFinite(time))throw new Error(`Invalid optional project timestamp: ${value.slice(0,128)}`);return new Date(time).toISOString(); }
 function sourceLabel(value:unknown):string{
