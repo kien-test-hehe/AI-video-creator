@@ -68,8 +68,11 @@ export class AppSettingsService {
   async save(next:AppMachineSettings):Promise<AppMachineSettings>{return this.runExclusive(async()=>{const sanitized=sanitizeMachineSettings(next);await this.persistUnlocked(sanitized);return this.get();});}
 
   private async preserveRejectedSettings(file:string):Promise<string|undefined>{
-    try{await this.assertStateFileNotSymlink(file,'Rejected CineForge machine settings');}
-    catch(error:any){if(error?.code==='ENOENT')return undefined;throw error;}
+    try{
+      const info=await lstat(file);
+      if(info.isSymbolicLink())throw new Error('Rejected CineForge machine settings must not be a symbolic link.');
+      if(!info.isFile())throw new Error('Rejected CineForge machine settings are not a regular file.');
+    }catch(error:any){if(error?.code==='ENOENT')return undefined;throw error;}
     const target=join(this.userDataDir,`machine-settings.v1.rejected-${Date.now()}-${randomUUID()}.json`);
     try{await copyFile(file,target);return target;}
     catch(error){throw new Error(`CineForge found a usable machine-settings backup but refused to overwrite the rejected primary because preserving it failed: ${error instanceof Error?error.message:String(error)}`);}
