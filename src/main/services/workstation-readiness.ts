@@ -8,6 +8,8 @@ export async function assessWorkstationReadiness(project:FilmProject|undefined,m
 
   if(!probe.gpu)add('gpu','NVIDIA GPU','blocked','No NVIDIA GPU was detected through nvidia-smi.','Install/update the NVIDIA driver and reboot.');
   else if((probe.gpu.totalVramMb??0)<15000)add('gpu','GPU / VRAM','warning',`${probe.gpu.name} · ${((probe.gpu.totalVramMb??0)/1024).toFixed(1)} GB VRAM. CineForge is tuned around a 16 GB production envelope.`,'Use lower validated profiles and shorter shots.');
+  else if((probe.gpu.freeVramMb??0)<4096)add('gpu','GPU / VRAM','blocked',`${probe.gpu.name} · only ${((probe.gpu.freeVramMb??0)/1024).toFixed(1)} GB VRAM free right now.`,'Close CapCut, browsers, games or other GPU workloads before generation.');
+  else if((probe.gpu.freeVramMb??0)<8192)add('gpu','GPU / VRAM','warning',`${probe.gpu.name} · ${((probe.gpu.totalVramMb??0)/1024).toFixed(1)} GB total · only ${((probe.gpu.freeVramMb??0)/1024).toFixed(1)} GB free.`,'Generation can proceed, but close other GPU-heavy applications for long/hero shots.');
   else add('gpu','GPU / VRAM','ready',`${probe.gpu.name} · ${((probe.gpu.totalVramMb??0)/1024).toFixed(1)} GB total · ${((probe.gpu.freeVramMb??0)/1024).toFixed(1)} GB free.`);
 
   if(!probe.memory)add('ram','System RAM','warning','RAM availability could not be measured.');
