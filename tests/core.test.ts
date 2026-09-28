@@ -1575,6 +1575,25 @@ describe('production topology and destructive mutation regression guards',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 
+  it('persists a renderer preferred-take change without granting canonical authority',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-preferred-take-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Preferred');
+      const current=await service.mutate(project=>{
+        project.scenes.push({id:'scene-topology',index:1,heading:'',body:'',shotIds:['a']});
+        const a=shot('a',1);a.latestRenderId='out-1';a.canonicalRenderId='out-1';a.status='rendered';project.shots.push(a);
+        project.renderOutputs.push(
+          {id:'out-1',jobId:'orphaned',shotId:'a',path:join(root,'renders','out-1.mp4'),filename:'out-1.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'},
+          {id:'out-2',jobId:'orphaned',shotId:'a',path:join(root,'renders','out-2.mp4'),filename:'out-2.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:02.000Z'}
+        );
+      });
+      const edited=structuredClone(current);edited.shots[0].latestRenderId='out-2';edited.shots[0].canonicalRenderId='out-2';
+      const saved=await service.saveFromRenderer(edited);
+      expect(saved.shots[0].latestRenderId).toBe('out-2');
+      expect(saved.shots[0].canonicalRenderId).toBe('out-1');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
   it('includes current structured start state in the effective render prompt and signature',()=>{
     const a=shot('a',1),project={
       shots:[a],assets:[],shotStates:[{id:'actual-a',shotId:'a',role:'actual-start',source:'generated',status:'unreviewed',characters:[],props:[],environment:{lighting:'blue moonlight'},camera:{screenDirection:'left-to-right'},actionPhase:'mid reach',dialogueState:'silent',createdAt:'2026-01-01T00:00:00.000Z'}],
