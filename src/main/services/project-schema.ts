@@ -6,7 +6,7 @@ import type {
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 import { assertSafeJsonPath, assertSafeObjectKey } from '../../shared/safe-object';
-import { WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../../shared/workflow-limits';
+import { WORKFLOW_BINDING_CLASS_TYPE_LIMIT, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_JSON_PATH_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT, WORKFLOW_BINDING_TITLE_LIMIT, WORKFLOW_PROFILE_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../../shared/workflow-limits';
 import { defaultSequentialDependencies } from '../../shared/production-state';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
@@ -225,11 +225,11 @@ function sanitizeBinding(value: unknown): WorkflowBinding {
   const keys = new Set(['prompt','negativePrompt','width','height','resolution','frames','fps','steps','cfg','seed','startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImages','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo','filenamePrefix']);
   if (!keys.has(source.key)) throw new Error(`Invalid workflow binding key: ${String(source.key)}`);
   const selector = source.selector && typeof source.selector === 'object' ? {
-    ...(str(source.selector.nodeId, '', 128) ? { nodeId: str(source.selector.nodeId, '', 128) } : {}),
-    ...(str(source.selector.classType, '', 256) ? { classType: str(source.selector.classType, '', 256) } : {}),
-    ...(str(source.selector.titleIncludes, '', 256) ? { titleIncludes: str(source.selector.titleIncludes, '', 256) } : {})
+    ...(str(source.selector.nodeId, '', WORKFLOW_BINDING_NODE_ID_LIMIT) ? { nodeId: str(source.selector.nodeId, '', 128) } : {}),
+    ...(str(source.selector.classType, '', WORKFLOW_BINDING_CLASS_TYPE_LIMIT) ? { classType: str(source.selector.classType, '', 256) } : {}),
+    ...(str(source.selector.titleIncludes, '', WORKFLOW_BINDING_TITLE_LIMIT) ? { titleIncludes: str(source.selector.titleIncludes, '', 256) } : {})
   } : undefined;
-  const input=str(source.input,'',256)||undefined,jsonPath=str(source.jsonPath,'',1024)||undefined;
+  const input=str(source.input,'',WORKFLOW_BINDING_INPUT_LIMIT)||undefined,jsonPath=str(source.jsonPath,'',WORKFLOW_BINDING_JSON_PATH_LIMIT)||undefined;
   if(input)assertSafeObjectKey(input,'Workflow binding input');
   if(jsonPath)assertSafeJsonPath(jsonPath,'Workflow binding JSON path');
   return {

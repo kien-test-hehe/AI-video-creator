@@ -1,7 +1,7 @@
 import { readJsonFileLimited } from './json-file';
 import type { WorkflowBinding, WorkflowBindingKey, WorkflowProfile } from '../../shared/types';
 import { assertSafeObjectKey } from '../../shared/safe-object';
-import { WORKFLOW_BINDING_LIMIT } from '../../shared/workflow-limits';
+import { WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT } from '../../shared/workflow-limits';
 
 export type ApiWorkflow = Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
 
@@ -146,10 +146,11 @@ export function suggestBindings(workflow: ApiWorkflow): WorkflowBinding[] {
         if (key === 'prompt' && (/negative/.test(titleLower) || /negative/.test(lower))) continue;
         if (key === 'negativePrompt' && !/negative/.test(titleLower) && !/negative/.test(lower) && lower === 'text') continue;
         if(suggestions.length>=WORKFLOW_BINDING_LIMIT)throw new Error(`Suggested workflow bindings exceed the ${WORKFLOW_BINDING_LIMIT}-binding project safety limit. Simplify the workflow or configure bindings manually.`);
-        if(suggestions.length>=WORKFLOW_BINDING_LIMIT)throw new Error(`Suggested workflow bindings exceed the ${WORKFLOW_BINDING_LIMIT}-binding project safety limit. Simplify the workflow or configure bindings manually.`);
+        if(id.length>WORKFLOW_BINDING_NODE_ID_LIMIT)throw new Error(`ComfyUI node id for suggested ${key} binding exceeds the ${WORKFLOW_BINDING_NODE_ID_LIMIT}-character project safety limit. Export a workflow with stable shorter node ids or configure a compatible workflow.`);
+        if(input.length>WORKFLOW_BINDING_INPUT_LIMIT)throw new Error(`ComfyUI input name for suggested ${key} binding exceeds the ${WORKFLOW_BINDING_INPUT_LIMIT}-character project safety limit.`);
         suggestions.push({
           key,
-          selector: { nodeId: id, classType: node.class_type, ...(title ? { titleIncludes: title } : {}) },
+          selector: { nodeId: id },
           input,
           transform: typeof currentValue === 'number' ? (Number.isInteger(currentValue) ? 'integer' : 'float') : 'identity',
           required: ['prompt', 'seed'].includes(key)
