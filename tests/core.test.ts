@@ -273,7 +273,13 @@ describe('project schema canonicalization',()=>{
   });
 
 });
-describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
+describe('screenplay parsing',()=>{
+  it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});
+  it('rejects screenplay and scene sizes that cannot be persisted losslessly',()=>{
+    expect(()=>parseScreenplay('x'.repeat(2_000_001))).toThrow(/screenplay exceeds/i);
+    expect(()=>parseScreenplay(`INT. ROOM - DAY\n${'x'.repeat(500_001)}`)).toThrow(/scene body exceeds/i);
+  });
+});
 describe('workflow binding object-key safety',()=>{
   it('rejects prototype-polluting Comfy binding inputs at runtime',()=>{
     const workflow:ApiWorkflow={'1':{class_type:'Node',inputs:{text:'old'}}};
