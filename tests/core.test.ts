@@ -1555,6 +1555,33 @@ describe('production topology and destructive mutation regression guards',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 
+  it('turns a renderer start-frame override into human-owned state and never resurrects stale propagated truth',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-human-start-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Human start');
+      const current=await service.mutate(project=>{
+        project.scenes.push({id:'scene-topology',index:1,heading:'',body:'',shotIds:['a','b']});
+        project.assets.push(
+          {id:'auto-frame',kind:'keyframe',name:'auto',sourcePath:'auto.png',projectPath:'assets/keyframe/auto.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'},
+          {id:'human-frame',kind:'keyframe',name:'human',sourcePath:'human.png',projectPath:'assets/keyframe/human.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}
+        );
+        project.shots.push(shot('a',1),{...shot('b',2),startFrameAssetId:'auto-frame',actualStartStateId:'start-b',observedFinalStateId:'final-b',status:'rendered'});
+        project.shotStates.push(
+          {id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',frameAssetId:'auto-frame',characters:[],props:[],environment:{lighting:'warm'},camera:{},actionPhase:'enter',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+          {id:'final-b',shotId:'b',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{lighting:'warm'},camera:{},actionPhase:'exit',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'}
+        );
+      });
+      const edited=structuredClone(current);edited.shots.find(item=>item.id==='b')!.startFrameAssetId='human-frame';
+      const saved=await service.saveFromRenderer(edited),b=saved.shots.find(item=>item.id==='b')!;
+      const actual=saved.shotStates.find(state=>state.id===b.actualStartStateId)!;
+      expect(actual).toMatchObject({role:'actual-start',source:'human',status:'current',frameAssetId:'human-frame'});
+      expect(saved.shotStates.find(state=>state.id==='start-b')?.status).toBe('stale');
+      expect(saved.shotStates.find(state=>state.id==='final-b')?.status).toBe('stale');
+      expect(b.observedFinalStateId).toBeUndefined();
+      expect(b.canonicalRenderId).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
   it('cascades render-output deletion through derived continuity state',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-output-state-delete-'));
     try{
