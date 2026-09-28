@@ -1485,6 +1485,39 @@ describe('production state main-process authority',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 
+  it('deduplicates repeated human-verify verdicts for the same QC snapshot into one open task',async()=>{
+    const{root,service}=await setupProject();
+    try{
+      const initial=service.getCurrent()!;
+      const inputKey=shotQcInputKey(initial,'shot-auth','out-auth','visual');
+      const first=await recordShotQc(service,{
+        projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'human-verify',inputKey,
+        issues:[{code:'FACE_UNCERTAIN',severity:'major',message:'Face match needs review.'}]
+      });
+      const firstTask=first.humanTasks.find(item=>item.status==='open')!;
+      const second=await recordShotQc(service,{
+        projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'human-verify',inputKey,
+        issues:[{code:'FACE_STILL_UNCERTAIN',severity:'major',message:'Second evaluator still needs a human decision.'}]
+      });
+      const open=second.humanTasks.filter(item=>item.status==='open');
+      expect(open).toHaveLength(1);
+      expect(open[0].id).toBe(firstTask.id);
+      const reviewResults=second.qcResults.filter(item=>item.layer==='visual'&&item.status==='human-verify');
+      expect(reviewResults).toHaveLength(2);
+      expect(new Set(reviewResults.map(item=>item.humanOverrideTaskId))).toEqual(new Set([firstTask.id]));
+      expect(open[0].reason).toMatch(/Second evaluator/i);
+
+      const currentKey=shotQcInputKey(service.getCurrent()!,'shot-auth','out-auth','visual');
+      await recordShotQc(service,{
+        projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',inputKey:currentKey,issues:[]
+      });
+      await resolveHumanTask(service,{
+        projectRoot:root,taskId:firstTask.id,status:'resolved',resolution:'Human review confirmed visual QC PASS.'
+      });
+      expect(service.getCurrent()?.humanTasks.find(item=>item.id===firstTask.id)?.status).toBe('resolved');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
   it('automatically dismisses a pending human QC review when its shot provenance becomes stale',async()=>{
     const{root,service}=await setupProject();
     try{
