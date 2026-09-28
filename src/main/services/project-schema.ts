@@ -56,6 +56,7 @@ function migrateV1ToV2(source: Record<string, any>, notes: string[]): Record<str
 function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProject {
   const now = new Date().toISOString();
   const id = safeId(source.id,true);
+  const storySource=optionalObject(source.story,'story')??{};
   const settings = sanitizeProjectSettings(source.settings);
   const scenes = boundedArray(source.scenes,'project scenes',10_000).map(sanitizeScene);
   const sceneIds = new Set(scenes.map(s=>s.id));
@@ -106,10 +107,10 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
     updatedAt: iso(source.updatedAt, now),
     rootPath: openedRoot,
     story: {
-      title: str(source.story?.title, str(source.name, 'Untitled Film', 240), 500),
-      logline: str(source.story?.logline, '', 10_000),
-      script: str(source.story?.script, '', 2_000_000),
-      notes: str(source.story?.notes, '', 200_000)
+      title: str(storySource.title, str(source.name, 'Untitled Film', 240), 500),
+      logline: str(storySource.logline, '', 10_000),
+      script: str(storySource.script, '', 2_000_000),
+      notes: str(storySource.notes, '', 200_000)
     },
     scenes, assets, shots, renderJobs, renderOutputs, timeline, settings
   };
@@ -117,6 +118,7 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
 
 function sanitizeProjectSettings(value: unknown): ProjectSettings {
   const source = asObject(value ?? {}, 'settings');
+  const costPolicy=optionalObject(source.costPolicy,'project cost policy')??{},capcut=optionalObject(source.capcut,'CapCut project settings')??{};
   const profiles = boundedArray(source.workflowProfiles,'workflow profiles',512).map(sanitizeWorkflowProfile);
   for (const builtin of BUILTIN_WORKFLOW_PROFILES) if (!profiles.some(p=>p.id===builtin.id)) profiles.push(structuredClone(builtin));
   if(profiles.length>512)throw new Error('workflow profiles exceed the safety limit of 512 items after required built-ins are added.');
@@ -124,11 +126,11 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
   return {
     costPolicy: {
       mode: 'codex-capcut-only',
-      allowCapcutAiCredits: booleanOrDefault(source.costPolicy?.allowCapcutAiCredits,false,'CapCut AI credits policy')
+      allowCapcutAiCredits: booleanOrDefault(costPolicy.allowCapcutAiCredits,false,'CapCut AI credits policy')
     },
     capcut: {
-      enabled: booleanOrDefault(source.capcut?.enabled,true,'CapCut enabled setting'),
-      pro: booleanOrDefault(source.capcut?.pro,false,'CapCut Pro setting')
+      enabled: booleanOrDefault(capcut.enabled,true,'CapCut enabled setting'),
+      pro: booleanOrDefault(capcut.pro,false,'CapCut Pro setting')
     },
     defaultFps: clampInt(source.defaultFps, 1, 120, 24),
     outputContainer: enumOrDefault(source.outputContainer,new Set(['mp4','mov','webm'] as const),'mp4','project output container'),
