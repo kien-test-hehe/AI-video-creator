@@ -42,6 +42,7 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
+import { canonicalTakeReadiness, invalidateObservedFinalState, propagateObservedFinalState } from '../src/shared/production-state';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1262,3 +1263,100 @@ describe('WanGP list-valued binding inference',()=>{
   it('binds image_refs as the whole list even when the default list is empty',()=>{const bindings=suggestWanGpBindings({prompt:'x',seed:1,image_refs:[]});expect(bindings.find(binding=>binding.key==='referenceImages')?.jsonPath).toBe('image_refs');});
 });
 describe('WanGP settings binding',()=>{it('infers current WanGP timing and reference-array keys without coupling to one nesting layout',()=>{const bindings=suggestWanGpBindings({prompt:'old',generation:{seed:1,width:832,height:480,num_frames:81,num_inference_steps:30},inputs:{start_image:'start.png',image_refs:null}});expect(bindings.find(b=>b.key==='prompt')?.jsonPath).toBe('prompt');expect(bindings.find(b=>b.key==='seed')?.jsonPath).toBe('generation.seed');expect(bindings.find(b=>b.key==='frames')?.jsonPath).toBe('generation.num_frames');expect(bindings.find(b=>b.key==='steps')?.jsonPath).toBe('generation.num_inference_steps');expect(bindings.find(b=>b.key==='startImage')?.jsonPath).toBe('inputs.start_image');expect(bindings.find(b=>b.key==='referenceImages')?.jsonPath).toBe('inputs.image_refs');});});
+
+
+describe('production state core',()=>{
+  const rawTwoShotProject=()=>({
+    schemaVersion:2,id:'state-project',name:'State Film',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'State Film',logline:'',script:'',notes:''},
+    scenes:[{id:'scene-state',index:1,heading:'INT. ROOM',body:'',shotIds:['shot-a','shot-b']}],
+    assets:[{id:'frame-a',kind:'keyframe',name:'Frame A',sourcePath:'frame-a.png',projectPath:'assets/keyframe/frame-a.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}],
+    shots:[
+      {id:'shot-a',sceneId:'scene-state',index:1,title:'A',prompt:'A',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false},latestRenderId:'out-a'},
+      {id:'shot-b',sceneId:'scene-state',index:2,title:'B',prompt:'B',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:2,negativePrompt:'',includeAudio:false}}
+    ],
+    renderJobs:[],
+    renderOutputs:[{id:'out-a',jobId:'orphaned',shotId:'shot-a',path:'/project/renders/out-a.mp4',filename:'out-a.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:01.000Z',passed:true,issues:[],warnings:[]}}],
+    timeline:[],settings:{}
+  });
+
+  it('migrates v2 projects to schema v3 and derives deterministic adjacent continuity edges',()=>{
+    const loaded=loadPortableProject(rawTwoShotProject(),'/project');
+    expect(loaded.project.schemaVersion).toBe(3);
+    expect(loaded.migratedFrom).toBe(2);
+    expect(loaded.project.shots.every(shot=>shot.previz?.requirement==='none'&&shot.previz.status==='not-needed')).toBe(true);
+    expect(loaded.project.shotDependencies).toHaveLength(1);
+    expect(loaded.project.shotDependencies[0]).toMatchObject({fromShotId:'shot-a',toShotId:'shot-b',relation:'continuity',strength:'soft'});
+  });
+
+  it('propagates only a current observed final state and invalidates its derived downstream start state when superseded',()=>{
+    const project=loadPortableProject(rawTwoShotProject(),'/project').project;
+    project.shotStates.push({
+      id:'state-final-a',shotId:'shot-a',role:'observed-final',source:'generated',status:'current',frameAssetId:'frame-a',sourceRenderOutputId:'out-a',
+      characters:[],props:[],environment:{timeOfDay:'NIGHT',lighting:'warm'},camera:{screenDirection:'left-to-right'},actionPhase:'hand on door',dialogueState:'line complete',confidence:.9,createdAt:'2026-01-01T00:00:02.000Z'
+    });
+    project.shots[0].observedFinalStateId='state-final-a';
+    const propagated=propagateObservedFinalState(project,'shot-a','2026-01-01T00:00:03.000Z');
+    expect(propagated).toHaveLength(1);
+    const next=project.shots.find(shot=>shot.id==='shot-b')!,state=project.shotStates.find(item=>item.id===next.actualStartStateId)!;
+    expect(next.startFrameAssetId).toBe('frame-a');
+    expect(state.derivedFromStateId).toBe('state-final-a');
+    expect(state.status).toBe('unreviewed');
+    expect(state.environment.lighting).toBe('warm');
+    expect(state.camera).toEqual({});
+
+    invalidateObservedFinalState(project,'shot-a','new canonical take');
+    expect(project.shotStates.find(item=>item.id==='state-final-a')?.status).toBe('stale');
+    expect(state.status).toBe('stale');
+    expect(next.actualStartStateId).toBeUndefined();
+    expect(project.shots[0].observedFinalStateId).toBeUndefined();
+  });
+
+  it('keeps canonical take promotion fail-closed until technical, visual, semantic and continuity QC all pass',()=>{
+    const project=loadPortableProject(rawTwoShotProject(),'/project').project;
+    expect(canonicalTakeReadiness(project,'shot-a','out-a').ready).toBe(false);
+    const createdAt='2026-01-01T00:00:03.000Z';
+    project.qcResults.push(
+      {id:'q-v',shotId:'shot-a',renderOutputId:'out-a',layer:'visual',status:'pass',issues:[],createdAt},
+      {id:'q-s',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'pass',issues:[],createdAt}
+    );
+    expect(canonicalTakeReadiness(project,'shot-a','out-a')).toMatchObject({ready:false});
+    project.qcResults.push({id:'q-c',shotId:'shot-a',renderOutputId:'out-a',layer:'continuity',status:'pass',issues:[],createdAt});
+    expect(canonicalTakeReadiness(project,'shot-a','out-a')).toEqual({ready:true,blockers:[]});
+    project.qcResults.push({id:'q-s2',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'fail',issues:[],createdAt:'2026-01-01T00:00:04.000Z'});
+    expect(canonicalTakeReadiness(project,'shot-a','out-a').blockers.join(' ')).toMatch(/semantic QC is fail/i);
+  });
+
+  it('rejects broken schema-v3 state pointers instead of silently attaching state to the wrong shot',()=>{
+    const migrated=loadPortableProject(rawTwoShotProject(),'/project').project as any;
+    migrated.shotStates=[{id:'wrong-state',shotId:'shot-b',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'}];
+    migrated.shots[0].observedFinalStateId='wrong-state';
+    expect(()=>loadPortableProject(migrated,'/project')).toThrow(/observedFinalStateId references an invalid observed-final state/i);
+  });
+
+  it('renderer edits stale observed state and its propagated child instead of leaving false continuity truth alive',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-state-invalidation-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Film');
+      const current=await service.mutate(project=>{
+        project.scenes.push({id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['a','b']});
+        const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+        project.shots.push(
+          {id:'a',sceneId:'scene',index:1,title:'A',prompt:'old',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation},observedFinalStateId:'state-a'},
+          {id:'b',sceneId:'scene',index:2,title:'B',prompt:'next',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:2},actualStartStateId:'state-b'}
+        );
+        project.shotDependencies.push({id:'edge',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character','prop','location','lighting','action','dialogue'],createdAt:'2026-01-01T00:00:00.000Z'});
+        project.shotStates.push(
+          {id:'state-a',shotId:'a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'end',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+          {id:'state-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',derivedFromStateId:'state-a',characters:[],props:[],environment:{},camera:{},actionPhase:'end',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'}
+        );
+      });
+      const edited=structuredClone(current);edited.shots.find(shot=>shot.id==='a')!.prompt='changed';
+      const saved=await service.saveFromRenderer(edited);
+      expect(saved.shots.find(shot=>shot.id==='a')?.observedFinalStateId).toBeUndefined();
+      expect(saved.shots.find(shot=>shot.id==='b')?.actualStartStateId).toBeUndefined();
+      expect(saved.shotStates.find(state=>state.id==='state-a')?.status).toBe('stale');
+      expect(saved.shotStates.find(state=>state.id==='state-b')?.status).toBe('stale');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
