@@ -960,6 +960,11 @@ describe('Comfy runtime fingerprint inputs',()=>{
     expect(comfyNodeCatalogFingerprint({A:{input:{required:{x:['INT']}}}})).not.toBe(comfyNodeCatalogFingerprint({A:{input:{required:{x:['FLOAT']}}}}));
   });
 });
+describe('Comfy history output bounds',()=>{
+  it('rejects overlong history file metadata before download or project persistence',()=>{
+    expect(()=>collectComfyHistoryOutputRefs({outputs:{node:{images:[{filename:'x'.repeat(2049),subfolder:'',type:'output'}]}}})).toThrow(/2048-character project safety limit/i);
+  });
+});
 describe('Comfy output identity',()=>{
   it('collects filenames only from history.outputs and never from prompt/input metadata',()=>{
     const completedWithoutOutputs={status:{completed:true},prompt:{inputs:{filename:'uploaded-input.png',type:'input'}}};
