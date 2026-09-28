@@ -86,7 +86,10 @@ export function invalidateObservedFinalState(project:FilmProject,shotId:string,r
   }
   shot.observedFinalStateId=undefined;
   for(const dependent of project.shots){
-    if(dependent.actualStartStateId&&staleIds.has(dependent.actualStartStateId))dependent.actualStartStateId=undefined;
+    if(!dependent.actualStartStateId||!staleIds.has(dependent.actualStartStateId))continue;
+    const staleStart=project.shotStates.find(state=>state.id===dependent.actualStartStateId);
+    if(staleStart?.frameAssetId&&dependent.startFrameAssetId===staleStart.frameAssetId)dependent.startFrameAssetId=undefined;
+    dependent.actualStartStateId=undefined;
   }
 }
 
@@ -130,6 +133,8 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
     if(!target)continue;
     const existing=target.actualStartStateId?project.shotStates.find(state=>state.id===target.actualStartStateId):undefined;
     if(existing?.status==='current'&&existing.source==='human')continue;
+    const startFrameOwnedByExisting=Boolean(existing?.frameAssetId&&existing.source!=='human'&&target.startFrameAssetId===existing.frameAssetId);
+    if(target.startFrameAssetId&&!startFrameOwnedByExisting)continue;
     if(existing?.derivedFromStateId===sourceState.id&&existing.status!=='stale')continue;
     if(existing&&existing.status!=='stale'){
       existing.status='stale';
