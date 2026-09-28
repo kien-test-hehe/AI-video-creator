@@ -177,7 +177,7 @@ export function rebuildDefaultSequentialDependencies(project:FilmProject,sceneId
     ));
     if(!stillConnected)invalidateStateCascade(project,[state.id],'Shot order/dependency topology changed; propagated start state is no longer connected to its source shot.');
   }
-  reconcileHumanQcTasks(project,scope);
+  reconcileHumanQcTasks(project,new Set(project.shots.filter(shot=>scope.has(shot.sceneId)).map(shot=>shot.id)));
 }
 
 function selectFields(source:ShotState,fields:ReadonlySet<ContinuityField>):Pick<ShotState,'characters'|'props'|'environment'|'camera'|'actionPhase'|'dialogueState'>{
@@ -284,7 +284,7 @@ export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string
   const currentProductionInputKey=shot&&output?currentProductionInputKeyForOutput(project,shot,output):undefined;
   const incident=layer==='continuity'
     ? project.shotDependencies
-      .filter(edge=>edge.fromShotId===shotId||edge.toShotId===shotId)
+      .filter(edge=>(edge.fromShotId===shotId||edge.toShotId===shotId)&&edge.propagate.length>0&&edge.relation!=='parallel')
       .sort((a,b)=>a.id.localeCompare(b.id))
       .map(edge=>{
         const from=project.shots.find(item=>item.id===edge.fromShotId);
