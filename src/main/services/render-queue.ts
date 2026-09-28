@@ -25,6 +25,7 @@ import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './proc
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
 import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { shotProductionInputKey } from '../../shared/production-state';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../../shared/recovery-policy';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { RenderLeaseStore } from './render-lease';
@@ -531,7 +532,7 @@ export class RenderQueueService extends EventEmitter {
     if(!profile.validation?.runtimeFingerprint)throw new Error(`Profile “${profile.name}” has no validated runtime fingerprint. Revalidate it on this workstation before rendering.`);
     if(profile.validation.runtimeFingerprint!==runtimeFingerprint.environmentSha256)throw new Error(`Profile “${profile.name}” was validated against a different local AI runtime. Revalidate it before rendering.`);
     const now=new Date().toISOString();
-    return{id:randomUUID(),shotId:shot.id,createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(profile),effectivePrompt:buildRenderPrompt(project,shot),queuedProjectUpdatedAt:project.updatedAt,workflowSha256,assetFingerprints,runtimeFingerprint,modelFingerprint:profile.modelFingerprint}};
+    return{id:randomUUID(),shotId:shot.id,createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(profile),effectivePrompt:buildRenderPrompt(project,shot),productionInputKey:shotProductionInputKey(project,shot),queuedProjectUpdatedAt:project.updatedAt,workflowSha256,assetFingerprints,runtimeFingerprint,modelFingerprint:profile.modelFingerprint}};
   }
 
   private assertExecutionEnvironment(machine:AppMachineSettings,profile:WorkflowProfile,probe:SystemProbe):void{
@@ -648,6 +649,7 @@ export class RenderQueueService extends EventEmitter {
     let currentWorkflowKey:string|undefined,currentPrompt:string|undefined;
     try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(project,shot));}catch{currentWorkflowKey=undefined;}
     try{currentPrompt=buildRenderPrompt(project,shot);}catch{return false;}
+    if(job.spec.productionInputKey&&job.spec.productionInputKey!==shotProductionInputKey(project,shot))return false;
     return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&currentPrompt===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
   }
 
@@ -751,7 +753,7 @@ export class RenderQueueService extends EventEmitter {
   private async finalizeWanGpFiles(project:FilmProject,job:RenderJob,files:string[]):Promise<void>{
     const machine=this.settings.get(),shot=job.spec!.shot;const outputs:RenderOutput[]=[];
     for(const path of files){
-      const mediaType=outputMediaType(path);const output:RenderOutput={id:randomUUID(),jobId:job.id,shotId:shot.id,path,filename:basename(path),mediaType,createdAt:new Date().toISOString(),comfyMeta:{runtime:'wangp',profile:job.spec!.workflowProfile.name}};
+      const mediaType=outputMediaType(path);const output:RenderOutput={id:randomUUID(),jobId:job.id,shotId:shot.id,path,filename:basename(path),mediaType,createdAt:new Date().toISOString(),productionInputKey:job.spec?.productionInputKey,comfyMeta:{runtime:'wangp',profile:job.spec!.workflowProfile.name}};
       if(mediaType==='video')output.technicalQc=await technicalQcVideo(machine,path,shot);
       outputs.push(output);
     }
@@ -811,7 +813,7 @@ export class RenderQueueService extends EventEmitter {
       for(const ref of refs){
         const safeLeaf=ref.filename.replace(/[\\/]/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');const safeSub=(ref.subfolder||'').replace(/[\\/]+/g,'_').replace(/[^a-zA-Z0-9._-]+/g,'_');
         const destination=await assertSafeWritePath(outputDir,join(outputDir,`${String(outputs.length).padStart(2,'0')}-${safeSub?`${safeSub}-`:''}${safeLeaf}`),'ComfyUI output');
-        await client.downloadToFile(ref,destination);const mediaType=inferMediaType(ref.filename);const output:RenderOutput={id:randomUUID(),jobId:job.id,shotId:shot.id,path:destination,filename:ref.filename,mediaType,createdAt:new Date().toISOString(),comfyMeta:{...ref,runtime:'comfyui'}};
+        await client.downloadToFile(ref,destination);const mediaType=inferMediaType(ref.filename);const output:RenderOutput={id:randomUUID(),jobId:job.id,shotId:shot.id,path:destination,filename:ref.filename,mediaType,createdAt:new Date().toISOString(),productionInputKey:job.spec?.productionInputKey,comfyMeta:{...ref,runtime:'comfyui'}};
         if(mediaType==='video')output.technicalQc=await technicalQcVideo(machine,destination,shot);outputs.push(output);
       }
     }catch(error){
@@ -910,5 +912,32 @@ export class RenderQueueService extends EventEmitter {
 
 function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
 function assetLine(asset:Asset|undefined,label:string):string{if(!asset)return'';return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}`;}
-export function buildRenderPrompt(project:FilmProject,shot:Shot):string{const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],refs=(shot.referenceAssetIds??[]).map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;const prompt=[shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',...characters.map(a=>assetLine(a,'Character continuity')),...refs.map(a=>assetLine(a,'Visual reference')),...props.map(a=>assetLine(a,'Prop / wardrobe continuity')),shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''].filter(Boolean).join('\n');if(prompt.length>300_000)throw new Error(`Effective render prompt exceeds the 300000-character immutable job safety limit for ${shot.title}. Shorten shot text or attached asset continuity notes before queueing.`);return prompt;}
+function stateLine(project:FilmProject,stateId:string|undefined,label:string):string{
+  if(!stateId)return'';
+  const state=project.shotStates.find(item=>item.id===stateId&&item.status!=='stale');
+  if(!state)return'';
+  const payload={
+    characters:state.characters,props:state.props,environment:state.environment,camera:state.camera,
+    actionPhase:state.actionPhase,dialogueState:state.dialogueState,confidence:state.confidence
+  };
+  const text=JSON.stringify(payload);
+  return`${label}: ${text.length>30_000?text.slice(0,30_000):text}`;
+}
+export function buildRenderPrompt(project:FilmProject,shot:Shot):string{
+  const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[];
+  const refs=(shot.referenceAssetIds??[]).map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[];
+  const props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[];
+  const location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;
+  const prompt=[
+    shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',
+    shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',
+    ...characters.map(a=>assetLine(a,'Character continuity')),...refs.map(a=>assetLine(a,'Visual reference')),...props.map(a=>assetLine(a,'Prop / wardrobe continuity')),
+    stateLine(project,shot.actualStartStateId,'Actual start state'),
+    stateLine(project,shot.plannedStartStateId,'Planned start state'),
+    stateLine(project,shot.plannedEndStateId,'Target end state'),
+    shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''
+  ].filter(Boolean).join('\n');
+  if(prompt.length>300_000)throw new Error(`Effective render prompt exceeds the 300000-character immutable job safety limit for ${shot.title}. Shorten shot text, structured continuity state, or attached asset notes before queueing.`);
+  return prompt;
+}
 function sleep(ms:number):Promise<void>{return new Promise(resolve=>setTimeout(resolve,ms));}
