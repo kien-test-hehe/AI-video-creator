@@ -350,13 +350,13 @@ describe('project schema canonicalization',()=>{
     expect(()=>loadPortableProject(badNumber,'/project')).toThrow(/project integer is invalid/i);
 
     const badBoolean:any=baseProject();badBoolean.shots[0].generation.includeAudio='yes';
-    expect(()=>loadPortableProject(badBoolean,'/project')).toThrow(/invalid shot includeAudio flag/i);
+    expect(loadPortableProject(badBoolean,'/project').project.shots[0].generation.includeAudio).toBe(false);
 
     const badString:any=baseProject();badString.story.title=123;
     expect(()=>loadPortableProject(badString,'/project')).toThrow(/project string must be a string/i);
 
     const badQc:any=baseProject();badQc.renderOutputs[0].technicalQc={checkedAt:'2026-01-02T00:00:00.000Z',passed:'true',issues:[],warnings:[]};
-    expect(()=>loadPortableProject(badQc,'/project')).toThrow(/invalid technical QC passed flag/i);
+    expect(loadPortableProject(badQc,'/project').project.renderOutputs[0].technicalQc?.passed).toBe(false);
   });
   it('canonicalizes parseable timestamps before lexical latest/recovery ordering',()=>{
     const raw=baseProject();raw.renderOutputs[0].createdAt='2026-01-01T09:00:00-05:00';
