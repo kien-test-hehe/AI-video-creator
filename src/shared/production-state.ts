@@ -4,6 +4,9 @@ import type {
 import { shotProjectRenderInputKey } from './shot-signature';
 
 export const DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
+  'character','wardrobe','prop','location','lighting','action','camera','dialogue'
+];
+const LEGACY_DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
   'character','wardrobe','prop','location','lighting','action','dialogue'
 ];
 
@@ -44,11 +47,9 @@ export function defaultSequentialDependencies(shots:Shot[],createdAt:string):Sho
 }
 
 function isDefaultSequentialDependency(edge:ShotDependency):boolean{
-  return edge.id===productionStableId('continuity',`${edge.fromShotId}>${edge.toShotId}`)
-    &&edge.relation==='continuity'
-    &&edge.strength==='soft'
-    &&edge.propagate.length===DEFAULT_CONTINUITY_FIELDS.length
-    &&DEFAULT_CONTINUITY_FIELDS.every(field=>edge.propagate.includes(field));
+  if(edge.id!==productionStableId('continuity',`${edge.fromShotId}>${edge.toShotId}`)||edge.relation!=='continuity'||edge.strength!=='soft')return false;
+  const matches=(fields:ContinuityField[])=>edge.propagate.length===fields.length&&fields.every(field=>edge.propagate.includes(field));
+  return matches(DEFAULT_CONTINUITY_FIELDS)||matches(LEGACY_DEFAULT_CONTINUITY_FIELDS);
 }
 
 export function shotStateContentKey(state:Pick<ShotState,
