@@ -47,7 +47,7 @@ describe('portable project trust boundary',()=>{
         costPolicy:{allowCapcutAiCredits:false},capcut:{enabled:true,pro:true},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]
       }
     },root);
-    expect(loaded.project.schemaVersion).toBe(2);
+    expect(loaded.project.schemaVersion).toBe(3);
     expect(loaded.project.rootPath).toBe(root);
     expect((loaded.project.settings as any).ffmpegPath).toBeUndefined();
     expect((loaded.project.settings as any).comfyUrl).toBeUndefined();
