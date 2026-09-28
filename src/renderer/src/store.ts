@@ -1,14 +1,14 @@
 import { create } from 'zustand';
-import type { AppMachineSettings, FilmProject, QueueSnapshot, SystemProbe } from '../../shared/types';
+import type { AppMachineSettings, AutomationStatus, FilmProject, QueueSnapshot, SystemProbe } from '../../shared/types';
 import { shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { invalidateObservedFinalState } from '../../shared/production-state';
 
 export type ViewId='studio'|'dashboard'|'story'|'assets'|'storyboard'|'shots'|'queue'|'timeline'|'finishing'|'settings';
 interface AppState{
-  project:FilmProject|null;machine:AppMachineSettings|null;activeView:ViewId;selectedShotId?:string;queue:QueueSnapshot;probe?:SystemProbe;busy:boolean;projectWriteLocked:boolean;projectDirty:boolean;machineDirty:boolean;error?:string;notice?:string;
+  project:FilmProject|null;machine:AppMachineSettings|null;activeView:ViewId;selectedShotId?:string;queue:QueueSnapshot;automation?:AutomationStatus;probe?:SystemProbe;busy:boolean;projectWriteLocked:boolean;projectDirty:boolean;machineDirty:boolean;error?:string;notice?:string;
   setProject(project:FilmProject|null):void;syncRuntime(project:FilmProject):void;updateProject(mutator:(project:FilmProject)=>void):void;persist():Promise<void>;runProjectMutation<T>(operation:()=>Promise<T>):Promise<T>;
   setMachine(machine:AppMachineSettings):void;updateMachine(mutator:(machine:AppMachineSettings)=>void):void;persistMachine():Promise<void>;
-  setView(view:ViewId):void;selectShot(id?:string):void;setQueue(queue:QueueSnapshot):void;setProbe(probe?:SystemProbe):void;setBusy(busy:boolean):void;setError(error?:string):void;setNotice(notice?:string):void;
+  setView(view:ViewId):void;selectShot(id?:string):void;setQueue(queue:QueueSnapshot):void;setAutomation(status:AutomationStatus):void;setProbe(probe?:SystemProbe):void;setBusy(busy:boolean):void;setError(error?:string):void;setNotice(notice?:string):void;
 }
 let projectTimer:ReturnType<typeof setTimeout>|undefined,machineTimer:ReturnType<typeof setTimeout>|undefined;
 let projectEditRevision=0,machineEditRevision=0,busyCount=0,projectWriteLockCount=0;
@@ -55,10 +55,10 @@ export const useAppStore=create<AppState>((set,get)=>({
     if(!state.projectDirty)for(const server of mainProject.settings.workflowProfiles)if(!next.settings.workflowProfiles.some(local=>local.id===server.id))next.settings.workflowProfiles.push(structuredClone(server));
     return{project:next};
   }),
-  updateProject:mutator=>{if(get().projectWriteLocked){set({error:'A project-changing operation is still applying. Wait for it to finish or cancel it before editing the project.'});return;}const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotProjectRenderInputKey(current,shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotProjectRenderInputKey(next,shot)){shot.latestRenderId=undefined;shot.canonicalRenderId=undefined;invalidateObservedFinalState(next,shot.id,'Shot render inputs changed in the renderer.');if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist().catch(()=>undefined),450);},
+  updateProject:mutator=>{if(get().automation?.running&&!get().automation?.paused){set({error:'Autonomous production is running. Pause AUTO RUN before editing the project.'});return;}if(get().projectWriteLocked){set({error:'A project-changing operation is still applying. Wait for it to finish or cancel it before editing the project.'});return;}const current=get().project;if(!current)return;const before=new Map(current.shots.map(shot=>[shot.id,shotProjectRenderInputKey(current,shot)]));const next=structuredClone(current);mutator(next);for(const shot of next.shots){const prior=before.get(shot.id);if(prior&&prior!==shotProjectRenderInputKey(next,shot)){shot.latestRenderId=undefined;shot.canonicalRenderId=undefined;invalidateObservedFinalState(next,shot.id,'Shot render inputs changed in the renderer.');if(['rendered','failed'].includes(shot.status))shot.status='ready';}}projectEditRevision+=1;next.updatedAt=new Date().toISOString();set({project:next,projectDirty:true});clearTimeout(projectTimer);projectTimer=setTimeout(()=>void get().persist().catch(()=>undefined),450);},
   runProjectMutation:async operation=>{projectWriteLockCount+=1;set({projectWriteLocked:true});try{return await operation();}finally{projectWriteLockCount=Math.max(0,projectWriteLockCount-1);set({projectWriteLocked:projectWriteLockCount>0});}},
   persist:async()=>{
-    clearTimeout(projectTimer);projectTimer=undefined;
+    clearTimeout(projectTimer);projectTimer=undefined;if(!get().projectDirty)return;
     try{
       for(let attempt=0;attempt<5;attempt++){
         const project=get().project;if(!project)return;
@@ -72,9 +72,9 @@ export const useAppStore=create<AppState>((set,get)=>({
     }catch(error){set({error:error instanceof Error?error.message:String(error)});throw error;}
   },
   setMachine:machine=>{clearTimeout(machineTimer);machineTimer=undefined;machineEditRevision+=1;set({machine,machineDirty:false});},
-  updateMachine:mutator=>{const current=get().machine;if(!current)return;const next=structuredClone(current);mutator(next);machineEditRevision+=1;set({machine:next,machineDirty:true});clearTimeout(machineTimer);machineTimer=setTimeout(()=>void get().persistMachine().catch(()=>undefined),450);},
+  updateMachine:mutator=>{if(get().automation?.running&&!get().automation?.paused){set({error:'Autonomous production is running. Pause AUTO RUN before changing machine settings.'});return;}const current=get().machine;if(!current)return;const next=structuredClone(current);mutator(next);machineEditRevision+=1;set({machine:next,machineDirty:true});clearTimeout(machineTimer);machineTimer=setTimeout(()=>void get().persistMachine().catch(()=>undefined),450);},
   persistMachine:async()=>{
-    clearTimeout(machineTimer);machineTimer=undefined;
+    clearTimeout(machineTimer);machineTimer=undefined;if(!get().machineDirty)return;
     try{
       for(let attempt=0;attempt<5;attempt++){
         const machine=get().machine;if(!machine)return;
@@ -85,7 +85,7 @@ export const useAppStore=create<AppState>((set,get)=>({
       throw new Error('Machine settings kept changing while CineForge was saving them. Finish the current edits and try the action again.');
     }catch(error){set({error:error instanceof Error?error.message:String(error)});throw error;}
   },
-  setView:activeView=>set({activeView}),selectShot:selectedShotId=>set({selectedShotId}),setQueue:queue=>set({queue}),setProbe:probe=>set({probe}),setBusy:busy=>{busyCount=Math.max(0,busyCount+(busy?1:-1));set({busy:busyCount>0});},setError:error=>set({error}),setNotice:notice=>set({notice})
+  setView:activeView=>set({activeView}),selectShot:selectedShotId=>set({selectedShotId}),setQueue:queue=>set({queue}),setAutomation:automation=>set({automation}),setProbe:probe=>set({probe}),setBusy:busy=>{busyCount=Math.max(0,busyCount+(busy?1:-1));set({busy:busyCount>0});},setError:error=>set({error}),setNotice:notice=>set({notice})
 }));
 
 function profileConfigKey(profile:FilmProject['settings']['workflowProfiles'][number]):string{
