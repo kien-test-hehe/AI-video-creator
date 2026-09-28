@@ -187,11 +187,11 @@ describe('future project schema compatibility',()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-future-project-'));
     try{
       const writer=new ProjectService(),created=await writer.createAt(root,'Film');
-      await writeFile(join(root,'cineforge.project.json'),JSON.stringify({...created,schemaVersion:3,futureField:{keep:'me'}},null,2),'utf8');
+      await writeFile(join(root,'cineforge.project.json'),JSON.stringify({...created,schemaVersion:4,futureField:{keep:'me'}},null,2),'utf8');
       const reader=new ProjectService();
       await expect(reader.openAt(root)).rejects.toThrow(/unsupported project schema/i);
       const primary=JSON.parse(await readFile(join(root,'cineforge.project.json'),'utf8'));
-      expect(primary.schemaVersion).toBe(3);expect(primary.futureField).toEqual({keep:'me'});
+      expect(primary.schemaVersion).toBe(4);expect(primary.futureField).toEqual({keep:'me'});
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
