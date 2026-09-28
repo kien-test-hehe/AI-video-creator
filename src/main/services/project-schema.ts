@@ -388,8 +388,8 @@ function safeId(value: unknown): string {
 }
 function clampInt(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);return Number.isInteger(n)?Math.min(max,Math.max(min,n)):fallback;}
 function clampNumber(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;}
-function iso(value: unknown, fallback: string): string { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : fallback; }
-function maybeIso(value: unknown): string | undefined { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined; }
+function iso(value: unknown, fallback: string): string { if(typeof value!=='string')return fallback;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():fallback; }
+function maybeIso(value: unknown): string | undefined { if(typeof value!=='string')return undefined;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():undefined; }
 function sourceLabel(value:unknown):string{
   if(typeof value!=='string')return'';
   const parts=value.replace(/\\/g,'/').split('/').filter(Boolean);
