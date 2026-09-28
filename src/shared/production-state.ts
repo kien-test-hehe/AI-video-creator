@@ -10,7 +10,7 @@ const LEGACY_DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
   'character','wardrobe','prop','location','lighting','action','dialogue'
 ];
 
-export function productionStableId(prefix:string,input:string):string{
+function legacyStableId(prefix:string,input:string):string{
   let hash=0x811c9dc5;
   for(let index=0;index<input.length;index++){
     hash^=input.charCodeAt(index);
@@ -18,6 +18,21 @@ export function productionStableId(prefix:string,input:string):string{
   }
   const safePrefix=prefix.replace(/[^a-zA-Z0-9._:-]+/g,'-').slice(0,180)||'id';
   return `${safePrefix}:${hash.toString(16).padStart(8,'0')}`;
+}
+
+export function productionStableId(prefix:string,input:string):string{
+  let h1=0x6a09e667,h2=0xbb67ae85,h3=0x3c6ef372,h4=0xa54ff53a;
+  for(let index=0;index<input.length;index++){
+    const k=input.charCodeAt(index);
+    h1=Math.imul(h1^k,0x85ebca6b);h2=Math.imul(h2^k,0xc2b2ae35);
+    h3=Math.imul(h3^k,0x27d4eb2f);h4=Math.imul(h4^k,0x165667b1);
+    h1=(h1^(h2>>>13))>>>0;h2=(h2^(h3>>>11))>>>0;h3=(h3^(h4>>>17))>>>0;h4=(h4^(h1>>>15))>>>0;
+  }
+  h1=Math.imul(h1^(h1>>>16),0x85ebca6b)>>>0;h2=Math.imul(h2^(h2>>>13),0xc2b2ae35)>>>0;
+  h3=Math.imul(h3^(h3>>>16),0x85ebca6b)>>>0;h4=Math.imul(h4^(h4>>>13),0xc2b2ae35)>>>0;
+  const digest=[h1,h2,h3,h4].map(value=>value.toString(16).padStart(8,'0')).join('');
+  const safePrefix=prefix.replace(/[^a-zA-Z0-9._:-]+/g,'-').slice(0,180)||'id';
+  return `${safePrefix}:${digest}`;
 }
 
 export function productionFingerprint(prefix:string,input:string):string{
@@ -61,7 +76,8 @@ export function defaultSequentialDependencies(shots:Shot[],createdAt:string):Sho
 }
 
 function isDefaultSequentialDependency(edge:ShotDependency):boolean{
-  if(edge.id!==productionStableId('continuity',`${edge.fromShotId}>${edge.toShotId}`)||edge.relation!=='continuity'||edge.strength!=='soft')return false;
+  const input=`${edge.fromShotId}>${edge.toShotId}`;
+  if(![productionStableId('continuity',input),legacyStableId('continuity',input)].includes(edge.id)||edge.relation!=='continuity'||edge.strength!=='soft')return false;
   const matches=(fields:ContinuityField[])=>edge.propagate.length===fields.length&&fields.every(field=>edge.propagate.includes(field));
   return matches(DEFAULT_CONTINUITY_FIELDS)||matches(LEGACY_DEFAULT_CONTINUITY_FIELDS);
 }
