@@ -33,6 +33,7 @@ export class ProductionRuntimeService extends EventEmitter{
   }
 
   snapshot():AutomationStatus{return structuredClone(this.status);}
+  async flush():Promise<void>{await this.journalTail;}
 
   async reconcileAfterProjectOpen():Promise<AutomationStatus>{
     const project=this.projects.getCurrent();
