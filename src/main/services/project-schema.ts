@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  Asset, AssetKind, FilmProject, GenerationMode, ModelFamily, ProjectSettings, QualityIntent, RenderJob,
-  RenderJobStatus, RenderOutput, Scene, Shot, ShotStatus, TimelineClip, WorkflowBinding, WorkflowProfile, WorkflowPurpose
+  Asset, AssetKind, ContinuityField, CutRevision, FilmProject, GenerationMode, HumanTask, ModelFamily, ProjectSettings, QualityIntent, QcIssue, RenderJob,
+  RenderJobStatus, RenderOutput, Scene, Shot, ShotDependency, ShotQcResult, ShotState, ShotStatus, TimelineClip, WorkflowBinding, WorkflowProfile, WorkflowPurpose
 } from '../../shared/types';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 import { assertSafeJsonPath, assertSafeObjectKey } from '../../shared/safe-object';
 import { WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../../shared/workflow-limits';
+import { defaultSequentialDependencies } from '../../shared/production-state';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 const MODEL_FAMILIES = new Set<ModelFamily>(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom']);
@@ -27,11 +28,14 @@ export class UnsupportedProjectSchemaError extends Error {}
 export function loadPortableProject(raw: unknown, openedRoot: string): LoadedProject {
   const source = asObject(raw, 'project');
   const version = Number(source.schemaVersion ?? 1);
-  if (version !== 1 && version !== 2) throw new UnsupportedProjectSchemaError(`Unsupported project schema: ${String(source.schemaVersion)}`);
+  if (version !== 1 && version !== 2 && version !== 3) throw new UnsupportedProjectSchemaError(`Unsupported project schema: ${String(source.schemaVersion)}`);
   const migrationNotes: string[] = [];
-  const normalized = version === 1 ? migrateV1ToV2(source, migrationNotes) : source;
-  const project = sanitizeV2(normalized, openedRoot);
-  return { project, ...(version === 1 ? { migratedFrom: 1 } : {}), migrationNotes };
+  let normalized:Record<string,any>=source;
+  if(version===1)normalized=migrateV1ToV2(normalized,migrationNotes);
+  if(version<3)normalized=migrateV2ToV3(normalized,migrationNotes);
+  const project = sanitizeV3(normalized, openedRoot);
+  if(version<3&&project.shotDependencies.length===0)project.shotDependencies=defaultSequentialDependencies(project.shots,project.createdAt);
+  return { project, ...(version < 3 ? { migratedFrom: version } : {}), migrationNotes };
 }
 
 function migrateV1ToV2(source: Record<string, any>, notes: string[]): Record<string, any> {
@@ -40,7 +44,7 @@ function migrateV1ToV2(source: Record<string, any>, notes: string[]): Record<str
   const old = asObject(source.settings ?? {}, 'settings');
   return {
     ...source,
-    schemaVersion: 2,
+    schemaVersion: 3,
     settings: {
       costPolicy: old.costPolicy,
       capcut: {
@@ -54,7 +58,20 @@ function migrateV1ToV2(source: Record<string, any>, notes: string[]): Record<str
   };
 }
 
-function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProject {
+function migrateV2ToV3(source:Record<string,any>,notes:string[]):Record<string,any>{
+  notes.push('Migrated project schema v2 → v3 production-state model.');
+  return {
+    ...source,
+    schemaVersion:3,
+    shotStates:source.shotStates??[],
+    shotDependencies:source.shotDependencies??[],
+    qcResults:source.qcResults??[],
+    humanTasks:source.humanTasks??[],
+    cutRevisions:source.cutRevisions??[]
+  };
+}
+
+function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProject {
   const now = new Date().toISOString();
   const id = safeId(source.id,true);
   const storySource=optionalObject(source.story,'story')??{};
@@ -71,6 +88,14 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const renderJobs = boundedArray(source.renderJobs,'project render jobs',100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds, assetKinds));
   const jobIds=new Set(renderJobs.map(job=>job.id));
   const timeline = boundedArray(source.timeline,'project timeline clips',100_000).map(value => sanitizeTimelineClip(value, shotIds, outputById));
+  const shotStates = boundedArray(source.shotStates,'shot states',200_000).map(value=>sanitizeShotState(value,shotIds,assetIds,outputById));
+  const stateById=new Map(shotStates.map(state=>[state.id,state] as const));
+  const shotDependencies = boundedArray(source.shotDependencies,'shot dependencies',200_000).map(value=>sanitizeShotDependency(value,shotIds));
+  const qcResults = boundedArray(source.qcResults,'shot QC results',300_000).map(value=>sanitizeShotQcResult(value,shotIds,outputById));
+  const qcIds=new Set(qcResults.map(result=>result.id));
+  const humanTasks = boundedArray(source.humanTasks,'human tasks',100_000).map(value=>sanitizeHumanTask(value,shotIds,assetIds,outputById));
+  const humanTaskIds=new Set(humanTasks.map(task=>task.id));
+  const cutRevisions = boundedArray(source.cutRevisions,'cut revisions',10_000).map(value=>sanitizeCutRevision(value,new Set(timeline.map(clip=>clip.id))));
 
   assertUniqueIds('scene',scenes);
   assertUniqueIds('asset',assets);
@@ -78,6 +103,18 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   assertUniqueIds('render output',renderOutputs);
   assertUniqueIds('render job',renderJobs);
   assertUniqueIds('timeline clip',timeline);
+  assertUniqueIds('shot state',shotStates);
+  assertUniqueIds('shot dependency',shotDependencies);
+  assertUniqueIds('shot QC result',qcResults);
+  assertUniqueIds('human task',humanTasks);
+  assertUniqueIds('cut revision',cutRevisions);
+  for(const state of shotStates){
+    if(state.derivedFromStateId&&!stateById.has(state.derivedFromStateId))throw new Error(`Shot state ${state.id} derives from missing state ${state.derivedFromStateId}.`);
+    if(state.derivedFromStateId===state.id)throw new Error(`Shot state ${state.id} cannot derive from itself.`);
+  }
+  for(const result of qcResults){
+    if(result.humanOverrideTaskId&&!humanTaskIds.has(result.humanOverrideTaskId))throw new Error(`QC result ${result.id} references missing human task ${result.humanOverrideTaskId}.`);
+  }
   const duplicateTimelineOrder=duplicateTimelineOrderKey(timeline);
   if(duplicateTimelineOrder)throw new Error(`Duplicate timeline track/order slot: ${duplicateTimelineOrder}`);
 
@@ -91,6 +128,17 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
     if(!validLatest){
       shot.latestRenderId=undefined;
       if(shot.status==='rendered')shot.status='ready';
+    }
+    for(const key of ['latestAttemptRenderId','canonicalRenderId'] as const){
+      const outputId=shot[key],output=outputId?outputById.get(outputId):undefined;
+      if(outputId&&(!output||output.shotId!==shot.id||output.mediaType!=='video'))throw new Error(`Shot ${shot.id} ${key} references an invalid render output: ${outputId}`);
+    }
+    const stateRefs:[keyof Pick<Shot,'plannedStartStateId'|'plannedEndStateId'|'actualStartStateId'|'observedFinalStateId'>,'planned-start'|'planned-end'|'actual-start'|'observed-final'][]=[
+      ['plannedStartStateId','planned-start'],['plannedEndStateId','planned-end'],['actualStartStateId','actual-start'],['observedFinalStateId','observed-final']
+    ];
+    for(const[key,role]of stateRefs){
+      const stateId=shot[key],state=stateId?stateById.get(stateId):undefined;
+      if(stateId&&(!state||state.shotId!==shot.id||state.role!==role))throw new Error(`Shot ${shot.id} ${String(key)} references an invalid ${role} state: ${stateId}`);
     }
   }
 
@@ -113,7 +161,7 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
       script: str(storySource.script, '', 2_000_000),
       notes: str(storySource.notes, '', 200_000)
     },
-    scenes, assets, shots, renderJobs, renderOutputs, timeline, settings
+    scenes, assets, shots, renderJobs, renderOutputs, timeline, shotStates, shotDependencies, qcResults, humanTasks, cutRevisions, settings
   };
 }
 
@@ -258,6 +306,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     referenceVideoAssetId: optionalAsset(source.referenceVideoAssetId,videoKinds),
     audioAssetId: optionalAsset(source.audioAssetId,audioKinds),
     status: enumOrDefault(source.status,SHOT_STATUSES,'draft','shot status'),
+    previz:sanitizePrevizSpec(source.previz,assetIds),
     generation: {
       modelFamily,
       mode: enumOrDefault(generationSource.mode,MODES,defaults.mode ?? 'i2v','shot generation mode'),
@@ -273,7 +322,188 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
       includeAudio: booleanOrDefault(generationSource.includeAudio,defaults.includeAudio??false,'shot includeAudio flag'),
       workflowProfileId: optionalString(generationSource.workflowProfileId,'shot workflow profile id')
     },
-    latestRenderId: optionalString(source.latestRenderId,'shot latest render id')
+    latestRenderId: optionalString(source.latestRenderId,'shot latest render id'),
+    latestAttemptRenderId:optionalString(source.latestAttemptRenderId,'shot latest attempt render id'),
+    canonicalRenderId:optionalString(source.canonicalRenderId,'shot canonical render id'),
+    plannedStartStateId:optionalString(source.plannedStartStateId,'shot planned start state id'),
+    plannedEndStateId:optionalString(source.plannedEndStateId,'shot planned end state id'),
+    actualStartStateId:optionalString(source.actualStartStateId,'shot actual start state id'),
+    observedFinalStateId:optionalString(source.observedFinalStateId,'shot observed final state id')
+  };
+}
+
+function sanitizePrevizSpec(value:unknown,assetIds:Set<string>):Shot['previz']{
+  const source=optionalObject(value,'shot previz')??{};
+  const previewAssetId=optionalString(source.previewAssetId,'previz preview asset id');
+  return{
+    requirement:enumOrDefault(source.requirement,new Set(['none','optional','required'] as const),'none','previz requirement'),
+    status:enumOrDefault(source.status,new Set(['not-needed','pending','ready','failed','human-verify'] as const),'not-needed','previz status'),
+    reason:str(source.reason,'',20_000)||undefined,
+    manifestPath:str(source.manifestPath,'',4096)||undefined,
+    previewAssetId:previewAssetId&&assetIds.has(previewAssetId)?previewAssetId:undefined,
+    createdAt:maybeIso(source.createdAt),
+    updatedAt:maybeIso(source.updatedAt)
+  };
+}
+
+function sanitizeShotState(value:unknown,shotIds:Set<string>,assetIds:Set<string>,outputs:Map<string,RenderOutput>):ShotState{
+  const source=asObject(value,'shot state'),shotId=safeId(source.shotId);
+  if(!shotIds.has(shotId))throw new Error(`Shot state references unknown shot: ${shotId}`);
+  const optionalAssetId=(raw:unknown,label:string)=>{const id=optionalString(raw,label);return id&&assetIds.has(id)?id:undefined;};
+  const sourceRenderOutputId=optionalString(source.sourceRenderOutputId,'shot state source render output id');
+  if(sourceRenderOutputId){
+    const output=outputs.get(sourceRenderOutputId);
+    if(!output||output.shotId!==shotId)throw new Error(`Shot state source render output does not belong to shot ${shotId}: ${sourceRenderOutputId}`);
+  }
+  return{
+    id:safeId(source.id),
+    shotId,
+    role:enumOrDefault(source.role,new Set(['planned-start','planned-end','actual-start','observed-final'] as const),'planned-start','shot state role'),
+    source:enumOrDefault(source.source,new Set(['planned','keyframe','generated','human','previz'] as const),'planned','shot state source'),
+    status:enumOrDefault(source.status,new Set(['current','stale','unreviewed'] as const),'unreviewed','shot state status'),
+    frameAssetId:optionalAssetId(source.frameAssetId,'shot state frame asset id'),
+    sourceRenderOutputId,
+    derivedFromStateId:optionalString(source.derivedFromStateId,'derived shot state id'),
+    characters:boundedArray(source.characters,'shot state characters',32).map(item=>sanitizeCharacterState(item,assetIds)),
+    props:boundedArray(source.props,'shot state props',64).map(item=>sanitizePropState(item,assetIds)),
+    environment:sanitizeEnvironmentState(source.environment,assetIds),
+    camera:sanitizeCameraState(source.camera),
+    actionPhase:str(source.actionPhase,'',20_000),
+    dialogueState:str(source.dialogueState,'',20_000),
+    confidence:finiteOptional(source.confidence,0,1),
+    fingerprint:str(source.fingerprint,'',4096)||undefined,
+    staleReason:str(source.staleReason,'',4096)||undefined,
+    createdAt:iso(source.createdAt,new Date().toISOString())
+  };
+}
+
+function sanitizeCharacterState(value:unknown,assetIds:Set<string>):ShotState['characters'][number]{
+  const source=asObject(value,'character continuity state');
+  const asset=(raw:unknown,label:string)=>{const id=optionalString(raw,label);return id&&assetIds.has(id)?id:undefined;};
+  return{
+    characterAssetId:asset(source.characterAssetId,'character continuity asset id'),
+    label:str(source.label,'',1000)||undefined,
+    visible:optionalBoolean(source.visible,'character visibility'),
+    screenPosition:optionalEnum(source.screenPosition,new Set(['left','center','right','offscreen','unknown'] as const),'character screen position'),
+    pose:str(source.pose,'',5000)||undefined,
+    facing:str(source.facing,'',2000)||undefined,
+    gaze:str(source.gaze,'',2000)||undefined,
+    expression:str(source.expression,'',5000)||undefined,
+    wardrobeAssetId:asset(source.wardrobeAssetId,'wardrobe continuity asset id'),
+    heldPropAssetIds:[...new Set(boundedArray(source.heldPropAssetIds,'held prop asset ids',32).map(item=>safeId(item)).filter(id=>assetIds.has(id)))],
+    notes:str(source.notes,'',10_000)||undefined
+  };
+}
+
+function sanitizePropState(value:unknown,assetIds:Set<string>):ShotState['props'][number]{
+  const source=asObject(value,'prop continuity state');
+  const asset=(raw:unknown,label:string)=>{const id=optionalString(raw,label);return id&&assetIds.has(id)?id:undefined;};
+  return{
+    propAssetId:asset(source.propAssetId,'prop continuity asset id'),
+    label:str(source.label,'',1000)||undefined,
+    holderCharacterAssetId:asset(source.holderCharacterAssetId,'prop holder character asset id'),
+    position:str(source.position,'',5000)||undefined,
+    state:str(source.state,'',5000)||undefined,
+    notes:str(source.notes,'',10_000)||undefined
+  };
+}
+
+function sanitizeEnvironmentState(value:unknown,assetIds:Set<string>):ShotState['environment']{
+  const source=optionalObject(value,'environment continuity state')??{};
+  const locationAssetId=optionalString(source.locationAssetId,'environment location asset id');
+  return{
+    locationAssetId:locationAssetId&&assetIds.has(locationAssetId)?locationAssetId:undefined,
+    timeOfDay:str(source.timeOfDay,'',1000)||undefined,
+    lighting:str(source.lighting,'',10_000)||undefined,
+    weather:str(source.weather,'',5000)||undefined,
+    notes:str(source.notes,'',10_000)||undefined
+  };
+}
+
+function sanitizeCameraState(value:unknown):ShotState['camera']{
+  const source=optionalObject(value,'camera continuity state')??{};
+  return{
+    shotSize:str(source.shotSize,'',1000)||undefined,
+    angle:str(source.angle,'',2000)||undefined,
+    screenDirection:str(source.screenDirection,'',2000)||undefined,
+    movement:str(source.movement,'',5000)||undefined,
+    lensMm:finiteOptional(source.lensMm,1,1000),
+    notes:str(source.notes,'',10_000)||undefined
+  };
+}
+
+function sanitizeShotDependency(value:unknown,shotIds:Set<string>):ShotDependency{
+  const source=asObject(value,'shot dependency'),fromShotId=safeId(source.fromShotId),toShotId=safeId(source.toShotId);
+  if(!shotIds.has(fromShotId)||!shotIds.has(toShotId))throw new Error(`Shot dependency references unknown shot: ${fromShotId} → ${toShotId}`);
+  if(fromShotId===toShotId)throw new Error('Shot dependency cannot point a shot to itself.');
+  const allowed=new Set<ContinuityField>(['character','wardrobe','prop','location','lighting','action','camera','dialogue']);
+  const propagate=[...new Set(boundedArray(source.propagate,'shot dependency propagation fields',16).map(item=>enumOrDefault(item,allowed,'character','continuity propagation field')))];
+  return{
+    id:safeId(source.id),fromShotId,toShotId,
+    relation:enumOrDefault(source.relation,new Set(['continuity','temporal','parallel','cutaway','reverse-angle','insert','montage'] as const),'continuity','shot dependency relation'),
+    strength:enumOrDefault(source.strength,new Set(['soft','hard'] as const),'soft','shot dependency strength'),
+    propagate,
+    createdAt:iso(source.createdAt,new Date().toISOString())
+  };
+}
+
+function sanitizeQcIssue(value:unknown):QcIssue{
+  const source=asObject(value,'QC issue');
+  return{
+    code:str(source.code,'UNKNOWN',256),
+    severity:enumOrDefault(source.severity,new Set(['info','warning','major','blocker'] as const),'warning','QC issue severity'),
+    message:str(source.message,'',4096),
+    expected:str(source.expected,'',4096)||undefined,
+    observed:str(source.observed,'',4096)||undefined
+  };
+}
+
+function sanitizeShotQcResult(value:unknown,shotIds:Set<string>,outputs:Map<string,RenderOutput>):ShotQcResult{
+  const source=asObject(value,'shot QC result'),shotId=safeId(source.shotId),renderOutputId=optionalString(source.renderOutputId,'QC render output id');
+  if(!shotIds.has(shotId))throw new Error(`QC result references unknown shot: ${shotId}`);
+  if(renderOutputId){
+    const output=outputs.get(renderOutputId);
+    if(!output||output.shotId!==shotId)throw new Error(`QC result render output does not belong to shot ${shotId}: ${renderOutputId}`);
+  }
+  return{
+    id:safeId(source.id),shotId,renderOutputId,
+    layer:enumOrDefault(source.layer,new Set(['technical','visual','semantic','continuity'] as const),'technical','QC layer'),
+    status:enumOrDefault(source.status,new Set(['pass','fail','unknown','human-verify'] as const),'unknown','QC status'),
+    issues:boundedArray(source.issues,'QC issues',128).map(sanitizeQcIssue),
+    inputKey:str(source.inputKey,'',20_000)||undefined,
+    createdAt:iso(source.createdAt,new Date().toISOString()),
+    humanOverrideTaskId:optionalString(source.humanOverrideTaskId,'QC human override task id')
+  };
+}
+
+function sanitizeHumanTask(value:unknown,shotIds:Set<string>,assetIds:Set<string>,outputs:Map<string,RenderOutput>):HumanTask{
+  const source=asObject(value,'human task'),shotId=optionalString(source.shotId,'human task shot id');
+  if(shotId&&!shotIds.has(shotId))throw new Error(`Human task references unknown shot: ${shotId}`);
+  const relatedAssetIds=[...new Set(boundedArray(source.relatedAssetIds,'human task asset ids',64).map(item=>safeId(item)).filter(id=>assetIds.has(id)))];
+  const relatedRenderOutputIds=[...new Set(boundedArray(source.relatedRenderOutputIds,'human task render output ids',64).map(item=>safeId(item)).filter(id=>outputs.has(id)))];
+  return{
+    id:safeId(source.id),
+    type:enumOrDefault(source.type,new Set(['create-asset','approve-asset','verify-keyframe','verify-previz','verify-continuity','choose-take','manual-qc','route-unsupported'] as const),'manual-qc','human task type'),
+    status:enumOrDefault(source.status,new Set(['open','resolved','dismissed'] as const),'open','human task status'),
+    shotId,
+    title:str(source.title,'Human review',2000),
+    reason:str(source.reason,'',20_000),
+    recommendedAction:str(source.recommendedAction,'',20_000)||undefined,
+    relatedAssetIds,relatedRenderOutputIds,
+    createdAt:iso(source.createdAt,new Date().toISOString()),
+    resolvedAt:maybeIso(source.resolvedAt),
+    resolution:str(source.resolution,'',20_000)||undefined
+  };
+}
+
+function sanitizeCutRevision(value:unknown,timelineClipIds:Set<string>):CutRevision{
+  const source=asObject(value,'cut revision');
+  return{
+    id:safeId(source.id),
+    name:str(source.name,'Cut',1000),
+    clipIds:[...new Set(boundedArray(source.clipIds,'cut revision clip ids',100_000).map(item=>safeId(item)).filter(id=>timelineClipIds.has(id)))],
+    locked:booleanOrDefault(source.locked,false,'cut revision locked flag'),
+    createdAt:iso(source.createdAt,new Date().toISOString())
   };
 }
 
