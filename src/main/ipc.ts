@@ -125,7 +125,6 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.workflowImportComfy, () => withProjectFileOperation(async () => {
     const project = requireProject(projects);
     if(project.settings.workflowProfiles.length>=WORKFLOW_PROFILE_LIMIT)throw new Error(`Workflow import would exceed the ${WORKFLOW_PROFILE_LIMIT}-profile project safety limit. Remove/archive a profile before importing another workflow.`);
-    if(project.settings.workflowProfiles.length>=WORKFLOW_PROFILE_LIMIT)throw new Error(`Workflow import would exceed the ${WORKFLOW_PROFILE_LIMIT}-profile project safety limit. Remove/archive a profile before importing another workflow.`);
     const result = await dialog.showOpenDialog({ title: 'Import ComfyUI workflow JSON', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
     if (result.canceled || !result.filePaths[0]) return null;
     const source=result.filePaths[0];
@@ -160,7 +159,6 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
 
   handle(IPC.workflowImportWanGp, () => withProjectFileOperation(async () => {
     const project=requireProject(projects);
-    if(project.settings.workflowProfiles.length>=WORKFLOW_PROFILE_LIMIT)throw new Error(`Workflow import would exceed the ${WORKFLOW_PROFILE_LIMIT}-profile project safety limit. Remove/archive a profile before importing another workflow.`);
     if(project.settings.workflowProfiles.length>=WORKFLOW_PROFILE_LIMIT)throw new Error(`Workflow import would exceed the ${WORKFLOW_PROFILE_LIMIT}-profile project safety limit. Remove/archive a profile before importing another workflow.`);
     const result=await dialog.showOpenDialog({title:'Import WanGP exported settings JSON',properties:['openFile'],filters:[{name:'WanGP settings',extensions:['json']}]});
     if(result.canceled||!result.filePaths[0])return null;
