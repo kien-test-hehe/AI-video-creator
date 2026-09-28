@@ -871,7 +871,10 @@ export class RenderQueueService extends EventEmitter {
 
   private async updateJob(jobId:string,patch:Partial<RenderJob>,persistSummary=false,forceJournal=false):Promise<void>{
     const project=this.requireProject(),base=this.liveJobs.get(jobId)??project.renderJobs.find(j=>j.id===jobId);if(!base)return;
-    const next={...structuredClone(base),...patch,updatedAt:new Date().toISOString()} as RenderJob;
+    const normalizedPatch={...patch};
+    if(typeof normalizedPatch.message==='string'&&normalizedPatch.message.length>10_000)normalizedPatch.message=normalizedPatch.message.slice(0,10_000);
+    if(typeof normalizedPatch.error==='string'&&normalizedPatch.error.length>50_000)normalizedPatch.error=normalizedPatch.error.slice(0,50_000);
+    const next={...structuredClone(base),...normalizedPatch,updatedAt:new Date().toISOString()} as RenderJob;
     const now=Date.now(),last=this.lastJournalWrite.get(jobId)??0,writeJournal=forceJournal||now-last>=1500;
     if(writeJournal){await this.journal.write(project.rootPath,next);this.lastJournalWrite.set(jobId,now);}
     this.liveJobs.set(jobId,next);
