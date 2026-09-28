@@ -84,6 +84,14 @@ export function invalidateStateCascade(project:FilmProject,rootStateIds:Iterable
       staleIds.add(state.id);
       changed=true;
     }
+    for(const shot of project.shots){
+      if(!shot.actualStartStateId||!staleIds.has(shot.actualStartStateId))continue;
+      for(const state of project.shotStates){
+        if(state.shotId!==shot.id||state.role!=='observed-final'||state.status==='stale'||staleIds.has(state.id))continue;
+        staleIds.add(state.id);
+        changed=true;
+      }
+    }
   }
   const message=reason.slice(0,4096);
   for(const state of project.shotStates){
