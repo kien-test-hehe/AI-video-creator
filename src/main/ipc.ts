@@ -3,7 +3,7 @@ import { basename, join } from 'node:path';
 import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../shared/ipc';
-import type { AppMachineSettings, AssetKind, FilmProject, KeyframeRequest, RenderBatchRequest, RenderRequest } from '../shared/types';
+import type { AppMachineSettings, AssetKind, CreateHumanTaskRequest, FilmProject, KeyframeRequest, PromoteCanonicalTakeRequest, RecordObservedFinalStateRequest, RecordShotQcRequest, RenderBatchRequest, RenderRequest, ResolveHumanTaskRequest } from '../shared/types';
 import { removedActiveRenderShotIds } from '../shared/project-guards';
 import { capcutHandoffInputKey, timelineExportInputKey } from '../shared/timeline-policy';
 import { WORKFLOW_PROFILE_LIMIT } from '../shared/workflow-limits';
@@ -27,6 +27,7 @@ import { writeCodexMachineContext } from './services/machine-context';
 import type { KeyframeLeaseStore } from './services/keyframe-lease';
 import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/wangp-catalog-service';
 import { MAX_WORKFLOW_JSON_BYTES, stringifyJsonLimited } from './services/json-file';
+import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, recordShotQc, resolveHumanTask } from './services/production-state-service';
 
 type Handler = (...args: any[]) => any;
 
@@ -247,6 +248,16 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     activeKeyframeAbortController.abort();
     return true;
   });
+  const assertProductionStateMutationAllowed=()=>{
+    assertProjectStable();
+    if(queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish or cancel active render, keyframe, Director, workflow maintenance, export, or handoff work before changing production state/QC.');
+  };
+  handle(IPC.productionRecordObservedFinal,(request:RecordObservedFinalStateRequest)=>{assertProductionStateMutationAllowed();return recordObservedFinalState(projects,request);});
+  handle(IPC.productionRecordQc,(request:RecordShotQcRequest)=>{assertProductionStateMutationAllowed();return recordShotQc(projects,request);});
+  handle(IPC.productionCreateHumanTask,(request:CreateHumanTaskRequest)=>{assertProjectStable();return createHumanTask(projects,request);});
+  handle(IPC.productionResolveHumanTask,(request:ResolveHumanTaskRequest)=>{assertProjectStable();return resolveHumanTask(projects,request);});
+  handle(IPC.productionPromoteCanonical,(request:PromoteCanonicalTakeRequest)=>{assertProductionStateMutationAllowed();return promoteCanonicalTake(projects,request);});
+
   handle(IPC.timelineExport,async()=>{
     assertProjectStable();
     if(activeExportAbortController)throw new Error('A timeline export is already running.');
