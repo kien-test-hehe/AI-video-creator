@@ -43,7 +43,7 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
-import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
+import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, latestShotQcResult, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 
 const api: ApiWorkflow = {
@@ -1869,5 +1869,16 @@ describe('human QC reconciliation canonical refresh',()=>{
     expect(reconcileHumanQcTasks(project,['b'])).toEqual(['task']);
     expect(project.humanTasks[0].status).toBe('dismissed');
     expect(project.shots.find(item=>item.id==='b')?.canonicalRenderId).toBe('out-b');
+  });
+});
+
+
+describe('QC ordering determinism',()=>{
+  it('treats the later appended verdict as latest when timestamps are equal',()=>{
+    const project={qcResults:[
+      {id:'review',shotId:'s',renderOutputId:'o',layer:'semantic',status:'human-verify',issues:[],inputKey:'k',createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'pass',shotId:'s',renderOutputId:'o',layer:'semantic',status:'pass',issues:[],inputKey:'k',createdAt:'2026-01-01T00:00:00.000Z'}
+    ]} as unknown as FilmProject;
+    expect(latestShotQcResult(project,'s','o','semantic','k')?.id).toBe('pass');
   });
 });
