@@ -19,7 +19,7 @@ import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
-import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
+import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineClipUseIssue, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
@@ -848,6 +848,24 @@ describe('canonical timeline integrity',()=>{
   it('detects duplicate track/order slots',()=>{
     expect(duplicateTimelineOrderKey([{track:0,order:0},{track:0,order:1}])).toBeUndefined();
     expect(duplicateTimelineOrderKey([{track:0,order:0},{track:0,order:0}])).toBe('0:0');
+  });
+  it('requires canonical provenance or an explicit human override before timeline media is exportable',()=>{
+    const project={
+      shots:[{id:'s1',canonicalRenderId:'o1'}],
+      renderOutputs:[{...output('o1','s1'),technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}}],
+      shotDependencies:[],
+      qcResults:[
+        {id:'qv',shotId:'s1',renderOutputId:'o1',layer:'visual',status:'pass',issues:[],createdAt:'2026-01-01T00:00:01.000Z'},
+        {id:'qs',shotId:'s1',renderOutputId:'o1',layer:'semantic',status:'pass',issues:[],createdAt:'2026-01-01T00:00:01.000Z'}
+      ]
+    } as unknown as FilmProject;
+    const canonical={id:'c',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1,approval:'canonical'} as const;
+    expect(timelineClipUseIssue(project,canonical)).toBeUndefined();
+    expect(timelineClipUseIssue(project,{...canonical,approval:'legacy'})).toMatch(/legacy take approval/i);
+    expect(timelineClipUseIssue(project,{...canonical,approval:'human-override',approvalReason:undefined})).toMatch(/without a recorded reason/i);
+    expect(timelineClipUseIssue(project,{...canonical,approval:'human-override',approvalReason:'Human accepted continuity mismatch.'})).toBeUndefined();
+    project.qcResults.push({id:'qs2',shotId:'s1',renderOutputId:'o1',layer:'semantic',status:'fail',issues:[],createdAt:'2026-01-01T00:00:02.000Z'} as any);
+    expect(timelineClipUseIssue(project,canonical)).toMatch(/no longer canonical-ready.*semantic QC is fail/i);
   });
 });
 describe('technical QC structural invariants',()=>{
