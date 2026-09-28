@@ -45,7 +45,7 @@ Studio keeps the production state visible at once:
 - System / Preflight node plus GPU/VRAM/WanGP/ComfyUI/CapCut/Queue HUD;
 - one-click Preflight, Render selected and Render all.
 
-Generic visual references are stored separately from props/wardrobe. The project schema enforces asset-kind roles and migrates older projects where generic references were previously carried in the prop slot.
+Generic visual references are stored separately from props/wardrobe. The project schema enforces asset-kind roles and migrates older projects where generic references were previously carried in the prop slot. Schema v3 also stores structured shot states, continuity dependencies, layered QC history, human-review tasks and canonical-take provenance.
 
 The detailed Story, Assets, Storyboard, Shot Workshop, Queue, Timeline, CapCut and Settings views remain available from the icon rail. The graph is therefore an **overview/control workspace**, not a second hidden project model.
 
@@ -87,7 +87,7 @@ CapCut is deliberately **not** the canonical project database. A CineForge proje
 
 Portable projects are treated as untrusted input.
 
-- Project schema v2 is runtime-validated and bounded.
+- Project schema v3 is runtime-validated and bounded; render/QC/state provenance is fail-closed when current shot inputs or continuity topology no longer match.
 - Legacy v1 projects are migrated, but executable paths and AI endpoint URLs are discarded.
 - FFmpeg, FFprobe, Python, WanGP, Docker, ComfyUI and local-LLM settings live only in Electron `userData`.
 - AI service URLs are loopback-only.
