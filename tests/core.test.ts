@@ -208,6 +208,16 @@ describe('main-process asset kind validation',()=>{
     await expect(service.importAsset('../escape' as any)).rejects.toThrow(/invalid asset kind/i);
   });
 });
+describe('new project creation bounds',()=>{
+  it('rejects an oversized project name before creating project files',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-project-name-bound-'));
+    try{
+      const service=new ProjectService();
+      await expect(service.createAt(root,'x'.repeat(241))).rejects.toThrow(/240-character project safety limit/i);
+      await expect(readFile(join(root,'cineforge.project.json'),'utf8')).rejects.toMatchObject({code:'ENOENT'});
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('internal shot creation bounds',()=>{
   it('refuses a scene body that cannot fit the canonical shot prompt',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-shot-prompt-bound-'));
