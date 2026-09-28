@@ -43,7 +43,7 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
-import { canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
+import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 
 const api: ApiWorkflow = {
@@ -1815,5 +1815,26 @@ describe('continuity state fingerprint completeness',()=>{
     const before=shotQcInputKey(project,'b','out-b','continuity');
     project.shotStates.find(state=>state.id==='state-a')!.confidence=.4;
     expect(shotQcInputKey(project,'b','out-b','continuity')).not.toBe(before);
+  });
+});
+
+
+describe('manual continuity frame selection',()=>{
+  it('prefers a current observed final frame over the planned end keyframe and falls back explicitly',()=>{
+    const shot={
+      id:'shot',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',endFrameAssetId:'planned',
+      observedFinalStateId:'observed',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+    } as Shot;
+    const project={
+      shots:[shot],
+      shotStates:[{id:'observed',shotId:'shot',role:'observed-final',source:'generated',status:'current',frameAssetId:'actual',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'}]
+    } as unknown as FilmProject;
+    expect(continuityFrameForShot(project,shot)).toEqual({assetId:'actual',source:'observed-final'});
+    project.shotStates[0].status='stale';
+    expect(continuityFrameForShot(project,shot)).toEqual({assetId:'planned',source:'planned-end'});
+    shot.endFrameAssetId=undefined;
+    expect(continuityFrameForShot(project,shot)).toBeUndefined();
   });
 });
