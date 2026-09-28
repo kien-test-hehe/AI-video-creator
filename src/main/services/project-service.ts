@@ -190,8 +190,11 @@ export class ProjectService {
           changedRenderInputShotIds.push(shot.id);
           shot.status=currentShot.status==='rendering'?'rendering':(['rendered','failed'].includes(currentShot.status)?'ready':currentShot.status);
         }else{
-          shot.status=currentShot.status;
-          shot.latestRenderId=currentShot.latestRenderId;
+          const requestedLatest=shot.latestRenderId
+            ? incoming.renderOutputs.find(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video')
+            : undefined;
+          shot.latestRenderId=requestedLatest?.id??currentShot.latestRenderId;
+          shot.status=shot.latestRenderId?'rendered':currentShot.status;
         }
       }
       for(const shotId of changedRenderInputShotIds)invalidateObservedFinalState(incoming,shotId,'Shot render inputs or dependency topology changed in the renderer.');
