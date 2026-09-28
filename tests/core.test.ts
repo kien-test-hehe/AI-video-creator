@@ -1462,21 +1462,22 @@ describe('production state main-process authority',()=>{
     });
     return{root,service};
   }
+  const qcKey=(service:ProjectService,layer:'visual'|'semantic'|'continuity')=>shotQcInputKey(service.getCurrent()!,'shot-auth','out-auth',layer);
 
   it('refuses canonical promotion until required QC passes and creates a durable human task for uncertain QC',async()=>{
     const{root,service}=await setupProject();
     try{
-      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[]});
+      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[],inputKey:qcKey(service,'visual')});
       await expect(promoteCanonicalTake(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth'})).rejects.toThrow(/semantic QC is missing/i);
 
-      const uncertain=await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'human-verify',issues:[{code:'ACTION_UNCERTAIN',severity:'major',message:'Turn completion is ambiguous.'}]});
+      const uncertain=await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'human-verify',issues:[{code:'ACTION_UNCERTAIN',severity:'major',message:'Turn completion is ambiguous.'}],inputKey:qcKey(service,'semantic')});
       const task=uncertain.humanTasks.find(item=>item.status==='open');
       expect(task).toMatchObject({type:'manual-qc',shotId:'shot-auth'});
       expect(uncertain.qcResults.find(item=>item.layer==='semantic'&&item.status==='human-verify')?.humanOverrideTaskId).toBe(task?.id);
       await expect(promoteCanonicalTake(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth'})).rejects.toThrow(/semantic QC is human-verify/i);
       await expect(resolveHumanTask(service,{projectRoot:root,taskId:task!.id,status:'resolved',resolution:'Premature close.'})).rejects.toThrow(/PASS or FAIL verdict/i);
 
-      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'pass',issues:[]});
+      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'pass',issues:[],inputKey:qcKey(service,'semantic')});
       expect(service.getCurrent()?.shots.find(item=>item.id==='shot-auth')?.canonicalRenderId).toBeUndefined();
       await expect(resolveHumanTask(service,{projectRoot:root,taskId:task!.id,status:'resolved',resolution:'Human review confirmed semantic QC PASS.'})).resolves.toMatchObject({schemaVersion:3});
       expect(service.getCurrent()?.shots.find(item=>item.id==='shot-auth')?.canonicalRenderId).toBe('out-auth');
@@ -1487,7 +1488,7 @@ describe('production state main-process authority',()=>{
   it('automatically dismisses a pending human QC review when its shot provenance becomes stale',async()=>{
     const{root,service}=await setupProject();
     try{
-      const uncertain=await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'human-verify',issues:[{code:'FACE_UNCERTAIN',severity:'major',message:'Face match needs review.'}]});
+      const uncertain=await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'human-verify',issues:[{code:'FACE_UNCERTAIN',severity:'major',message:'Face match needs review.'}],inputKey:qcKey(service,'visual')});
       const task=uncertain.humanTasks.find(item=>item.status==='open')!;
       const edited=structuredClone(uncertain);edited.shots.find(item=>item.id==='shot-auth')!.prompt='changed after review request';
       const saved=await service.saveFromRenderer(edited);
@@ -1499,15 +1500,15 @@ describe('production state main-process authority',()=>{
   it('rejects a QC PASS verdict that still contains a major or blocker issue',async()=>{
     const{root,service}=await setupProject();
     try{
-      await expect(recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[{code:'FACE_BROKEN',severity:'blocker',message:'Identity is visibly wrong.'}]})).rejects.toThrow(/PASS cannot contain major or blocker/i);
+      await expect(recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[{code:'FACE_BROKEN',severity:'blocker',message:'Identity is visibly wrong.'}],inputKey:qcKey(service,'visual')})).rejects.toThrow(/PASS cannot contain major or blocker/i);
     }finally{await rm(root,{recursive:true,force:true});}
   });
 
   it('records an observed final state only from a current render with technical, visual and semantic QC pass',async()=>{
     const{root,service}=await setupProject();
     try{
-      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[]});
-      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'pass',issues:[]});
+      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[],inputKey:qcKey(service,'visual')});
+      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'pass',issues:[],inputKey:qcKey(service,'semantic')});
       const next=await recordObservedFinalState(service,{
         projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',
         characters:[],props:[],environment:{timeOfDay:'NIGHT',lighting:'warm practicals'},camera:{shotSize:'medium',screenDirection:'left-to-right'},
