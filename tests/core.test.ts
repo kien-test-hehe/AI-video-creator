@@ -1464,3 +1464,102 @@ describe('production state main-process authority',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
+
+
+describe('production topology and destructive mutation regression guards',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const shot=(id:string,index:number):Shot=>({id,sceneId:'scene-topology',index,title:id,prompt:id,camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:index}});
+
+  it('rebuilds sequential continuity after reorder and stales a propagated start whose predecessor changed',()=>{
+    const a=shot('a',1),b=shot('b',2),c=shot('c',3);
+    const project={
+      schemaVersion:3,id:'p',name:'p',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'p',logline:'',script:'',notes:''},scenes:[{id:'scene-topology',index:1,heading:'',body:'',shotIds:['a','b','c']}],
+      assets:[],shots:[a,b,c],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    rebuildDefaultSequentialDependencies(project,['scene-topology'],'2026-01-01T00:00:00.000Z');
+    project.shotStates.push(
+      {id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+      {id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',derivedFromStateId:'final-a',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'}
+    );
+    a.observedFinalStateId='final-a';b.actualStartStateId='start-b';
+    c.index=1;b.index=2;a.index=3;project.scenes[0].shotIds=['c','b','a'];
+    rebuildDefaultSequentialDependencies(project,['scene-topology'],'2026-01-01T00:00:03.000Z');
+    expect(project.shotDependencies.filter(edge=>edge.relation==='continuity').map(edge=>`${edge.fromShotId}>${edge.toShotId}`).sort()).toEqual(['b>a','c>b']);
+    expect(b.actualStartStateId).toBeUndefined();
+    expect(project.shotStates.find(state=>state.id==='start-b')?.status).toBe('stale');
+  });
+
+  it('removes a middle shot without leaving orphan state pointers and repairs A → C continuity',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-topology-delete-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Topology');
+      const current=await service.mutate(project=>{
+        project.scenes.push({id:'scene-topology',index:1,heading:'',body:'',shotIds:['a','b','c']});
+        project.shots.push(shot('a',1),shot('b',2),shot('c',3));
+        rebuildDefaultSequentialDependencies(project,['scene-topology']);
+        project.shotStates.push(
+          {id:'final-b',shotId:'b',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+          {id:'start-c',shotId:'c',role:'actual-start',source:'generated',status:'unreviewed',derivedFromStateId:'final-b',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'}
+        );
+        project.shots.find(item=>item.id==='b')!.observedFinalStateId='final-b';
+        project.shots.find(item=>item.id==='c')!.actualStartStateId='start-c';
+      });
+      const edited=structuredClone(current);
+      edited.shots=edited.shots.filter(item=>item.id!=='b');edited.scenes[0].shotIds=['a','c'];edited.shots.find(item=>item.id==='c')!.index=2;
+      const saved=await service.saveFromRenderer(edited);
+      expect(saved.shots.find(item=>item.id==='c')?.actualStartStateId).toBeUndefined();
+      expect(saved.shotStates.some(state=>state.id==='start-c')).toBe(false);
+      expect(saved.shotDependencies.some(edge=>edge.fromShotId==='a'&&edge.toShotId==='c'&&edge.relation==='continuity')).toBe(true);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('treats a renderer-created duplicate as a fresh shot even if the renderer accidentally copied authority IDs',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-duplicate-authority-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Duplicate');
+      const current=await service.mutate(project=>{
+        project.scenes.push({id:'scene-topology',index:1,heading:'',body:'',shotIds:['a']});
+        const a=shot('a',1);a.latestRenderId='out';a.latestAttemptRenderId='out';a.canonicalRenderId='out';a.observedFinalStateId='state-a';project.shots.push(a);
+        project.shotStates.push({id:'state-a',shotId:'a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'});
+      });
+      const edited=structuredClone(current),copy=structuredClone(edited.shots[0]);copy.id='copy';copy.index=2;edited.shots.push(copy);edited.scenes[0].shotIds.push('copy');
+      const saved=await service.saveFromRenderer(edited),fresh=saved.shots.find(item=>item.id==='copy')!;
+      expect(fresh.latestRenderId).toBeUndefined();expect(fresh.latestAttemptRenderId).toBeUndefined();expect(fresh.canonicalRenderId).toBeUndefined();
+      expect(fresh.plannedStartStateId).toBeUndefined();expect(fresh.plannedEndStateId).toBeUndefined();expect(fresh.actualStartStateId).toBeUndefined();expect(fresh.observedFinalStateId).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('cascades render-output deletion through derived continuity state',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-output-state-delete-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Delete output');
+      await service.mutate(project=>{
+        project.scenes.push({id:'scene-topology',index:1,heading:'',body:'',shotIds:['a','b']});project.shots.push(shot('a',1),shot('b',2));
+        project.renderOutputs.push({id:'out-a',jobId:'orphaned',shotId:'a',path:join(root,'renders','out-a.mp4'),filename:'out-a.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'});
+        project.shotStates.push(
+          {id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',sourceRenderOutputId:'out-a',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+          {id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',sourceRenderOutputId:'out-a',derivedFromStateId:'final-a',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'}
+        );
+        project.shots.find(item=>item.id==='a')!.observedFinalStateId='final-a';project.shots.find(item=>item.id==='b')!.actualStartStateId='start-b';
+      });
+      const saved=await service.deleteRenderOutput('out-a');
+      expect(saved.shots.find(item=>item.id==='a')?.observedFinalStateId).toBeUndefined();
+      expect(saved.shots.find(item=>item.id==='b')?.actualStartStateId).toBeUndefined();
+      expect(saved.shotStates.find(item=>item.id==='final-a')?.status).toBe('stale');
+      expect(saved.shotStates.find(item=>item.id==='start-b')?.status).toBe('stale');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('includes current structured start state in the effective render prompt and signature',()=>{
+    const a=shot('a',1),project={
+      shots:[a],assets:[],shotStates:[{id:'actual-a',shotId:'a',role:'actual-start',source:'generated',status:'unreviewed',characters:[],props:[],environment:{lighting:'blue moonlight'},camera:{screenDirection:'left-to-right'},actionPhase:'mid reach',dialogueState:'silent',createdAt:'2026-01-01T00:00:00.000Z'}],
+      settings:{workflowProfiles:[]}
+    } as unknown as FilmProject;
+    a.actualStartStateId='actual-a';
+    expect(buildRenderPrompt(project,a)).toMatch(/Actual start state:.*blue moonlight.*mid reach/);
+    const first=shotProjectRenderInputKey(project,a);(project.shotStates[0] as any).actionPhase='reach complete';
+    expect(shotProjectRenderInputKey(project,a)).not.toBe(first);
+  });
+});
