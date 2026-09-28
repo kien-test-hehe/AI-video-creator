@@ -35,13 +35,15 @@ let activeKeyframePromise:Promise<unknown>|null=null;
 let activeDirectorPromise:Promise<unknown>|null=null;
 let activeWorkflowMaintenancePromise:Promise<unknown>|null=null;
 let activeHandoffPromise:Promise<unknown>|null=null;
+let activeSystemProbePromise:Promise<unknown>|null=null;
+let activeSystemProbeProjectId:string|undefined;
 let activeProjectFileOperations=0;
 const activeProjectFilePromises=new Set<Promise<unknown>>();
 
 export async function shutdownForegroundOperations():Promise<void>{
   activeExportAbortController?.abort();
   activeKeyframeAbortController?.abort();
-  const pending=[activeExportPromise,activeKeyframePromise,activeDirectorPromise,activeWorkflowMaintenancePromise,activeHandoffPromise,...activeProjectFilePromises].filter((value):value is Promise<unknown>=>Boolean(value));
+  const pending=[activeExportPromise,activeKeyframePromise,activeDirectorPromise,activeWorkflowMaintenancePromise,activeHandoffPromise,activeSystemProbePromise,...activeProjectFilePromises].filter((value):value is Promise<unknown>=>Boolean(value));
   if(pending.length)await Promise.allSettled(pending);
 }
 
@@ -178,10 +180,20 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.workflowWanGpCatalog, () => listWanGpCatalog(settings.get()));
   handle(IPC.workflowProvisionWanGp, () => {assertWorkflowMaintenanceAvailable();return withWorkflowValidationLock(()=>provisionRecommendedWanGpProfiles(projects,settings));});
 
-  handle(IPC.systemProbe, async()=>{
-    const project=projects.getCurrent()??undefined,machine=settings.get(),probe=await probeSystem(project,machine);
-    if(project)probe.codexContextPath=await writeCodexMachineContext(project,machine,probe);
-    return probe;
+  handle(IPC.systemProbe, ()=>{
+    const project=projects.getCurrent()??undefined,projectId=project?.id;
+    if(activeSystemProbePromise){
+      if(activeSystemProbeProjectId===projectId)return activeSystemProbePromise;
+      throw new Error('A system probe is still finishing for another project context. Retry after the current probe completes.');
+    }
+    const operation=async()=>{
+      const machine=settings.get(),probe=await probeSystem(project,machine);
+      if(project)probe.codexContextPath=await writeCodexMachineContext(project,machine,probe);
+      return probe;
+    };
+    const task=project?withProjectFileOperation(operation):operation();
+    activeSystemProbeProjectId=projectId;activeSystemProbePromise=task;
+    return task.finally(()=>{if(activeSystemProbePromise===task){activeSystemProbePromise=null;activeSystemProbeProjectId=undefined;}});
   });
   handle(IPC.comfyPing, async(url?:string)=>{
     const machine=settings.get();
