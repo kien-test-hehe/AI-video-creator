@@ -1728,3 +1728,63 @@ describe('production topology and destructive mutation regression guards',()=>{
     expect(b.actualStartStateId).toBeUndefined();expect(b.observedFinalStateId).toBeUndefined();expect(cc.actualStartStateId).toBeUndefined();
   });
 });
+
+
+describe('continuity QC topology scoping',()=>{
+  const makeShot=(id:string,index:number):Shot=>({
+    id,sceneId:'scene-qc',index,title:id,prompt:id,camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+    generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:index,negativePrompt:'',includeAudio:false}
+  });
+  const makeProject=():FilmProject=>{
+    const shots=[makeShot('a',1),makeShot('b',2),makeShot('c',3)];
+    const project={
+      schemaVersion:3,id:'qc-topology',name:'QC Topology',rootPath:'/tmp/qc-topology',
+      createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'QC Topology',logline:'',script:'',notes:''},
+      scenes:[{id:'scene-qc',index:1,heading:'',body:'',shotIds:['a','b','c']}],
+      assets:[],shots,renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    rebuildDefaultSequentialDependencies(project,['scene-qc'],'2026-01-01T00:00:00.000Z');
+    project.renderOutputs.push({
+      id:'out-b',jobId:'orphaned',shotId:'b',path:'/tmp/qc-topology/renders/out-b.mp4',filename:'out-b.mp4',mediaType:'video',
+      createdAt:'2026-01-01T00:00:01.000Z',productionInputKey:shotProductionInputKey(project,shots[1]),
+      technicalQc:{checkedAt:'2026-01-01T00:00:01.000Z',passed:true,issues:[],warnings:[]}
+    });
+    return project;
+  };
+
+  it('dismisses a pending continuity review when sequential topology changes',()=>{
+    const project=makeProject();
+    const inputKey=shotQcInputKey(project,'b','out-b','continuity');
+    project.qcResults.push({
+      id:'qc-human',shotId:'b',renderOutputId:'out-b',layer:'continuity',status:'human-verify',
+      issues:[{code:'CHECK',severity:'major',message:'Needs review.'}],inputKey,createdAt:'2026-01-01T00:00:02.000Z',humanOverrideTaskId:'task-human'
+    });
+    project.humanTasks.push({
+      id:'task-human',type:'verify-continuity',status:'open',shotId:'b',title:'Review',reason:'Needs review.',
+      relatedAssetIds:[],relatedRenderOutputIds:['out-b'],createdAt:'2026-01-01T00:00:02.000Z'
+    });
+    project.shots.find(shot=>shot.id==='c')!.index=1;
+    project.shots.find(shot=>shot.id==='a')!.index=2;
+    project.shots.find(shot=>shot.id==='b')!.index=3;
+    project.scenes[0].shotIds=['c','a','b'];
+    rebuildDefaultSequentialDependencies(project,['scene-qc'],'2026-01-01T00:00:03.000Z');
+    expect(project.humanTasks.find(task=>task.id==='task-human')).toMatchObject({status:'dismissed'});
+  });
+
+  it('does not stale continuity QC merely because a parallel or non-propagating edge changes',()=>{
+    const project=makeProject();
+    const before=shotQcInputKey(project,'b','out-b','continuity');
+    project.shotDependencies.push({
+      id:'parallel-b-c',fromShotId:'b',toShotId:'c',relation:'parallel',strength:'soft',
+      propagate:['character'],createdAt:'2026-01-01T00:00:02.000Z'
+    });
+    project.shotDependencies.push({
+      id:'metadata-only-a-b',fromShotId:'a',toShotId:'b',relation:'cutaway',strength:'soft',
+      propagate:[],createdAt:'2026-01-01T00:00:02.000Z'
+    });
+    expect(shotQcInputKey(project,'b','out-b','continuity')).toBe(before);
+  });
+});
