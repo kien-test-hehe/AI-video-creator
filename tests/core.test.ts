@@ -230,7 +230,7 @@ describe('project schema canonicalization',()=>{
   it('rejects explicit out-of-range project numerics instead of silently clamping them',()=>{
     const raw=baseProject();raw.shots[0].generation.width=9000;
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/allowed range 256\.\.8192/i);
-    const timeline=baseProject();timeline.timeline=[{id:'clip',shotId:'shot-1',renderOutputId:'passing-output',track:0,order:0,trimInSec:0,volume:9}];
+    const timeline:any=baseProject();timeline.timeline=[{id:'clip',shotId:'shot-1',renderOutputId:'passing-output',track:0,order:0,trimInSec:0,volume:9}];
     expect(()=>loadPortableProject(timeline,'/project')).toThrow(/allowed range 0\.\.8/i);
   });
   it('canonicalizes parseable timestamps before lexical latest/recovery ordering',()=>{
