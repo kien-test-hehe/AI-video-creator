@@ -1477,6 +1477,7 @@ describe('production state main-process authority',()=>{
       await expect(resolveHumanTask(service,{projectRoot:root,taskId:task!.id,status:'resolved',resolution:'Premature close.'})).rejects.toThrow(/PASS or FAIL verdict/i);
 
       await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'pass',issues:[]});
+      expect(service.getCurrent()?.shots.find(item=>item.id==='shot-auth')?.canonicalRenderId).toBeUndefined();
       await expect(resolveHumanTask(service,{projectRoot:root,taskId:task!.id,status:'resolved',resolution:'Human review confirmed semantic QC PASS.'})).resolves.toMatchObject({schemaVersion:3});
       expect(service.getCurrent()?.shots.find(item=>item.id==='shot-auth')?.canonicalRenderId).toBe('out-auth');
       await expect(promoteCanonicalTake(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth'})).resolves.toMatchObject({schemaVersion:3});
