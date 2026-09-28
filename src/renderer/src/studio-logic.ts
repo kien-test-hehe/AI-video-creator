@@ -1,6 +1,7 @@
 import { MODEL_DEFAULTS } from '../../shared/defaults';
 import type { FilmProject, PreflightReport, Shot, WorkflowProfile } from '../../shared/types';
 import { compareTimelineClips } from '../../shared/timeline-policy';
+import { canonicalTakeReadiness } from '../../shared/production-state';
 
 
 export type StudioPreflightState='unchecked'|'stale'|'ready'|'blocked';
@@ -64,14 +65,31 @@ export function reorderTimeline(project:FilmProject,sourceId:string,targetId:str
 
 export function timelineInsertIssue(project:Pick<FilmProject,'timeline'>):string|undefined{return project.timeline.length>=100_000?'Timeline already has the maximum of 100000 clips. Remove/archive clips before adding another take.':undefined;}
 
-export function insertTimelineOutput(project:FilmProject,outputId:string,beforeClipId?:string):boolean{
+export function timelineTakeApprovalIssue(project:FilmProject,outputId:string):string|undefined{
+  const output=project.renderOutputs.find(item=>item.id===outputId&&item.mediaType==='video');
+  if(!output)return'Render output is missing or is not video.';
+  const shot=project.shots.find(item=>item.id===output.shotId);
+  if(!shot)return'Render output belongs to a missing shot.';
+  if(shot.canonicalRenderId!==output.id)return'This take is not the shot\'s canonical take.';
+  const readiness=canonicalTakeReadiness(project,shot.id,output.id);
+  return readiness.ready?undefined:readiness.blockers.join(' ');
+}
+
+export function insertTimelineOutput(project:FilmProject,outputId:string,beforeClipId?:string,humanOverrideReason?:string):boolean{
   if(timelineInsertIssue(project))return false;
   const output=project.renderOutputs.find(item=>item.id===outputId&&item.mediaType==='video');if(!output)return false;
-  if(!project.shots.some(shot=>shot.id===output.shotId))return false;
+  const shot=project.shots.find(item=>item.id===output.shotId);if(!shot)return false;
+  const approvalIssue=timelineTakeApprovalIssue(project,output.id);
+  const overrideReason=humanOverrideReason?.trim();
+  if(approvalIssue&&!overrideReason)return false;
   const targetClip=beforeClipId?project.timeline.find(clip=>clip.id===beforeClipId):undefined,track=targetClip?.track??0;
   const ordered=project.timeline.filter(clip=>clip.track===track).sort(compareTimelineClips);
   const target=targetClip?ordered.findIndex(clip=>clip.id===targetClip.id):ordered.length,index=target<0?ordered.length:target;
-  const inserted={id:crypto.randomUUID(),shotId:output.shotId,renderOutputId:output.id,track,order:index,trimInSec:0,volume:1};
+  const inserted={
+    id:crypto.randomUUID(),shotId:output.shotId,renderOutputId:output.id,track,order:index,trimInSec:0,volume:1,
+    approval:approvalIssue?'human-override' as const:'canonical' as const,
+    approvalReason:approvalIssue?overrideReason:undefined
+  };
   ordered.splice(index,0,inserted);ordered.forEach((clip,order)=>clip.order=order);project.timeline.push(inserted);return true;
 }
 
