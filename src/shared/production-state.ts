@@ -1,8 +1,9 @@
 import type {
-  ContinuityField, FilmProject, QcLayer, Shot, ShotDependency, ShotState
+  ContinuityField, FilmProject, QcLayer, RenderOutput, Shot, ShotDependency, ShotState
 } from './types';
+import { shotProjectRenderInputKey } from './shot-signature';
 
-const DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
+export const DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
   'character','wardrobe','prop','location','lighting','action','dialogue'
 ];
 
@@ -42,6 +43,14 @@ export function defaultSequentialDependencies(shots:Shot[],createdAt:string):Sho
   return result;
 }
 
+function isDefaultSequentialDependency(edge:ShotDependency):boolean{
+  return edge.id===productionStableId('continuity',`${edge.fromShotId}>${edge.toShotId}`)
+    &&edge.relation==='continuity'
+    &&edge.strength==='soft'
+    &&edge.propagate.length===DEFAULT_CONTINUITY_FIELDS.length
+    &&DEFAULT_CONTINUITY_FIELDS.every(field=>edge.propagate.includes(field));
+}
+
 export function shotStateContentKey(state:Pick<ShotState,
   'shotId'|'role'|'source'|'frameAssetId'|'sourceRenderOutputId'|'derivedFromStateId'|'characters'|'props'|'environment'|'camera'|'actionPhase'|'dialogueState'
 >):string{
@@ -61,15 +70,12 @@ export function shotStateContentKey(state:Pick<ShotState,
   });
 }
 
-export function invalidateObservedFinalState(project:FilmProject,shotId:string,reason:string):void{
-  const shot=project.shots.find(item=>item.id===shotId);
-  if(!shot)return;
-  const roots=project.shotStates.filter(state=>state.shotId===shotId&&state.role==='observed-final'&&state.status!=='stale');
-  if(!roots.length){
-    shot.observedFinalStateId=undefined;
-    return;
-  }
-  const staleIds=new Set(roots.map(state=>state.id));
+export function shotStateFingerprint(state:Parameters<typeof shotStateContentKey>[0]):string{
+  return productionStableId('state-content',shotStateContentKey(state));
+}
+
+export function invalidateStateCascade(project:FilmProject,rootStateIds:Iterable<string>,reason:string):Set<string>{
+  const staleIds=new Set(rootStateIds);
   let changed=true;
   while(changed){
     changed=false;
@@ -79,17 +85,57 @@ export function invalidateObservedFinalState(project:FilmProject,shotId:string,r
       changed=true;
     }
   }
+  const message=reason.slice(0,4096);
   for(const state of project.shotStates){
     if(!staleIds.has(state.id))continue;
     state.status='stale';
-    state.staleReason=reason.slice(0,4096);
+    state.staleReason=message;
   }
+  for(const shot of project.shots){
+    if(shot.plannedStartStateId&&staleIds.has(shot.plannedStartStateId))shot.plannedStartStateId=undefined;
+    if(shot.plannedEndStateId&&staleIds.has(shot.plannedEndStateId))shot.plannedEndStateId=undefined;
+    if(shot.observedFinalStateId&&staleIds.has(shot.observedFinalStateId))shot.observedFinalStateId=undefined;
+    if(!shot.actualStartStateId||!staleIds.has(shot.actualStartStateId))continue;
+    const staleStart=project.shotStates.find(state=>state.id===shot.actualStartStateId);
+    if(staleStart?.frameAssetId&&shot.startFrameAssetId===staleStart.frameAssetId)shot.startFrameAssetId=undefined;
+    shot.actualStartStateId=undefined;
+    shot.latestRenderId=undefined;
+    shot.canonicalRenderId=undefined;
+    if(['rendered','failed'].includes(shot.status))shot.status='ready';
+  }
+  return staleIds;
+}
+
+export function invalidateObservedFinalState(project:FilmProject,shotId:string,reason:string):void{
+  const shot=project.shots.find(item=>item.id===shotId);
+  if(!shot)return;
+  const roots=project.shotStates.filter(state=>state.shotId===shotId&&state.role==='observed-final'&&state.status!=='stale');
+  if(roots.length)invalidateStateCascade(project,roots.map(state=>state.id),reason);
   shot.observedFinalStateId=undefined;
-  for(const dependent of project.shots){
-    if(!dependent.actualStartStateId||!staleIds.has(dependent.actualStartStateId))continue;
-    const staleStart=project.shotStates.find(state=>state.id===dependent.actualStartStateId);
-    if(staleStart?.frameAssetId&&dependent.startFrameAssetId===staleStart.frameAssetId)dependent.startFrameAssetId=undefined;
-    dependent.actualStartStateId=undefined;
+}
+
+export function rebuildDefaultSequentialDependencies(project:FilmProject,sceneIds?:Iterable<string>,createdAt=new Date().toISOString()):void{
+  const scope=new Set(sceneIds??project.scenes.map(scene=>scene.id));
+  const shotById=new Map(project.shots.map(shot=>[shot.id,shot] as const));
+  const preserved=project.shotDependencies.filter(edge=>{
+    const from=shotById.get(edge.fromShotId),to=shotById.get(edge.toShotId);
+    if(!from||!to)return false;
+    if(!scope.has(from.sceneId)&&!scope.has(to.sceneId))return true;
+    return !isDefaultSequentialDependency(edge);
+  });
+  const defaults=defaultSequentialDependencies(project.shots.filter(shot=>scope.has(shot.sceneId)),createdAt)
+    .filter(edge=>!preserved.some(existing=>existing.fromShotId===edge.fromShotId&&existing.toShotId===edge.toShotId&&existing.relation==='continuity'));
+  project.shotDependencies=[...preserved,...defaults];
+
+  for(const shot of project.shots){
+    if(!scope.has(shot.sceneId)||!shot.actualStartStateId)continue;
+    const state=project.shotStates.find(item=>item.id===shot.actualStartStateId);
+    if(!state||state.status==='stale'||!state.derivedFromStateId)continue;
+    const source=project.shotStates.find(item=>item.id===state.derivedFromStateId);
+    const stillConnected=Boolean(source&&project.shotDependencies.some(edge=>
+      edge.fromShotId===source.shotId&&edge.toShotId===shot.id&&edge.relation!=='parallel'&&edge.propagate.length>0
+    ));
+    if(!stillConnected)invalidateStateCascade(project,[state.id],'Shot order/dependency topology changed; propagated start state is no longer connected to its source shot.');
   }
 }
 
@@ -136,10 +182,7 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
     const startFrameOwnedByExisting=Boolean(existing?.frameAssetId&&existing.source!=='human'&&target.startFrameAssetId===existing.frameAssetId);
     if(target.startFrameAssetId&&!startFrameOwnedByExisting)continue;
     if(existing?.derivedFromStateId===sourceState.id&&existing.status!=='stale')continue;
-    if(existing&&existing.status!=='stale'){
-      existing.status='stale';
-      existing.staleReason=`Superseded by propagated state from ${sourceShotId}.`;
-    }
+    if(existing&&existing.status!=='stale')invalidateStateCascade(project,[existing.id],`Superseded by propagated state from ${sourceShotId}.`);
 
     const fields=new Set(edge.propagate);
     const selected=selectFields(sourceState,fields);
@@ -157,37 +200,82 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
       confidence:sourceState.confidence,
       createdAt
     };
+    propagated.fingerprint=shotStateFingerprint(propagated);
     const duplicate=project.shotStates.find(state=>state.id===id);
     if(duplicate)Object.assign(duplicate,propagated);
     else project.shotStates.push(propagated);
     target.actualStartStateId=id;
     if(sourceState.frameAssetId)target.startFrameAssetId=sourceState.frameAssetId;
+    target.latestRenderId=undefined;
+    target.canonicalRenderId=undefined;
+    if(['rendered','failed'].includes(target.status))target.status='ready';
     created.push(id);
   }
   return created;
 }
 
+export function renderOutputProductionInputKey(project:FilmProject,output:RenderOutput):string|undefined{
+  if(output.productionInputKey)return output.productionInputKey;
+  return project.renderJobs.find(job=>job.id===output.jobId)?.spec?.productionInputKey;
+}
+
+export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string,layer:Exclude<QcLayer,'technical'>):string{
+  const shot=project.shots.find(item=>item.id===shotId);
+  const output=project.renderOutputs.find(item=>item.id===outputId&&item.shotId===shotId);
+  const productionInputKey=output?renderOutputProductionInputKey(project,output):undefined;
+  const incident=layer==='continuity'
+    ? project.shotDependencies
+      .filter(edge=>edge.fromShotId===shotId||edge.toShotId===shotId)
+      .sort((a,b)=>a.id.localeCompare(b.id))
+      .map(edge=>{
+        const from=project.shots.find(item=>item.id===edge.fromShotId);
+        const to=project.shots.find(item=>item.id===edge.toShotId);
+        const fromState=from?.observedFinalStateId?project.shotStates.find(state=>state.id===from.observedFinalStateId):undefined;
+        const toState=to?.actualStartStateId?project.shotStates.find(state=>state.id===to.actualStartStateId):undefined;
+        return{
+          id:edge.id,from:edge.fromShotId,to:edge.toShotId,relation:edge.relation,strength:edge.strength,propagate:edge.propagate,
+          fromObserved:fromState?{id:fromState.id,status:fromState.status,fingerprint:fromState.fingerprint}:undefined,
+          toActualStart:toState?{id:toState.id,status:toState.status,fingerprint:toState.fingerprint}:undefined
+        };
+      })
+    : [];
+  return productionStableId('qc-input',JSON.stringify({
+    layer,shotId,outputId,productionInputKey,
+    currentShotInput:shot?shotProjectRenderInputKey(project,shot):undefined,
+    incident
+  }));
+}
+
 export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputId:string):{ready:boolean;blockers:string[]}{
   const blockers:string[]=[];
+  const shot=project.shots.find(item=>item.id===shotId);
   const output=project.renderOutputs.find(item=>item.id===outputId&&item.shotId===shotId&&item.mediaType==='video');
-  if(!output){return{ready:false,blockers:['Render output is missing, belongs to another shot, or is not video.']};}
+  if(!shot)return{ready:false,blockers:['Shot is missing.']};
+  if(!output)return{ready:false,blockers:['Render output is missing, belongs to another shot, or is not video.']};
+
+  const recordedInputKey=renderOutputProductionInputKey(project,output);
+  const currentInputKey=shotProjectRenderInputKey(project,shot);
+  if(!recordedInputKey)blockers.push('Render output predates production-input provenance and cannot be promoted safely.');
+  else if(recordedInputKey!==currentInputKey)blockers.push('Render output was generated from stale shot, reference, workflow, or propagated-state inputs.');
+
   if(!output.technicalQc?.passed)blockers.push('Technical QC has not passed.');
-  const latestByLayer=new Map<QcLayer,typeof project.qcResults[number]>();
-  for(const result of project.qcResults){
-    if(result.shotId!==shotId||result.renderOutputId!==outputId)continue;
-    const prior=latestByLayer.get(result.layer);
-    if(!prior||prior.createdAt<result.createdAt)latestByLayer.set(result.layer,result);
-  }
+
   for(const layer of ['visual','semantic'] as const){
-    const result=latestByLayer.get(layer);
-    if(!result)blockers.push(`${layer} QC is missing.`);
-    else if(result.status!=='pass')blockers.push(`${layer} QC is ${result.status}.`);
+    const expected=shotQcInputKey(project,shotId,outputId,layer);
+    const results=project.qcResults.filter(result=>result.shotId===shotId&&result.renderOutputId===outputId&&result.layer===layer);
+    const matching=results.filter(result=>result.inputKey===expected).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+    if(!matching){
+      blockers.push(results.length?`${layer} QC is stale for current shot/state inputs.`:`${layer} QC is missing.`);
+    }else if(matching.status!=='pass')blockers.push(`${layer} QC is ${matching.status}.`);
   }
+
   const hasContinuityDependency=project.shotDependencies.some(edge=>edge.fromShotId===shotId||edge.toShotId===shotId);
   if(hasContinuityDependency){
-    const continuity=latestByLayer.get('continuity');
-    if(!continuity)blockers.push('continuity QC is missing.');
-    else if(continuity.status!=='pass')blockers.push(`continuity QC is ${continuity.status}.`);
+    const layer='continuity' as const,expected=shotQcInputKey(project,shotId,outputId,layer);
+    const results=project.qcResults.filter(result=>result.shotId===shotId&&result.renderOutputId===outputId&&result.layer===layer);
+    const matching=results.filter(result=>result.inputKey===expected).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+    if(!matching)blockers.push(results.length?'continuity QC is stale for current dependency/state inputs.':'continuity QC is missing.');
+    else if(matching.status!=='pass')blockers.push(`continuity QC is ${matching.status}.`);
   }
   return{ready:blockers.length===0,blockers};
 }
