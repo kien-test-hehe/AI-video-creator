@@ -21,10 +21,12 @@ export interface LoadedProject {
   migrationNotes: string[];
 }
 
+export class UnsupportedProjectSchemaError extends Error {}
+
 export function loadPortableProject(raw: unknown, openedRoot: string): LoadedProject {
   const source = asObject(raw, 'project');
   const version = Number(source.schemaVersion ?? 1);
-  if (version !== 1 && version !== 2) throw new Error(`Unsupported project schema: ${String(source.schemaVersion)}`);
+  if (version !== 1 && version !== 2) throw new UnsupportedProjectSchemaError(`Unsupported project schema: ${String(source.schemaVersion)}`);
   const migrationNotes: string[] = [];
   const normalized = version === 1 ? migrateV1ToV2(source, migrationNotes) : source;
   const project = sanitizeV2(normalized, openedRoot);
