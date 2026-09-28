@@ -23,7 +23,7 @@ export async function technicalQcVideo(machine:AppMachineSettings,path:string,sh
   }
   if(shot?.generation.includeAudio&&probe.hasAudio&&audioSilent)issues.push('Shot requested audio, but the output audio stream is silent.');
   if(audioPeakDb!=null&&audioPeakDb>-0.1)warnings.push(`Audio peak is ${audioPeakDb.toFixed(1)} dB; clipping risk.`);
-  return{checkedAt:new Date().toISOString(),passed:issues.length===0,warnings,durationSec:duration,width:probe.video?.width,height:probe.video?.height,fps:probe.video?.fps,hasAudio:probe.hasAudio,audioPeakDb,issues};
+  return{checkedAt:new Date().toISOString(),passed:issues.length===0,warnings:warnings.slice(0,128).map(value=>value.slice(0,4096)),durationSec:duration,width:probe.video?.width,height:probe.video?.height,fps:probe.video?.fps,hasAudio:probe.hasAudio,audioPeakDb,issues:issues.slice(0,128).map(value=>value.slice(0,4096))};
 }
 
 export function technicalQcStructuralIssues(
