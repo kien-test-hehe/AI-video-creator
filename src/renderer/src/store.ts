@@ -21,14 +21,19 @@ export const useAppStore=create<AppState>((set,get)=>({
     const next=structuredClone(current);
     next.renderJobs=structuredClone(mainProject.renderJobs);
     next.renderOutputs=structuredClone(mainProject.renderOutputs);
-    next.shotStates=structuredClone(mainProject.shotStates);
-    next.shotDependencies=structuredClone(mainProject.shotDependencies);
-    next.qcResults=structuredClone(mainProject.qcResults);
-    next.humanTasks=structuredClone(mainProject.humanTasks);
-    next.cutRevisions=structuredClone(mainProject.cutRevisions);
+    if(!state.projectDirty){
+      next.shotStates=structuredClone(mainProject.shotStates);
+      next.shotDependencies=structuredClone(mainProject.shotDependencies);
+      next.qcResults=structuredClone(mainProject.qcResults);
+      next.humanTasks=structuredClone(mainProject.humanTasks);
+      next.cutRevisions=structuredClone(mainProject.cutRevisions);
+    }
     const runtime=new Map(mainProject.shots.map(shot=>[shot.id,shot]));
     for(const shot of next.shots){
       const server=runtime.get(shot.id);if(!server)continue;
+      const localInputKey=shotProjectRenderInputKey(next,shot);
+      const serverInputKey=shotProjectRenderInputKey(mainProject,server);
+      if(state.projectDirty&&localInputKey!==serverInputKey)continue;
       shot.latestAttemptRenderId=server.latestAttemptRenderId;
       shot.canonicalRenderId=server.canonicalRenderId;
       shot.plannedStartStateId=server.plannedStartStateId;
@@ -36,7 +41,6 @@ export const useAppStore=create<AppState>((set,get)=>({
       shot.actualStartStateId=server.actualStartStateId;
       shot.observedFinalStateId=server.observedFinalStateId;
       if(!state.projectDirty&&server.actualStartStateId)shot.startFrameAssetId=server.startFrameAssetId;
-      if(shotProjectRenderInputKey(next,shot)!==shotProjectRenderInputKey(mainProject,server))continue;
       shot.status=server.status;
       shot.latestRenderId=server.latestRenderId;
     }
