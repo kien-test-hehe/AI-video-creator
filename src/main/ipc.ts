@@ -91,6 +91,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     if(created){
       const provisionWarning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(provisionWarning){console.warn('WanGP auto-provision warning:',provisionWarning);showPostSwitchWarning('WanGP auto-provisioning',provisionWarning);}
       const queueWarning=await runPostSwitchStep(()=>queue.reconcileAfterProjectOpen());if(queueWarning){console.warn('Queue reset warning:',queueWarning);showPostSwitchWarning('render queue reset',queueWarning);}
+      const automationWarning=await runPostSwitchStep(()=>automation.reconcileAfterProjectOpen());if(automationWarning){console.warn('Automation recovery warning:',automationWarning);showPostSwitchWarning('autonomous production recovery',automationWarning);}
     }
     return projects.getCurrent();
   }));
@@ -99,6 +100,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     if (opened) {
       const provisionWarning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(provisionWarning){console.warn('WanGP auto-provision warning:',provisionWarning);showPostSwitchWarning('WanGP auto-provisioning',provisionWarning);}
       const recoveryWarning=await runPostSwitchStep(()=>queue.reconcileAfterProjectOpen());if(recoveryWarning){console.warn('Render recovery warning:',recoveryWarning);showPostSwitchWarning('render recovery',recoveryWarning);}
+      const automationWarning=await runPostSwitchStep(()=>automation.reconcileAfterProjectOpen());if(automationWarning){console.warn('Automation recovery warning:',automationWarning);showPostSwitchWarning('autonomous production recovery',automationWarning);}
     }
     return projects.getCurrent();
   }));
