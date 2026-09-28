@@ -9,7 +9,7 @@ import { loadPortableProject, UnsupportedProjectSchemaError } from './project-sc
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
 import { readJsonFileLimited, stringifyJsonLimited } from './json-file';
-import { invalidateObservedFinalState, invalidateStateCascade, rebuildDefaultSequentialDependencies, refreshCanonicalRender } from '../../shared/production-state';
+import { invalidateObservedFinalState, invalidateStateCascade, rebuildDefaultSequentialDependencies, refreshCanonicalRender, shotStateFingerprint } from '../../shared/production-state';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -176,7 +176,23 @@ export class ProjectService {
         const stateIds=new Set(incoming.shotStates.map(state=>state.id));
         shot.plannedStartStateId=currentShot.plannedStartStateId&&stateIds.has(currentShot.plannedStartStateId)?currentShot.plannedStartStateId:undefined;
         shot.plannedEndStateId=currentShot.plannedEndStateId&&stateIds.has(currentShot.plannedEndStateId)?currentShot.plannedEndStateId:undefined;
-        shot.actualStartStateId=currentShot.actualStartStateId&&stateIds.has(currentShot.actualStartStateId)?currentShot.actualStartStateId:undefined;
+        const manualStartFrameChanged=shot.startFrameAssetId!==currentShot.startFrameAssetId;
+        const retainedActualId=currentShot.actualStartStateId&&stateIds.has(currentShot.actualStartStateId)?currentShot.actualStartStateId:undefined;
+        if(manualStartFrameChanged){
+          const prior=retainedActualId?incoming.shotStates.find(state=>state.id===retainedActualId):undefined;
+          if(prior)invalidateStateCascade(incoming,[prior.id],'Start frame was manually changed; prior propagated start state is stale.');
+          if(shot.startFrameAssetId){
+            const now=new Date().toISOString(),humanState={
+              id:randomUUID(),shotId:shot.id,role:'actual-start' as const,source:'human' as const,status:'current' as const,
+              frameAssetId:shot.startFrameAssetId,
+              characters:structuredClone(prior?.characters??[]),props:structuredClone(prior?.props??[]),
+              environment:structuredClone(prior?.environment??{}),camera:structuredClone(prior?.camera??{}),
+              actionPhase:prior?.actionPhase??'',dialogueState:prior?.dialogueState??'',confidence:prior?.confidence,createdAt:now
+            };
+            humanState.fingerprint=shotStateFingerprint(humanState);
+            incoming.shotStates.push(humanState);shot.actualStartStateId=humanState.id;
+          }else shot.actualStartStateId=undefined;
+        }else shot.actualStartStateId=retainedActualId;
         shot.observedFinalStateId=currentShot.observedFinalStateId&&stateIds.has(currentShot.observedFinalStateId)?currentShot.observedFinalStateId:undefined;
       }
       rebuildDefaultSequentialDependencies(incoming,undefined,new Date().toISOString());
