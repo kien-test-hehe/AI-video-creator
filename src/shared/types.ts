@@ -198,7 +198,16 @@ export interface CutRevision {
   createdAt: ISODate;
 }
 export interface Scene { id:UUID;index:number;heading:string;body:string;location?:string;timeOfDay?:string;shotIds:UUID[]; }
-export interface Asset { id:UUID;kind:AssetKind;name:string;sourcePath:string;projectPath:string;mimeType?:string;tags:string[];notes:string;createdAt:ISODate; }
+export interface AssetContinuityProfile {
+  identityAnchors:string[];
+  forbiddenChanges:string[];
+  appearance?:string;
+  geometry?:string;
+  state?:string;
+  lighting?:string;
+  spatialRules?:string;
+}
+export interface Asset { id:UUID;kind:AssetKind;name:string;sourcePath:string;projectPath:string;mimeType?:string;tags:string[];notes:string;continuity?:AssetContinuityProfile;createdAt:ISODate; }
 export interface ShotGenerationSettings { modelFamily:ModelFamily;mode:GenerationMode;quality:QualityIntent;width:number;height:number;frames:number;fps:number;steps?:number;cfg?:number;seed:number;negativePrompt:string;includeAudio:boolean;workflowProfileId?:UUID; }
 export interface Shot { id:UUID;sceneId:UUID;index:number;title:string;prompt:string;camera:string;action:string;dialogue:string;continuityNotes:string;characterAssetIds:UUID[];locationAssetId?:UUID;propAssetIds:UUID[];referenceAssetIds?:UUID[];startFrameAssetId?:UUID;endFrameAssetId?:UUID;referenceVideoAssetId?:UUID;audioAssetId?:UUID;status:ShotStatus;generation:ShotGenerationSettings;latestRenderId?:UUID;latestAttemptRenderId?:UUID;canonicalRenderId?:UUID;plannedStartStateId?:UUID;plannedEndStateId?:UUID;actualStartStateId?:UUID;observedFinalStateId?:UUID;previz?:PrevizSpec; }
 
