@@ -204,6 +204,14 @@ function selectFields(source:ShotState,fields:ReadonlySet<ContinuityField>):Pick
   };
 }
 
+export function continuityFrameForShot(project:FilmProject,shot:Shot|undefined):{assetId:string;source:'observed-final'|'planned-end'}|undefined{
+  if(!shot)return undefined;
+  const observed=shot.observedFinalStateId?project.shotStates.find(state=>state.id===shot.observedFinalStateId&&state.shotId===shot.id&&state.role==='observed-final'&&state.status==='current'):undefined;
+  if(observed?.frameAssetId)return{assetId:observed.frameAssetId,source:'observed-final'};
+  if(shot.endFrameAssetId)return{assetId:shot.endFrameAssetId,source:'planned-end'};
+  return undefined;
+}
+
 export function propagateObservedFinalState(project:FilmProject,sourceShotId:string,createdAt=new Date().toISOString()):string[]{
   const sourceShot=project.shots.find(shot=>shot.id===sourceShotId);
   const sourceState=sourceShot?.observedFinalStateId
