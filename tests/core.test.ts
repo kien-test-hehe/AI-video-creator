@@ -44,6 +44,7 @@ import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
 import { canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
+import { useAppStore } from '../src/renderer/src/store';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1573,6 +1574,29 @@ describe('production topology and destructive mutation regression guards',()=>{
       expect(saved.shotStates.find(item=>item.id==='final-a')?.status).toBe('stale');
       expect(saved.shotStates.find(item=>item.id==='start-b')?.status).toBe('stale');
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('does not resurrect server canonical/state pointers over an unsaved dirty render-input edit',()=>{
+    const localShot=shot('a',1),serverShot=structuredClone(localShot);
+    localShot.prompt='edited locally';localShot.canonicalRenderId=undefined;localShot.observedFinalStateId=undefined;
+    serverShot.prompt='old server prompt';serverShot.canonicalRenderId='out-a';serverShot.observedFinalStateId='final-a';
+    const base={
+      schemaVersion:3,id:'sync-project',name:'sync',rootPath:'/tmp/sync',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'sync',logline:'',script:'',notes:''},scenes:[{id:'scene-topology',index:1,heading:'',body:'',shotIds:['a']}],
+      assets:[],renderJobs:[],timeline:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    };
+    const local={...structuredClone(base),shots:[localShot],renderOutputs:[],shotStates:[]} as FilmProject;
+    const server={...structuredClone(base),shots:[serverShot],renderOutputs:[{id:'out-a',jobId:'orphaned',shotId:'a',path:'/tmp/sync/renders/out-a.mp4',filename:'out-a.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'}],shotStates:[{id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'}]} as FilmProject;
+    useAppStore.setState({project:local,projectDirty:true});
+    useAppStore.getState().syncRuntime(server);
+    const merged=useAppStore.getState().project!;
+    expect(merged.shots[0].prompt).toBe('edited locally');
+    expect(merged.shots[0].canonicalRenderId).toBeUndefined();
+    expect(merged.shots[0].observedFinalStateId).toBeUndefined();
+    expect(merged.shotStates).toEqual([]);
+    expect(merged.renderOutputs.map(output=>output.id)).toEqual(['out-a']);
+    useAppStore.setState({project:null,projectDirty:false});
   });
 
   it('persists a renderer preferred-take change without granting canonical authority',async()=>{
