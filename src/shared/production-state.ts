@@ -347,7 +347,7 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
     }else if(matching.status!=='pass')blockers.push(`${layer} QC is ${matching.status}.`);
   }
 
-  const hasContinuityDependency=project.shotDependencies.some(edge=>edge.fromShotId===shotId||edge.toShotId===shotId);
+  const hasContinuityDependency=project.shotDependencies.some(edge=>(edge.fromShotId===shotId||edge.toShotId===shotId)&&edge.propagate.length>0&&edge.relation!=='parallel');
   if(hasContinuityDependency){
     const layer='continuity' as const,expected=shotQcInputKey(project,shotId,outputId,layer);
     const results=project.qcResults.filter(result=>result.shotId===shotId&&result.renderOutputId===outputId&&result.layer===layer);
