@@ -55,7 +55,7 @@ function migrateV1ToV2(source: Record<string, any>, notes: string[]): Record<str
 
 function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProject {
   const now = new Date().toISOString();
-  const id = safeId(source.id);
+  const id = safeId(source.id,true);
   const settings = sanitizeProjectSettings(source.settings);
   const scenes = boundedArray(source.scenes,'project scenes',10_000).map(sanitizeScene);
   const sceneIds = new Set(scenes.map(s=>s.id));
@@ -415,8 +415,8 @@ function optionalEnum<T extends string>(value:unknown,allowed:ReadonlySet<T>,lab
   if(typeof value==='string'&&allowed.has(value as T))return value as T;
   throw new Error(`Invalid ${label}: ${String(value).slice(0,128)}`);
 }
-function safeId(value: unknown): string {
-  if(value==null||value==='')return randomUUID();
+function safeId(value: unknown,allowMissing=false): string {
+  if(value==null||value===''){if(allowMissing)return randomUUID();throw new Error('Missing canonical project entity identifier.');}
   if (typeof value === 'string' && /^[a-zA-Z0-9._:-]{1,256}$/.test(value)) return value;
   throw new Error(`Invalid project identifier: ${typeof value==='string'?value.slice(0,128):String(value)}`);
 }
