@@ -15,6 +15,9 @@ import { createHumanTask, recordObservedFinalState, recordShotQc } from './produ
 import { ensurePrevizPlan } from './previz-service';
 import { releaseLocalVisionModel } from './local-vision-service';
 import { AutomationJournal } from './automation-journal';
+import { KeyframeLeaseStore } from './keyframe-lease';
+import { generateKeyframe } from './keyframe-service';
+import { provisionRecommendedWanGpProfiles } from './wangp-catalog-service';
 
 const ACTIVE_RENDER=new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 
@@ -28,7 +31,7 @@ export class ProductionRuntimeService extends EventEmitter{
   private journal=new AutomationJournal();
   private journalTail:Promise<void>=Promise.resolve();
 
-  constructor(private projects:ProjectService,private queue:RenderQueueService,private settings:AppSettingsService){
+  constructor(private projects:ProjectService,private queue:RenderQueueService,private settings:AppSettingsService,private keyframeLeases:KeyframeLeaseStore){
     super();
     this.queue.on('snapshot',()=>this.wake());
   }
@@ -73,9 +76,11 @@ export class ProductionRuntimeService extends EventEmitter{
     if(!this.targetShotIds.length)throw new Error('There are no shots to automate.');
     this.maxAutoRetries=Math.max(0,Math.min(5,Math.trunc(request.maxAutoRetries??2)));
     this.buildTimeline=request.buildTimeline!==false;
-    this.status={running:true,paused:false,phase:'preflight',projectRoot:project.rootPath,message:'Running production preflight…',startedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),completedShotIds:[],retryCounts:{},blockedHumanTaskIds:[]};
+    this.status={running:true,paused:false,phase:'preflight',projectRoot:project.rootPath,message:'Preparing local production routes…',startedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),completedShotIds:[],retryCounts:{},blockedHumanTaskIds:[]};
     this.emitStatus();
-    const report=await preflightProject(project,this.settings.get());
+    await this.ensureAutomationProfiles();
+    const current=this.projects.getCurrent();if(!current){this.fail('Project closed while preparing local production routes.');return this.snapshot();}
+    const report=await preflightProject(current,this.settings.get());
     if(!report.ready){
       const detail=report.issues.filter(issue=>issue.level==='error').slice(0,8).map(issue=>`${issue.code}: ${issue.message}`).join(' | ');
       this.fail(`Preflight blocked autonomous production. ${detail}`);
@@ -163,6 +168,16 @@ export class ProductionRuntimeService extends EventEmitter{
             const after=this.projects.getCurrent();this.setStatus({phase:'waiting-human',message:`Automatic retries exhausted for ${shot.title}.`,blockedHumanTaskIds:after?.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id).map(task=>task.id)??[]});break;
           }
           this.setStatus({phase:'waiting-human',message:`${shot.title} is not canonical-ready and needs review.`});break;
+        }
+
+        await this.ensureShotGenerationInputs(shot.id);
+        project=this.projects.getCurrent();
+        if(!project){this.fail('Project closed while preparing shot generation inputs.');break;}
+        shot=project.shots.find(item=>item.id===shot!.id);
+        if(!shot){this.fail('Current shot disappeared while preparing shot generation inputs.');break;}
+        const preparationBlockers=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id);
+        if(preparationBlockers.length){
+          this.setStatus({phase:'waiting-human',message:`Generation inputs for ${shot.title} need human action.`,blockedHumanTaskIds:preparationBlockers.map(task=>task.id)});break;
         }
 
         const failedJob=[...project.renderJobs].filter(job=>job.shotId===shot.id&&['failed','orphaned'].includes(job.status)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0];
@@ -290,6 +305,78 @@ export class ProductionRuntimeService extends EventEmitter{
     return true;
   }
 
+  private async ensureAutomationProfiles():Promise<void>{
+    const project=this.projects.getCurrent();if(!project)return;
+    const usable=(purpose:'video'|'image')=>project.settings.workflowProfiles.some(profile=>profile.enabled&&(profile.purpose??'video')===purpose&&Boolean(profile.workflowPath)&&profile.validation?.structuralStatus==='valid'&&Boolean(profile.validation.sourceSha256)&&Boolean(profile.validation.runtimeFingerprint));
+    const targetShots=project.shots.filter(shot=>this.targetShotIds.includes(shot.id));
+    const needsImage=targetShots.some(shot=>(shot.generation.mode==='i2v'&&!shot.startFrameAssetId)||(shot.generation.mode==='flf2v'&&(!shot.startFrameAssetId||!shot.endFrameAssetId)));
+    if(usable('video')&&(!needsImage||usable('image')))return;
+    const machine=this.settings.get();
+    if(machine.wangp.executionMode!=='native'||!machine.wangp.rootPath.trim()){
+      if(!usable('video'))throw new Error('No validated local video workflow is available. Configure WanGP native mode or validate a video workflow in Settings.');
+      return;
+    }
+    this.setStatus({phase:'preflight',message:'Auto-provisioning recommended WanGP video/image profiles for this project…'});
+    try{await provisionRecommendedWanGpProfiles(this.projects,this.settings);}
+    catch(error){
+      const current=this.projects.getCurrent();
+      const videoReady=current?.settings.workflowProfiles.some(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.validation?.structuralStatus==='valid');
+      if(!videoReady)throw error;
+      console.warn('Automatic keyframe-profile provisioning was unavailable; AUTO RUN can fall back to Human Tasks for missing keyframes.',error);
+    }
+  }
+
+  private async ensureShotGenerationInputs(shotId:string):Promise<void>{
+    let project=this.projects.getCurrent();if(!project)return;
+    let shot=project.shots.find(item=>item.id===shotId);if(!shot)return;
+    await this.reconcilePreparationTasks(shot);
+    project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
+
+    if(shot.generation.mode==='v2v'){
+      if(!shot.referenceVideoAssetId)await this.ensureHumanTask(shot,'route-unsupported','Reference video required',`Shot “${shot.title}” uses V2V but has no reference video.`,'Attach a reference video in Shot Workshop, then resume AUTO RUN.');
+      return;
+    }
+    const needsStart=shot.generation.mode==='i2v'||shot.generation.mode==='flf2v';
+    const needsEnd=shot.generation.mode==='flf2v';
+
+    if(needsStart&&!shot.startFrameAssetId){
+      const propagated=shot.actualStartStateId?project.shotStates.find(state=>state.id===shot.actualStartStateId&&state.status!=='stale'):undefined;
+      if(propagated?.frameAssetId&&project.assets.some(asset=>asset.id===propagated.frameAssetId)){
+        await this.projects.mutate(next=>{const target=next.shots.find(item=>item.id===shotId);if(target&&!target.startFrameAssetId){target.startFrameAssetId=propagated.frameAssetId;target.latestRenderId=undefined;target.canonicalRenderId=undefined;invalidateObservedFinalState(next,target.id,'Actual propagated start frame became the generation start reference.');}});
+      }else{
+        const profile=selectImageProfile(project);
+        if(profile){
+          this.setStatus({phase:'keyframes',message:`Generating start keyframe for ${shot.title}.`});
+          await generateKeyframe(this.projects,this.settings.get(),{projectRoot:project.rootPath,shotId,role:'start',workflowProfileId:profile.id},this.keyframeLeases);
+        }else await this.ensureHumanTask(shot,'verify-keyframe','Start keyframe required',`Shot “${shot.title}” uses ${shot.generation.mode} and has no start frame or validated local image workflow.`,'Use Shot Workshop to generate/import and attach a start keyframe, then resume AUTO RUN.');
+      }
+    }
+
+    project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
+    if(needsEnd&&!shot.endFrameAssetId){
+      const profile=selectImageProfile(project);
+      if(profile){
+        this.setStatus({phase:'keyframes',message:`Generating target end keyframe for ${shot.title}.`});
+        await generateKeyframe(this.projects,this.settings.get(),{projectRoot:project.rootPath,shotId,role:'end',workflowProfileId:profile.id},this.keyframeLeases);
+      }else await this.ensureHumanTask(shot,'verify-keyframe','End keyframe required',`Shot “${shot.title}” uses FLF2V and has no end keyframe or validated local image workflow.`,'Use Shot Workshop to generate/import and attach a target end keyframe, then resume AUTO RUN.');
+    }
+    await this.reconcilePreparationTasks(this.projects.getCurrent()!.shots.find(item=>item.id===shotId)!);
+  }
+
+  private async reconcilePreparationTasks(shot:Shot):Promise<void>{
+    const project=this.projects.getCurrent();if(!project)return;
+    const now=new Date().toISOString();
+    const satisfied=(taskTitle:string)=>{
+      if(taskTitle==='Start keyframe required')return Boolean(shot.startFrameAssetId);
+      if(taskTitle==='End keyframe required')return Boolean(shot.endFrameAssetId);
+      if(taskTitle==='Reference video required')return Boolean(shot.referenceVideoAssetId);
+      return false;
+    };
+    const closable=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id&&['verify-keyframe','route-unsupported'].includes(task.type)&&satisfied(task.title));
+    if(!closable.length)return;
+    await this.projects.mutate(next=>{for(const task of next.humanTasks){if(!closable.some(item=>item.id===task.id))continue;task.status='resolved';task.resolvedAt=now;task.resolution='Automatically resolved because the required generation input is now attached.';}});
+  }
+
   private async ensureShotPreviz(shotId:string):Promise<void>{
     const project=this.projects.getCurrent();if(!project)return;
     const shot=project.shots.find(item=>item.id===shotId);if(!shot)return;
@@ -338,6 +425,12 @@ export class ProductionRuntimeService extends EventEmitter{
     const snapshot=this.snapshot(),targetShotIds=[...this.targetShotIds],maxAutoRetries=this.maxAutoRetries,buildTimeline=this.buildTimeline;
     this.journalTail=this.journalTail.then(()=>this.journal.write(project,{schemaVersion:1,projectId:project.id,projectRoot:project.rootPath,targetShotIds,maxAutoRetries,buildTimeline,status:snapshot})).catch(error=>{console.warn('Could not persist autonomous production journal:',error);});
   }
+}
+
+function selectImageProfile(project:FilmProject){
+  return[...project.settings.workflowProfiles]
+    .filter(profile=>profile.enabled&&(profile.purpose??'video')==='image'&&Boolean(profile.workflowPath)&&profile.validation?.structuralStatus==='valid'&&Boolean(profile.validation.sourceSha256)&&Boolean(profile.validation.runtimeFingerprint))
+    .sort((a,b)=>Number(Boolean(b.validation?.lastSuccessfulRenderAt))-Number(Boolean(a.validation?.lastSuccessfulRenderAt))||(b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||a.id.localeCompare(b.id))[0];
 }
 
 function orderedShots(project:FilmProject):Shot[]{
