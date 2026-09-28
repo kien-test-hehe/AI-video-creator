@@ -220,7 +220,7 @@ export function shotProductionInputKey(project:FilmProject,shot:Shot):string{
 
 export function renderOutputProductionInputKey(project:FilmProject,output:RenderOutput):string|undefined{
   if(output.productionInputKey)return output.productionInputKey;
-  return project.renderJobs.find(job=>job.id===output.jobId)?.spec?.productionInputKey;
+  return project.renderJobs?.find(job=>job.id===output.jobId)?.spec?.productionInputKey;
 }
 
 export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string,layer:Exclude<QcLayer,'technical'>):string{
