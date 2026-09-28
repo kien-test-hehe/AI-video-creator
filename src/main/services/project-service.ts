@@ -8,11 +8,16 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { loadPortableProject, UnsupportedProjectSchemaError } from './project-schema';
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
-import { readJsonFileLimited } from './json-file';
+import { readJsonFileLimited, stringifyJsonLimited } from './json-file';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
+export const MAX_PROJECT_JSON_BYTES=50*1024*1024;
 const ASSET_KINDS=new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
+
+export function serializeProjectForStorage(project:FilmProject,maxBytes=MAX_PROJECT_JSON_BYTES):string{
+  return stringifyJsonLimited(project,'CineForge project',maxBytes);
+}
 
 export class ProjectService {
   private current: FilmProject | null = null;
@@ -74,13 +79,13 @@ export class ProjectService {
     await this.assertProjectStateFileNotSymlink(backup,'CineForge backup project file');
     let raw:unknown,loaded:ReturnType<typeof loadPortableProject>,recoveredFromBackup=false,primaryFailure:unknown;
     try{
-      raw=await readJsonFileLimited(file,'CineForge project file',50*1024*1024);
+      raw=await readJsonFileLimited(file,'CineForge project file',MAX_PROJECT_JSON_BYTES);
       loaded=loadPortableProject(raw,openedRoot);
     }catch(primaryError){
       if(primaryError instanceof UnsupportedProjectSchemaError)throw primaryError;
       primaryFailure=primaryError;
       try{
-        raw=await readJsonFileLimited(backup,'CineForge backup project file',50*1024*1024);
+        raw=await readJsonFileLimited(backup,'CineForge backup project file',MAX_PROJECT_JSON_BYTES);
         loaded=loadPortableProject(raw,openedRoot);
         recoveredFromBackup=true;
       }catch(backupError){
@@ -338,10 +343,10 @@ export class ProjectService {
     const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${randomUUID()}.tmp`);
     await this.assertProjectStateFileNotSymlink(projectFile,'CineForge project file');
     await this.assertProjectStateFileNotSymlink(backupFile,'CineForge backup project file');
-    const payload = JSON.stringify(serializable, null, 2);
+    const payload = serializeProjectForStorage(serializable);
     const previous=this.current&&this.current.id===project.id&&this.current.rootPath===project.rootPath?structuredClone(this.current):undefined;
     if(previous){
-      const backupPayload=JSON.stringify(previous,null,2);
+      const backupPayload=serializeProjectForStorage(previous);
       try{await writeFile(backupFile,backupPayload,{encoding:'utf8',mode:0o600});}
       catch(error){throw new Error(`Could not create trusted project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
     }else{
