@@ -116,6 +116,13 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
     assertProject(project,request.projectRoot);
     const task=project.humanTasks.find(item=>item.id===request.taskId);if(!task)throw new Error('Human task not found.');
     if(!['resolved','dismissed'].includes(request.status))throw new Error('Human task can only be resolved or dismissed.');
+    const linkedQc=project.qcResults.find(result=>result.humanOverrideTaskId===task.id);
+    if(linkedQc){
+      const verdict=project.qcResults
+        .filter(result=>result.id!==linkedQc.id&&result.shotId===linkedQc.shotId&&result.renderOutputId===linkedQc.renderOutputId&&result.layer===linkedQc.layer&&result.inputKey===linkedQc.inputKey&&result.createdAt>=linkedQc.createdAt)
+        .sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+      if(!verdict||!['pass','fail'].includes(verdict.status))throw new Error('QC review tasks require a current PASS or FAIL verdict before they can be closed.');
+    }
     task.status=request.status;
     task.resolution=requireString(request.resolution,20_000,'human task resolution');
     task.resolvedAt=new Date().toISOString();
