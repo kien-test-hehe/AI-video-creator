@@ -221,6 +221,17 @@ export class ProductionRuntimeService extends EventEmitter{
       const frameAssetId=await this.ensureObservedFrameAsset(output,stableFinalFrame);
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
       const draft=await extractObservedStateDraft(this.settings.get(),project,shot,stableFinalFrame);
+      const confidenceReviewTitle=`Observed final state confidence · ${shot.title}`;
+      const confidenceApproved=project.humanTasks.some(task=>task.shotId===shotId&&task.title===confidenceReviewTitle&&task.status==='resolved'&&task.relatedRenderOutputIds.includes(outputId));
+      if(draft.confidence<0.6&&!confidenceApproved){
+        await this.ensureHumanTask(
+          shot,'manual-qc',confidenceReviewTitle,
+          `Automatic final-state extraction confidence is ${Math.round(draft.confidence*100)}%, below the 60% auto-propagation threshold.`,
+          'Inspect the extracted final frame and rendered take. Resolve this task to approve the extracted state, or adjust/re-render the shot.',
+          [outputId]
+        );
+        return;
+      }
       await recordObservedFinalState(this.projects,{projectRoot:project.rootPath,shotId,renderOutputId:outputId,frameAssetId,...draft});
     }
     }finally{await releaseLocalVisionModel(this.settings.get());}
@@ -295,10 +306,10 @@ export class ProductionRuntimeService extends EventEmitter{
     });
   }
 
-  private async ensureHumanTask(shot:Shot,type:'verify-previz'|'manual-qc',title:string,reason:string,recommendedAction:string):Promise<void>{
+  private async ensureHumanTask(shot:Shot,type:'verify-previz'|'manual-qc',title:string,reason:string,recommendedAction:string,relatedRenderOutputIds:string[]=[]):Promise<void>{
     const project=this.projects.getCurrent();if(!project)return;
-    if(project.humanTasks.some(task=>task.status==='open'&&task.shotId===shot.id&&task.type===type&&task.title===title))return;
-    await createHumanTask(this.projects,{projectRoot:project.rootPath,type,shotId:shot.id,title,reason,recommendedAction});
+    if(project.humanTasks.some(task=>task.status==='open'&&task.shotId===shot.id&&task.type===type&&task.title===title&&relatedRenderOutputIds.every(id=>task.relatedRenderOutputIds.includes(id))))return;
+    await createHumanTask(this.projects,{projectRoot:project.rootPath,type,shotId:shot.id,title,reason,recommendedAction,relatedRenderOutputIds});
   }
 
   private async finish():Promise<void>{
