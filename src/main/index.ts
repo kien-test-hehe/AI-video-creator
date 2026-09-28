@@ -81,7 +81,7 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   renderLeases=new RenderLeaseStore(app.getPath('userData'),machineSettings.getJournalKey());
   projects = new ProjectService();
   queue = new RenderQueueService(projects, machineSettings,renderLeases);
-  automation = new ProductionRuntimeService(projects,queue,machineSettings);
+  automation = new ProductionRuntimeService(projects,queue,machineSettings,keyframeLeases);
   const activeRenderLease=await renderLeases.read();
   if(activeRenderLease){
     const recoveredProject=await projects.openAt(activeRenderLease.projectRoot);
