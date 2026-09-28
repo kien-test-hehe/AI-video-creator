@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react';
-import type { FilmProject, PreflightReport, SystemProbe } from '../../../shared/types';
+import type { FilmProject, PreflightReport, SystemProbe, WorkstationReadiness } from '../../../shared/types';
 import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 
 export function Dashboard(){
   const {project,probe,setProbe,setError,setNotice,setQueue,setView}=useAppStore();
   const [report,setReport]=useState<PreflightReport>();
+  const [readiness,setReadiness]=useState<WorkstationReadiness>();
   const [checking,setChecking]=useState(false);
 
   const runProbe=async()=>{
     const requestedProjectId=useAppStore.getState().project?.id;
     try{
-      const next=await window.cineforge.system.probe();
-      if(useAppStore.getState().project?.id===requestedProjectId)setProbe(next);
+      const next=await window.cineforge.system.readiness();
+      if(useAppStore.getState().project?.id===requestedProjectId){setReadiness(next);setProbe(next.probe);}
     }catch(e){if(useAppStore.getState().project?.id===requestedProjectId)setError(e instanceof Error?e.message:String(e));}
   };
   const preflight=async()=>{
@@ -51,11 +52,14 @@ export function Dashboard(){
     }catch(e){setError(e instanceof Error?e.message:String(e));}
   };
   const projectId=project?.id;
-  useEffect(()=>{let disposed=false;const requestedProjectId=projectId;void window.cineforge.system.probe().then(next=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setProbe(next);}).catch(e=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setError(e instanceof Error?e.message:String(e));});return()=>{disposed=true;};},[projectId,setError,setProbe]);
+  useEffect(()=>{let disposed=false;const requestedProjectId=projectId;void window.cineforge.system.readiness().then(next=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId){setReadiness(next);setProbe(next.probe);}}).catch(e=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setError(e instanceof Error?e.message:String(e));});return()=>{disposed=true;};},[projectId,setError,setProbe]);
 
   return <Page title="System & production overview" subtitle="Inspect this workstation before opening a project; project-specific render checks appear once a film is open." actions={<div className="row"><button className="ghost" onClick={runProbe}>Probe system</button><button className="ghost" disabled={!project||checking||project.shots.length===0} onClick={preflight}>{checking?'Checking…':'Run preflight'}</button><button className="primary" disabled={!project||checking||project.shots.length===0} onClick={queueUnrendered}>Render unrendered</button></div>}>
     <div className="grid two">
       <WorkstationCard probe={probe} project={project}/>
+      <Card title="Workstation readiness" kicker={readiness?.readyForProduction?'READY':'CHECK BEFORE AUTO RUN'} actions={<button className="ghost" onClick={runProbe}>Refresh</button>}>
+        {!readiness?<p className="muted">Run the workstation check to verify GPU, runtime, FFmpeg, workflow qualification, local visual QC, Blender and finishing tools.</p>:<div className="readiness-list">{readiness.items.map(item=><div className={`readiness-item ${item.level}`} key={item.id}><Pill>{item.level}</Pill><div><strong>{item.label}</strong><span>{item.detail}</span>{item.action&&<small>{item.action}</small>}</div></div>)}</div>}
+      </Card>
       <Card title="Production rules" kicker="PIPELINE">
         <div className="rules">
           <p><b>Codex = producer/orchestrator.</b> With a project open, hardware context is written under <code>.cineforge/CODEX_MACHINE_CONTEXT.md</code>.</p>
