@@ -1,5 +1,6 @@
 param(
   [switch]$SkipWanGP,
+  [switch]$SkipVisionModel,
   [switch]$SkipBuild
 )
 
@@ -93,6 +94,53 @@ function Ensure-Python311 {
   $python = Find-Python311
   if (-not $python) { throw 'Python 3.11 installation completed but python.exe was not found. Open a new terminal and rerun setup.' }
   return $python
+}
+
+function Find-Ollama {
+  $command = Get-Command ollama.exe -ErrorAction SilentlyContinue
+  if ($command) { return $command.Source }
+  $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+  if (Test-Path $candidate) { return $candidate }
+  return $null
+}
+
+function Ensure-OllamaVision {
+  if ($SkipVisionModel) { return $null }
+  $ollama = Find-Ollama
+  if (-not $ollama) {
+    Step 'Installing Ollama for local visual/semantic QC'
+    $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if (-not $winget) { throw 'Ollama is missing and winget is unavailable. Install Ollama, then rerun setup or use -SkipVisionModel.' }
+    & $winget.Source install --id Ollama.Ollama -e --scope user --silent --accept-source-agreements --accept-package-agreements
+    if ($LASTEXITCODE -ne 0) { throw 'winget failed to install Ollama. Rerun with -SkipVisionModel to use manual Human Review instead.' }
+    $ollama = Find-Ollama
+    if (-not $ollama) { throw 'Ollama installation completed but ollama.exe was not found. Open a new terminal and rerun setup.' }
+  }
+
+  $ready = $false
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 | Out-Null
+    $ready = $true
+  } catch {}
+  if (-not $ready) {
+    Step 'Starting local Ollama service'
+    Start-Process -FilePath $ollama -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+    for ($i=0; $i -lt 30; $i++) {
+      Start-Sleep -Milliseconds 500
+      try {
+        Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 | Out-Null
+        $ready = $true
+        break
+      } catch {}
+    }
+  }
+  if (-not $ready) { throw 'Ollama was installed but its loopback API did not become ready.' }
+
+  $model = 'qwen3-vl:4b'
+  Step "Pulling local QC model $model (about 3.3 GB)"
+  & $ollama pull $model
+  if ($LASTEXITCODE -ne 0) { throw "Failed to pull $model. Rerun setup or use -SkipVisionModel for manual QC." }
+  return $model
 }
 
 function Ensure-FFmpeg {
@@ -197,6 +245,7 @@ Ensure-Node
 Assert-Nvidia
 $python = Ensure-Python311
 $ff = Ensure-FFmpeg
+$visionModel = Ensure-OllamaVision
 $wanPython = Ensure-WanGP $python
 $effectiveWanRoot = if (-not $SkipWanGP -and (Test-Path (Join-Path $WanRoot 'wgp.py'))) { $WanRoot } else { '' }
 $ffmpegPath = $ff[0]
@@ -207,13 +256,16 @@ $escapedWan = $effectiveWanRoot.Replace("'", "''")
 $escapedPy = $wanPython.Replace("'", "''")
 $escapedFfmpeg = $ffmpegPath.Replace("'", "''")
 $escapedFfprobe = $ffprobePath.Replace("'", "''")
+$effectiveDirectorModel = if ($visionModel) { $visionModel } else { '' }
+$escapedDirectorModel = $effectiveDirectorModel.Replace("'", "''")
 @(
   ('$env:CINEFORGE_WANGP_ROOT = ''{0}''' -f $escapedWan),
   ('$env:CINEFORGE_PYTHON = ''{0}''' -f $escapedPy),
   ('$env:CINEFORGE_FFMPEG = ''{0}''' -f $escapedFfmpeg),
   ('$env:CINEFORGE_FFPROBE = ''{0}''' -f $escapedFfprobe),
   '$env:CINEFORGE_COMFY_URL = ''http://127.0.0.1:8188''',
-  '$env:CINEFORGE_DIRECTOR_URL = ''http://127.0.0.1:11434/v1'''
+  '$env:CINEFORGE_DIRECTOR_URL = ''http://127.0.0.1:11434/v1''',
+  ('$env:CINEFORGE_DIRECTOR_MODEL = ''{0}''' -f $escapedDirectorModel)
 ) | Set-Content -Encoding UTF8 $EnvFile
 
 New-Item -ItemType Directory -Force -Path $BootstrapSettingsDir | Out-Null
@@ -247,8 +299,8 @@ $bootstrapSettings = @{
   }
   director = @{
     baseUrl = 'http://127.0.0.1:11434/v1'
-    model = ''
-    temperature = 0.3
+    model = $effectiveDirectorModel
+    temperature = 0.2
   }
   diagnostics = @{ persistVerboseLogs = $false }
 }
@@ -287,4 +339,5 @@ Write-Host 'CineForge workstation setup is ready.' -ForegroundColor Green
 Write-Host 'Run: start.cmd'
 Write-Host 'CapCut Pro is NOT assumed. New projects default to CapCut Free / No Pro.'
 Write-Host 'WanGP model weights download on demand on the first generation for each chosen model.'
+if ($visionModel) { Write-Host "Local automatic QC model: $visionModel via Ollama." } else { Write-Host 'Local automatic QC model skipped; visual/semantic QC will create Human Review tasks.' }
 Write-Host "Packaged CineForge will import bootstrap machine paths from: $BootstrapSettingsFile on first run (unless machine settings already exist)."
