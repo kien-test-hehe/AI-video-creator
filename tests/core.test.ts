@@ -316,6 +316,19 @@ describe('project schema canonicalization',()=>{
     const timeline:any=baseProject();timeline.timeline=[{id:'clip',shotId:'shot-1',renderOutputId:'passing-output',track:0,order:0,trimInSec:0,volume:9}];
     expect(()=>loadPortableProject(timeline,'/project')).toThrow(/allowed range 0\.\.8/i);
   });
+  it('rejects explicit invalid project enums instead of silently changing render semantics',()=>{
+    const badMode:any=baseProject();badMode.shots[0].generation.mode='telepathy';
+    expect(()=>loadPortableProject(badMode,'/project')).toThrow(/invalid shot generation mode/i);
+
+    const badContainer:any=baseProject();badContainer.settings={outputContainer:'avi'};
+    expect(()=>loadPortableProject(badContainer,'/project')).toThrow(/invalid project output container/i);
+
+    const badJob:any=baseProject();badJob.renderJobs=[{id:'job',shotId:'shot-1',createdAt:'2026-01-03T00:00:00.000Z',updatedAt:'2026-01-03T00:00:00.000Z',status:'teleported',progress:0,message:'',modelFamily:'ltx-2.5-fast',outputs:[]}];
+    expect(()=>loadPortableProject(badJob,'/project')).toThrow(/invalid render job status/i);
+
+    const badProfile:any=baseProject();badProfile.settings={workflowProfiles:[{id:'wf',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/project/workflows/wf.json',workflowFormat:'mystery',bindings:[],enabled:false}]};
+    expect(()=>loadPortableProject(badProfile,'/project')).toThrow(/invalid workflow format/i);
+  });
   it('canonicalizes parseable timestamps before lexical latest/recovery ordering',()=>{
     const raw=baseProject();raw.renderOutputs[0].createdAt='2026-01-01T09:00:00-05:00';
     const loaded=loadPortableProject(raw,'/project').project;
