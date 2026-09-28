@@ -64,6 +64,7 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
     await projects.mutate(p=>{
       const before=new Map(p.shots.map(shot=>[shot.id,shotProjectRenderInputKey(p,shot)]));
       const index=p.settings.workflowProfiles.findIndex(existing=>existing.id===id);
+      if(index<0&&p.settings.workflowProfiles.length>=512)throw new Error('Managed profile provisioning would exceed the 512-profile project safety limit.');
       if(index>=0)p.settings.workflowProfiles[index]=profile;else p.settings.workflowProfiles.push(profile);
       invalidateChangedRoutes(p,before);
     });
