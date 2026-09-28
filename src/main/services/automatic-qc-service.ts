@@ -61,6 +61,18 @@ export async function evaluateContinuityQc(machine:AppMachineSettings,project:Fi
   }catch(error){if(error instanceof LocalVisionUnavailableError)return unavailable(error,'CONTINUITY_REVIEW_REQUIRED');throw error;}
 }
 
+export async function selectStableFinalFrame(machine:AppMachineSettings,candidates:string[]):Promise<string>{
+  if(!candidates.length)throw new Error('No final-frame candidates were sampled.');
+  if(candidates.length===1)return candidates[0];
+  try{
+    const raw=await analyzeImagesWithLocalVision(machine,
+      `The images are chronological candidate frames sampled increasingly close to the end of one generated video. Choose the LATEST frame that is still a useful continuity anchor: not black/faded out, not severely motion-blurred, not corrupted, not mid-transition, and with subjects/props readable. Return {"index":1,"reason":"..."}, where index is 1-based and must reference one supplied image.`,candidates);
+    const index=Math.trunc(Number(raw?.index));
+    if(index>=1&&index<=candidates.length)return candidates[index-1];
+  }catch(error){if(!(error instanceof LocalVisionUnavailableError))throw error;}
+  return candidates[Math.max(0,candidates.length-2)];
+}
+
 export async function extractObservedStateDraft(machine:AppMachineSettings,project:FilmProject,shot:Shot,finalFramePath:string):Promise<ObservedStateDraft>{
   const knownCharacters=shot.characterAssetIds.map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({id:asset!.id,name:asset!.name}));
   const propAssetIds=shot.propAssetIds.filter(id=>project.assets.find(asset=>asset.id===id)?.kind==='prop');
