@@ -25,7 +25,7 @@ import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './proc
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
 import { canRefreshProfileValidationFromRender, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
-import { shotProductionInputKey } from '../../shared/production-state';
+import { renderOutputProductionInputKey, shotProductionInputKey } from '../../shared/production-state';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../../shared/recovery-policy';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { RenderLeaseStore } from './render-lease';
@@ -92,7 +92,8 @@ export class RenderQueueService extends EventEmitter {
       const shot=project.shots.find(s=>s.id===id);if(!shot)throw new Error(`Shot not found: ${id}`);
       if(request.skipIfRendered&&shot.latestRenderId){
         const preferred=project.renderOutputs.find(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video');
-        if(preferred){
+        const currentInputKey=shotProductionInputKey(project,shot);
+        if(preferred&&renderOutputProductionInputKey(project,preferred)===currentInputKey){
           try{await assertExistingPathInside(join(project.rootPath,'renders'),preferred.path,`preferred render for ${shot.title}`);continue;}
           catch(error:any){if(error?.code!=='ENOENT')throw error;}
         }
