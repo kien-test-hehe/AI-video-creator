@@ -274,12 +274,12 @@ export function Studio(){
         const current=useAppStore.getState().project;if(!current)throw new Error('Project closed while deciding the QC review.');
         const task=current.humanTasks.find(item=>item.id===taskId&&item.status==='open');if(!task)throw new Error('Human QC task no longer exists or is already closed.');
         const linkedQc=current.qcResults.find(result=>result.humanOverrideTaskId===taskId);
-        if(!linkedQc||!linkedQc.renderOutputId||linkedQc.layer==='technical')throw new Error('Human task is not linked to a reviewable visual, semantic, or continuity QC result.');
+        if(!linkedQc||!linkedQc.renderOutputId||linkedQc.layer==='technical'||!linkedQc.inputKey)throw new Error('Human task is not linked to a provenance-complete visual, semantic, or continuity QC result.');
         const note=window.prompt(`Review note for ${linkedQc.layer.toUpperCase()} QC ${status.toUpperCase()}:`,'Reviewed in Studio.')?.trim();
         if(note==null)return;
         if(!note)throw new Error('A human QC verdict requires a review note for the audit trail.');
         const qcProject=await window.cineforge.production.recordQc({
-          projectRoot:current.rootPath,shotId:linkedQc.shotId,renderOutputId:linkedQc.renderOutputId,layer:linkedQc.layer,status,
+          projectRoot:current.rootPath,shotId:linkedQc.shotId,renderOutputId:linkedQc.renderOutputId,layer:linkedQc.layer,status,inputKey:linkedQc.inputKey,
           issues:status==='pass'?[]:[{code:'HUMAN_REJECTED',severity:'major',message:note}]
         });
         useAppStore.getState().syncRuntime(qcProject);
