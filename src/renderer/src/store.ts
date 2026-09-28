@@ -36,11 +36,13 @@ export const useAppStore=create<AppState>((set,get)=>({
       if(state.projectDirty&&localInputKey!==serverInputKey)continue;
       shot.latestAttemptRenderId=server.latestAttemptRenderId;
       shot.canonicalRenderId=server.canonicalRenderId;
-      shot.plannedStartStateId=server.plannedStartStateId;
-      shot.plannedEndStateId=server.plannedEndStateId;
-      shot.actualStartStateId=server.actualStartStateId;
-      shot.observedFinalStateId=server.observedFinalStateId;
-      if(!state.projectDirty&&server.actualStartStateId)shot.startFrameAssetId=server.startFrameAssetId;
+      if(!state.projectDirty){
+        shot.plannedStartStateId=server.plannedStartStateId;
+        shot.plannedEndStateId=server.plannedEndStateId;
+        shot.actualStartStateId=server.actualStartStateId;
+        shot.observedFinalStateId=server.observedFinalStateId;
+        if(server.actualStartStateId)shot.startFrameAssetId=server.startFrameAssetId;
+      }
       shot.status=server.status;
       shot.latestRenderId=server.latestRenderId;
     }
