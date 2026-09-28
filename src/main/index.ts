@@ -9,6 +9,7 @@ import { RenderQueueService } from './services/render-queue';
 import { lockDownWebContents, resolveTrustedRendererUrl } from './services/ipc-security';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from './services/keyframe-lease';
 import { RenderLeaseStore } from './services/render-lease';
+import { ProductionRuntimeService } from './services/production-runtime-service';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'cineforge-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
@@ -19,6 +20,7 @@ let queue: RenderQueueService;
 let machineSettings: AppSettingsService;
 let keyframeLeases:KeyframeLeaseStore;
 let renderLeases:RenderLeaseStore;
+let automation:ProductionRuntimeService;
 let mainWindow: BrowserWindow | null = null;
 let ipcRegistered = false;
 let trustedRendererUrl = '';
@@ -79,6 +81,7 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   renderLeases=new RenderLeaseStore(app.getPath('userData'),machineSettings.getJournalKey());
   projects = new ProjectService();
   queue = new RenderQueueService(projects, machineSettings,renderLeases);
+  automation = new ProductionRuntimeService(projects,queue,machineSettings);
   const activeRenderLease=await renderLeases.read();
   if(activeRenderLease){
     const recoveredProject=await projects.openAt(activeRenderLease.projectRoot);
@@ -92,7 +95,7 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler(() => false);
 
   if (!ipcRegistered) {
-    registerIpc(projects, queue, machineSettings,keyframeLeases,trustedRendererUrl);
+    registerIpc(projects, queue, machineSettings,keyframeLeases,automation,trustedRendererUrl);
     ipcRegistered = true;
   }
   createWindow();
