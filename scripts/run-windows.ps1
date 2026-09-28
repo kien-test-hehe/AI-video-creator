@@ -16,19 +16,20 @@ if (-not (Test-Path $EnvFile) -or -not (Test-Path (Join-Path $NodeRoot 'npm.cmd'
 . $EnvFile
 
 if ($env:CINEFORGE_DIRECTOR_MODEL) {
-  $ollama = Get-Command ollama.exe -ErrorAction SilentlyContinue
-  if (-not $ollama) {
+  $ollamaCommand = Get-Command ollama.exe -ErrorAction SilentlyContinue
+  $ollamaPath = if ($ollamaCommand) { $ollamaCommand.Source } else { $null }
+  if (-not $ollamaPath) {
     $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
-    if (Test-Path $candidate) { $ollama = Get-Item $candidate }
+    if (Test-Path $candidate) { $ollamaPath = $candidate }
   }
-  if ($ollama) {
+  if ($ollamaPath) {
     $apiReady = $false
     try {
       Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 | Out-Null
       $apiReady = $true
     } catch {}
     if (-not $apiReady) {
-      Start-Process -FilePath $ollama.Source -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+      Start-Process -FilePath $ollamaPath -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
       for ($i=0; $i -lt 20; $i++) {
         Start-Sleep -Milliseconds 500
         try {
