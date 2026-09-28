@@ -143,12 +143,17 @@ function Ensure-WanGP([string]$BootstrapPython) {
   }
   Push-Location $WanRoot
   try {
-    & $git fetch --all --tags --prune
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the pinned WanGP repository.' }
+    & $git fetch origin --tags --prune
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the pinned WanGP repository from the verified origin.' }
     & $git checkout --detach $WanPin
     if ($LASTEXITCODE -ne 0) { throw "Failed to checkout pinned WanGP commit $WanPin" }
     $actualPin = (& $git rev-parse HEAD).Trim()
     if ($actualPin -ne $WanPin) { throw "WanGP checkout mismatch: expected $WanPin, got $actualPin" }
+    & $git diff --quiet HEAD --
+    if ($LASTEXITCODE -ne 0) { throw "WanGP tracked source differs from pinned commit $WanPin. Commit/stash/remove local source edits before setup; CineForge refuses to execute a dirty pinned runtime." }
+    $untrackedPython = @(& $git ls-files --others --exclude-standard -- '*.py' '*.pyi')
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect untracked WanGP Python source files.' }
+    if ($untrackedPython.Count -gt 0) { throw "WanGP checkout contains untracked Python source that could alter setup/runtime imports: $($untrackedPython -join ', '). Remove or review it before setup." }
     & $BootstrapPython setup.py install --env venv --auto
     if ($LASTEXITCODE -ne 0) { throw 'WanGP automatic installer failed.' }
     $infoMatch = (& $BootstrapPython setup.py get_env_info 2>&1 | Select-String 'ENV_INFO\|' | Select-Object -Last 1)
