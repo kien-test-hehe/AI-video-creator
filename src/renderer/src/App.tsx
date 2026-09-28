@@ -20,11 +20,13 @@ export default function App(){
     void Promise.all([window.cineforge.project.get(),window.cineforge.render.snapshot(),window.cineforge.settings.get()])
       .then(([project,queue,machine])=>{if(disposed)return;setMachine(machine);if(bootstrapSequence!==runtimeSyncSequence)return;if(project)setProject(project);setQueue(queue);})
       .catch(e=>{if(!disposed&&bootstrapSequence===runtimeSyncSequence)setError(e instanceof Error?e.message:String(e));});
-    const unsubscribe=window.cineforge.render.onQueueEvent(snapshot=>{
-      if(disposed)return;setQueue(snapshot);const sequence=++runtimeSyncSequence;
+    const refreshRuntimeProject=()=>{
+      const sequence=++runtimeSyncSequence;
       void window.cineforge.project.get().then(project=>{if(!disposed&&sequence===runtimeSyncSequence&&project)syncRuntime(project);}).catch(e=>{if(!disposed&&sequence===runtimeSyncSequence)setError(e instanceof Error?e.message:String(e));});
-    });
-    return()=>{disposed=true;runtimeSyncSequence+=1;unsubscribe();};
+    };
+    const unsubscribe=window.cineforge.render.onQueueEvent(snapshot=>{if(disposed)return;setQueue(snapshot);refreshRuntimeProject();});
+    const unsubscribeAutomation=window.cineforge.automation.onStatus(()=>{if(disposed)return;refreshRuntimeProject();});
+    return()=>{disposed=true;runtimeSyncSequence+=1;unsubscribe();unsubscribeAutomation();};
   },[setError,setMachine,setProject,setQueue,syncRuntime]);
   useEffect(()=>{
     let allowClose=false,flushing=false;
