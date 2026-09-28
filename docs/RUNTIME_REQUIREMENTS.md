@@ -8,6 +8,10 @@ Primary validation target is an RTX 5060 Ti 16 GB, i5-14400F-class CPU, 40+ GB R
 
 The pinned application toolchain is declared in package.json and locked by package-lock.json. Node 22.16.x and npm 10.9.9 are the supported development baseline. CI is authoritative for TypeScript, lint, tests and Electron/Vite build.
 
+## Windows bootstrap verification
+
+After `setup.cmd`, run `verify.cmd` before the first qualification render. It checks the NVIDIA driver/VRAM, portable Node 22.16.0 + npm 10.9.9, FFmpeg/FFprobe, the pinned WanGP checkout, WanGP Python/PyTorch CUDA access, local QC model availability, installed app dependencies, build output, disk headroom and CapCut detection. `verify.cmd -Deep` also reruns the source validation suite and WanGP bridge tests. Warnings are advisory; blocking failures return a non-zero exit code.
+
 ## WanGP on RTX 50-series
 
 Follow the current upstream WanGP guide rather than old setup posts. The current upstream recommendation for RTX 30XX–50XX uses Python 3.11.14 and PyTorch 2.10 with CUDA 13.x; Windows RTX 30XX–50XX guidance uses Triton 3.6, and RTX 50XX can use optimized NV FP4 paths.
