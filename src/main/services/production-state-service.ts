@@ -118,6 +118,9 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
     if(!['resolved','dismissed'].includes(request.status))throw new Error('Human task can only be resolved or dismissed.');
     const linkedQc=project.qcResults.find(result=>result.humanOverrideTaskId===task.id);
     if(linkedQc){
+      if(!linkedQc.renderOutputId||linkedQc.layer==='technical'||!linkedQc.inputKey)throw new Error('QC review task has incomplete provenance and cannot be closed safely.');
+      const currentKey=shotQcInputKey(project,linkedQc.shotId,linkedQc.renderOutputId,linkedQc.layer);
+      if(currentKey!==linkedQc.inputKey)throw new Error('QC review task became stale because its shot/output/state inputs changed.');
       const verdict=project.qcResults
         .filter(result=>result.id!==linkedQc.id&&result.shotId===linkedQc.shotId&&result.renderOutputId===linkedQc.renderOutputId&&result.layer===linkedQc.layer&&result.inputKey===linkedQc.inputKey&&result.createdAt>=linkedQc.createdAt)
         .sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
