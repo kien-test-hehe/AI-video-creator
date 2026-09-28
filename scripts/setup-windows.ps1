@@ -9,6 +9,7 @@ $ProgressPreference = 'SilentlyContinue'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $RuntimeRoot = Join-Path $RepoRoot '.runtime'
 $NodeVersion = '22.16.0'
+$NpmVersion = '10.9.9'
 $NodeRoot = Join-Path $RuntimeRoot "node-v$NodeVersion-win-x64"
 $WanRoot = Join-Path $RuntimeRoot 'Wan2GP'
 $WanPin = (Get-Content (Join-Path $RepoRoot 'runtime\WANGP_PIN.txt') -Raw).Trim()
@@ -55,6 +56,19 @@ function Ensure-Node {
   }
   Expand-Archive -Path $zip -DestinationPath $RuntimeRoot -Force
   Remove-Item $zip -Force
+}
+
+function Ensure-Npm {
+  $npm = Join-Path $NodeRoot 'npm.cmd'
+  if (-not (Test-Path $npm)) { throw "Portable npm was not found at $npm after installing Node.js $NodeVersion." }
+  $reported = (& $npm --version).Trim()
+  if ($reported -eq $NpmVersion) { return $npm }
+  Step "Pinning portable npm $NpmVersion (Node.js $NodeVersion ships a different npm release)"
+  & $npm install --global "npm@$NpmVersion" --prefix $NodeRoot --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { throw "Failed to pin portable npm $NpmVersion." }
+  $reported = (& $npm --version).Trim()
+  if ($reported -ne $NpmVersion) { throw "Portable npm version mismatch after pinning: expected $NpmVersion, got $reported." }
+  return $npm
 }
 
 function Find-Python311 {
@@ -242,6 +256,7 @@ function Ensure-WanGP([string]$BootstrapPython) {
 Step 'Creating CineForge machine runtime'
 New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
 Ensure-Node
+$npm = Ensure-Npm
 Assert-Nvidia
 $python = Ensure-Python311
 $ff = Ensure-FFmpeg
@@ -307,7 +322,6 @@ $bootstrapSettings = @{
 $bootstrapSettings | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $BootstrapSettingsFile
 
 Step 'Installing CineForge dependencies'
-$npm = Join-Path $NodeRoot 'npm.cmd'
 if (Test-Path (Join-Path $RepoRoot 'package-lock.json')) {
   & $npm ci --prefix $RepoRoot
 } else {
