@@ -226,17 +226,32 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const rawModelFamily=typeof generationSource.modelFamily==='string'?generationSource.modelFamily:'';
   const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
   const defaults = MODEL_DEFAULTS[modelFamily];
-  const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(safeId).filter(id=>assetIds.has(id));
-  const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => {const filtered=rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!));if(filtered.length>max)throw new Error(`Shot asset role exceeds the ${max}-item safety limit.`);return filtered;};
-  const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
-    if (typeof value !== 'string' || !value) return undefined;
-    return assetIds.has(value)&&allowed.has(assetKinds.get(value)!) ? value : undefined;
+  const rawIds = (value: unknown,label:string) => {
+    const ids=boundedArray(value,label,128).map(safeId);
+    const missing=ids.find(id=>!assetIds.has(id));if(missing)throw new Error(`${label} reference unknown asset: ${missing}`);
+    return ids;
+  };
+  const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>,label:string) => {
+    const ids=rawIds(value,label),wrong=ids.find(id=>!allowed.has(assetKinds.get(id)!));
+    if(wrong)throw new Error(`${label} reference incompatible asset kind ${assetKinds.get(wrong)}: ${wrong}`);
+    if(ids.length>max)throw new Error(`Shot asset role exceeds the ${max}-item safety limit.`);
+    return ids;
+  };
+  const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>,label:string) => {
+    if(value==null||value==='')return undefined;
+    if(typeof value!=='string')throw new Error(`${label} must be an asset id string.`);
+    if(!assetIds.has(value))throw new Error(`${label} references unknown asset: ${value}`);
+    const kind=assetKinds.get(value)!;if(!allowed.has(kind))throw new Error(`${label} references incompatible asset kind ${kind}: ${value}`);
+    return value;
   };
   const characterKinds=new Set<AssetKind>(['character']),locationKinds=new Set<AssetKind>(['location']),propKinds=new Set<AssetKind>(['prop','wardrobe']),referenceKinds=new Set<AssetKind>(['reference']);
   const startKinds=new Set<AssetKind>(['image','reference','keyframe','character','location']),endKinds=new Set<AssetKind>(['image','reference','keyframe']),videoKinds=new Set<AssetKind>(['video']),audioKinds=new Set<AssetKind>(['audio']);
-  const rawPropIds=rawIds(source.propAssetIds);
-  const legacyReferenceIds=source.referenceAssetIds==null?rawPropIds.filter(id=>assetKinds.get(id)==='reference'):[];
-  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,4,referenceKinds),...legacyReferenceIds])];if(referenceAssetIds.length>4)throw new Error('Shot reference assets exceed the 4-item safety limit.');
+  const rawPropIds=rawIds(source.propAssetIds,'Shot prop/wardrobe assets'),legacyReferenceMode=source.referenceAssetIds==null;
+  const invalidProp=rawPropIds.find(id=>!propKinds.has(assetKinds.get(id)!)&&!(legacyReferenceMode&&assetKinds.get(id)==='reference'));
+  if(invalidProp)throw new Error(`Shot prop/wardrobe assets reference incompatible asset kind ${assetKinds.get(invalidProp)}: ${invalidProp}`);
+  const legacyReferenceIds=legacyReferenceMode?rawPropIds.filter(id=>assetKinds.get(id)==='reference'):[];
+  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,4,referenceKinds,'Shot reference assets'),...legacyReferenceIds])];if(referenceAssetIds.length>4)throw new Error('Shot reference assets exceed the 4-item safety limit.');
+  const propAssetIds=rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!));if(propAssetIds.length>2)throw new Error('Shot prop/wardrobe assets exceed the 2-item safety limit.');
   return {
     id: safeId(source.id),
     sceneId,
@@ -247,14 +262,14 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     action: str(source.action,'',100_000),
     dialogue: str(source.dialogue,'',100_000),
     continuityNotes: str(source.continuityNotes,'',100_000),
-    characterAssetIds: filterIds(source.characterAssetIds,4,characterKinds),
-    locationAssetId: optionalAsset(source.locationAssetId,locationKinds),
-    propAssetIds: (()=>{const ids=rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!));if(ids.length>2)throw new Error('Shot prop/wardrobe assets exceed the 2-item safety limit.');return ids;})(),
+    characterAssetIds: filterIds(source.characterAssetIds,4,characterKinds,'Shot character assets'),
+    locationAssetId: optionalAsset(source.locationAssetId,locationKinds,'Shot location asset'),
+    propAssetIds,
     referenceAssetIds,
-    startFrameAssetId: optionalAsset(source.startFrameAssetId,startKinds),
-    endFrameAssetId: optionalAsset(source.endFrameAssetId,endKinds),
-    referenceVideoAssetId: optionalAsset(source.referenceVideoAssetId,videoKinds),
-    audioAssetId: optionalAsset(source.audioAssetId,audioKinds),
+    startFrameAssetId: optionalAsset(source.startFrameAssetId,startKinds,'Shot start-frame asset'),
+    endFrameAssetId: optionalAsset(source.endFrameAssetId,endKinds,'Shot end-frame asset'),
+    referenceVideoAssetId: optionalAsset(source.referenceVideoAssetId,videoKinds,'Shot reference-video asset'),
+    audioAssetId: optionalAsset(source.audioAssetId,audioKinds,'Shot audio asset'),
     status: SHOT_STATUSES.has(source.status) ? source.status : 'draft',
     generation: {
       modelFamily,
