@@ -801,6 +801,7 @@ describe('Windows bootstrap source integrity guards',()=>{
     expect(setup).toMatch(/ls-files --others --exclude-standard -- '\*\.py' '\*\.pyi'/i);
     expect(setup).toMatch(/env_venv/);
     expect(setup).toMatch(/envs\.json maps env_venv outside its managed runtime directory/i);
+    expect(setup).toMatch(/IsPathRooted\(\$registeredText\)/);
   });
   it('rebuilds CineForge when tracked or untracked working-tree source differs from the stamped build',async()=>{
     const run=await readFile(join(process.cwd(),'scripts','run-windows.ps1'),'utf8');
