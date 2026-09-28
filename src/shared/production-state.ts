@@ -349,6 +349,7 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
     if(!matching){
       blockers.push(results.length?`${layer} QC is stale for current shot/state inputs.`:`${layer} QC is missing.`);
     }else if(matching.status!=='pass')blockers.push(`${layer} QC is ${matching.status}.`);
+    else if(matching.issues.some(issue=>issue.severity==='major'||issue.severity==='blocker'))blockers.push(`${layer} QC PASS contains major or blocker issues.`);
   }
 
   const hasContinuityDependency=project.shotDependencies.some(edge=>(edge.fromShotId===shotId||edge.toShotId===shotId)&&edge.propagate.length>0&&edge.relation!=='parallel');
@@ -358,6 +359,7 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
     const matching=results.filter(result=>result.inputKey===expected).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
     if(!matching)blockers.push(results.length?'continuity QC is stale for current dependency/state inputs.':'continuity QC is missing.');
     else if(matching.status!=='pass')blockers.push(`continuity QC is ${matching.status}.`);
+    else if(matching.issues.some(issue=>issue.severity==='major'||issue.severity==='blocker'))blockers.push('continuity QC PASS contains major or blocker issues.');
   }
   return{ready:blockers.length===0,blockers};
 }
