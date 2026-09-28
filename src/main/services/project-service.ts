@@ -155,6 +155,7 @@ export class ProjectService {
   async importAsset(kind: AssetKind): Promise<FilmProject | null> {
     if(!ASSET_KINDS.has(kind))throw new Error(`Invalid asset kind: ${String(kind)}`);
     if (!this.current) throw new Error('Open a project first.');
+    if(this.current.assets.length>=100_000)throw new Error('Asset import would exceed the 100000-asset project safety limit.');
     const origin={id:this.current.id,rootPath:this.current.rootPath};
     const result = await dialog.showOpenDialog({ title: `Import ${kind}`, properties: ['openFile', 'multiSelections'], filters: assetImportFilters(kind) });
     if (result.canceled || result.filePaths.length === 0) return null;
