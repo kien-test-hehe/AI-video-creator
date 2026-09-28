@@ -731,12 +731,16 @@ describe('rendered take QC policy',()=>{
   });
 });
 describe('Windows bootstrap source integrity guards',()=>{
-  it('refuses dirty pinned WanGP source and rebuilds dirty CineForge working trees',async()=>{
+  it('refuses dirty pinned WanGP source without mistaking the managed venv for source',async()=>{
     const setup=await readFile(join(process.cwd(),'scripts','setup-windows.ps1'),'utf8');
-    const run=await readFile(join(process.cwd(),'scripts','run-windows.ps1'),'utf8');
     expect(setup).toMatch(/fetch origin --tags --prune/i);
     expect(setup).toMatch(/diff --quiet HEAD --/i);
     expect(setup).toMatch(/ls-files --others --exclude-standard -- '\*\.py' '\*\.pyi'/i);
+    expect(setup).toMatch(/env_venv/);
+    expect(setup).toMatch(/envs\.json maps env_venv outside its managed runtime directory/i);
+  });
+  it('rebuilds CineForge when tracked or untracked working-tree source differs from the stamped build',async()=>{
+    const run=await readFile(join(process.cwd(),'scripts','run-windows.ps1'),'utf8');
     expect(run).toMatch(/status --porcelain --untracked-files=normal/i);
     expect(run).toMatch(/\$workingTreeDirty/);
   });
