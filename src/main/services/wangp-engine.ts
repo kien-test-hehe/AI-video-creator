@@ -18,8 +18,15 @@ function hasPath(root:any,path:string):boolean{let cur=root;for(const key of par
 function setPath(root:any,path:string,value:unknown):void{const parts=parseSafeJsonPath(path,'WanGP binding JSON path');let cur=root;for(let i=0;i<parts.length-1;i++){const key=parts[i];if(cur==null||!Object.prototype.hasOwnProperty.call(Object(cur),key))throw new Error(`WanGP binding path no longer exists: ${path}`);cur=cur[key as any];}const leaf=parts.at(-1)!;if(cur==null||!Object.prototype.hasOwnProperty.call(Object(cur),leaf))throw new Error(`WanGP binding path no longer exists: ${path}`);cur[leaf as any]=value;}
 
 export function analyzeWanGpBindings(settings:any):{bindings:WorkflowBinding[];warnings:string[]}{
-  const leaves:Array<{path:string;key:string;value:unknown}>=[];
-  const walk=(value:any,path='')=>{const key=path.split('.').at(-1)?.replace(/\[\d+\]$/,'')||path,lowerKey=key.toLowerCase();if(Array.isArray(value)){if(value.length===0||['image_refs','reference_images'].includes(lowerKey)){leaves.push({path,key:lowerKey,value});return;}return value.forEach((v,i)=>walk(v,`${path}[${i}]`));}if(value&&typeof value==='object')return Object.entries(value).forEach(([k,v])=>walk(v,path?`${path}.${k}`:k));leaves.push({path,key:lowerKey,value});};walk(settings);
+  const leaves:Array<{path:string;key:string;value:unknown}>=[];let visited=0;
+  const walk=(value:any,path='',depth=0)=>{
+    if(depth>256)throw new Error('WanGP settings exceed the 256-level nesting safety limit.');
+    if(++visited>200_000)throw new Error('WanGP settings exceed the 200,000-node traversal safety limit.');
+    const key=path.split('.').at(-1)?.replace(/\[\d+\]$/,'')||path,lowerKey=key.toLowerCase();
+    if(Array.isArray(value)){if(value.length===0||['image_refs','reference_images'].includes(lowerKey)){leaves.push({path,key:lowerKey,value});return;}return value.forEach((v,i)=>walk(v,`${path}[${i}]`,depth+1));}
+    if(value&&typeof value==='object')return Object.entries(value).forEach(([k,v])=>walk(v,path?`${path}.${k}`:k,depth+1));
+    leaves.push({path,key:lowerKey,value});
+  };walk(settings);
   const bindings:WorkflowBinding[]=[],warnings:string[]=[];
   for(const[bindingKey,hints]of Object.entries(KEY_HINTS) as[WorkflowBindingKey,string[]][]){
     const candidates=leaves.filter(x=>hints.some(h=>x.key===h));

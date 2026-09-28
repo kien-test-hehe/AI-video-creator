@@ -8,6 +8,8 @@ import { readJsonFileLimited } from './json-file';
 
 const SETTINGS_FILE='machine-settings.v1.json',SETTINGS_BACKUP_FILE='machine-settings.v1.backup.json',JOURNAL_KEY_FILE='journal-hmac.key',BOOTSTRAP_SETTINGS_FILE='bootstrap-machine-settings.v1.json';
 
+class UnsupportedMachineSettingsSchemaError extends Error {}
+
 export class AppSettingsService {
   private current:AppMachineSettings=structuredClone(DEFAULT_APP_MACHINE_SETTINGS);
   private gate:Promise<void>=Promise.resolve();
@@ -23,8 +25,11 @@ export class AppSettingsService {
     await this.assertStateFileNotSymlink(backup,'CineForge machine-settings backup');
     try{const raw=await readJsonFileLimited(file,'CineForge machine settings',4*1024*1024);this.current=sanitizeMachineSettings(raw);}
     catch(primaryError:any){
+      if(primaryError instanceof UnsupportedMachineSettingsSchemaError)throw primaryError;
       try{
-        const raw=await readJsonFileLimited(backup,'CineForge machine-settings backup',4*1024*1024);this.current=sanitizeMachineSettings(raw);await copyFile(backup,file);
+        const raw=await readJsonFileLimited(backup,'CineForge machine-settings backup',4*1024*1024);this.current=sanitizeMachineSettings(raw);
+        await this.preserveRejectedSettings(file);
+        await copyFile(backup,file);
       }catch(backupError:any){
         if(primaryError?.code!=='ENOENT'||backupError?.code!=='ENOENT'){
           throw new Error(`CineForge machine settings could not be recovered without risking data loss. Primary: ${primaryError instanceof Error?primaryError.message:String(primaryError)}. Backup: ${backupError instanceof Error?backupError.message:String(backupError)}`);
@@ -64,6 +69,17 @@ export class AppSettingsService {
   }
 
   async save(next:AppMachineSettings):Promise<AppMachineSettings>{return this.runExclusive(async()=>{const sanitized=sanitizeMachineSettings(next);await this.persistUnlocked(sanitized);return this.get();});}
+
+  private async preserveRejectedSettings(file:string):Promise<string|undefined>{
+    try{
+      const info=await lstat(file);
+      if(info.isSymbolicLink())throw new Error('Rejected CineForge machine settings must not be a symbolic link.');
+      if(!info.isFile())throw new Error('Rejected CineForge machine settings are not a regular file.');
+    }catch(error:any){if(error?.code==='ENOENT')return undefined;throw error;}
+    const target=join(this.userDataDir,`machine-settings.v1.rejected-${Date.now()}-${randomUUID()}.json`);
+    try{await copyFile(file,target);return target;}
+    catch(error){throw new Error(`CineForge found a usable machine-settings backup but refused to overwrite the rejected primary because preserving it failed: ${error instanceof Error?error.message:String(error)}`);}
+  }
 
   private async loadOrCreateJournalKey():Promise<Buffer>{
     const path=join(this.userDataDir,JOURNAL_KEY_FILE);
@@ -110,7 +126,9 @@ export class AppSettingsService {
 }
 
 function sanitizeMachineSettings(raw:any):AppMachineSettings{
-  const defaults=structuredClone(DEFAULT_APP_MACHINE_SETTINGS),source=raw&&typeof raw==='object'?raw:{};
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('Machine settings must be a JSON object.');
+  const defaults=structuredClone(DEFAULT_APP_MACHINE_SETTINGS),source=raw;
+  if(source.schemaVersion!=null&&source.schemaVersion!==1)throw new UnsupportedMachineSettingsSchemaError(`Unsupported machine settings schema: ${String(source.schemaVersion)}`);
   const out:AppMachineSettings={
     schemaVersion:1,endpointPolicy:'loopback-only',
     ffmpeg:{path:preferBootstrapPath(source.ffmpeg?.path,defaults.ffmpeg.path,'ffmpeg'),ffprobePath:preferBootstrapPath(source.ffmpeg?.ffprobePath,defaults.ffmpeg.ffprobePath,'ffprobe'),preferredH264Encoder:source.ffmpeg?.preferredH264Encoder==='libx264'?'libx264':'h264_nvenc'},

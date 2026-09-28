@@ -20,7 +20,7 @@ import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessa
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
 import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
@@ -35,6 +35,7 @@ import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
+import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 
@@ -43,6 +44,14 @@ const api: ApiWorkflow = {
   '2': { class_type: 'KSampler', inputs: { seed: 1, steps: 20, cfg: 1 } }
 };
 
+describe('WanGP recursive input safety',()=>{
+  it('rejects pathological nesting before recursive traversal can exhaust the JS stack',()=>{
+    let deep:any='/project/assets/input.png';for(let index=0;index<300;index++)deep={nested:deep};
+    expect(()=>suggestWanGpBindings(deep)).toThrow(/nesting safety limit/i);
+    const project={rootPath:'/project'} as any,machine={wangp:{executionMode:'docker',rootPath:'/wangp',docker:{projectMount:'/workspace/project',wangpMount:'/workspace/Wan2GP'}}} as any;
+    expect(()=>mapJsonHostPathsForWanGp(project,machine,deep)).toThrow(/nesting safety limit/i);
+  });
+});
 describe('WanGP entrypoint containment',()=>{
   it('rejects native/docker entrypoints that escape the configured WanGP root',()=>{
     const root=join(tmpdir(),'cineforge-wangp-root'),machine={wangp:{rootPath:root,entrypoint:'../outside.py'}} as any as AppMachineSettings;
@@ -134,6 +143,17 @@ describe('renderer save runtime authority',()=>{
       expect(saved.shots[0].status).toBe('ready');
     }finally{await rm(root,{recursive:true,force:true});}
   });
+  it('rejects oversized renderer edits without truncating or replacing the current project',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-renderer-oversize-'));
+    try{
+      const service=new ProjectService(),created=await service.createAt(root,'Film');
+      const rendererProject=structuredClone(created);rendererProject.story.title='x'.repeat(501);
+      await expect(service.saveFromRenderer(rendererProject)).rejects.toThrow(/500-character safety limit/i);
+      expect(service.getCurrent()?.story.title).toBe('Film');
+      const disk=JSON.parse(await readFile(join(root,'cineforge.project.json'),'utf8'));
+      expect(disk.story.title).toBe('Film');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
   it('does not let a newly renderer-created shot forge render runtime state',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-renderer-save-authority-'));
     try{
@@ -150,6 +170,35 @@ describe('renderer save runtime authority',()=>{
       const saved=await service.saveFromRenderer(rendererProject),shot=saved.shots.find(item=>item.id===shotId)!;
       expect(shot.status).toBe('draft');
       expect(shot.latestRenderId).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('future project schema compatibility',()=>{
+  it('refuses to replace a newer primary project with an older backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-future-project-'));
+    try{
+      const writer=new ProjectService(),created=await writer.createAt(root,'Film');
+      await writeFile(join(root,'cineforge.project.json'),JSON.stringify({...created,schemaVersion:3,futureField:{keep:'me'}},null,2),'utf8');
+      const reader=new ProjectService();
+      await expect(reader.openAt(root)).rejects.toThrow(/unsupported project schema/i);
+      const primary=JSON.parse(await readFile(join(root,'cineforge.project.json'),'utf8'));
+      expect(primary.schemaVersion).toBe(3);expect(primary.futureField).toEqual({keep:'me'});
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('project backup recovery preservation',()=>{
+  it('preserves a rejected primary project before restoring the backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-project-recovery-'));
+    try{
+      const writer=new ProjectService(),created=await writer.createAt(root,'Film');
+      const rejected={...created,story:{...created.story,title:'x'.repeat(501)}};
+      await writeFile(join(root,'cineforge.project.json'),JSON.stringify(rejected,null,2),'utf8');
+      const reader=new ProjectService(),opened=await reader.openAt(root);
+      expect(opened.story.title).toBe('Film');
+      const preserved=(await readdir(root)).find(name=>name.startsWith('cineforge.project.rejected-')&&name.endsWith('.json'));
+      expect(preserved).toBeTruthy();
+      const raw=JSON.parse(await readFile(join(root,preserved!),'utf8'));
+      expect(raw.story.title).toHaveLength(501);
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
@@ -175,6 +224,32 @@ describe('project schema canonicalization',()=>{
     const loaded=loadPortableProject(raw,'/project').project;
     expect(loaded.shots[0].latestRenderId).toBe('passing-output');
     expect(loaded.shots[0].status).toBe('rendered');
+  });
+  it('rejects canonical project data that exceeds safety limits instead of truncating it',()=>{
+    const longText=baseProject();longText.story.title='x'.repeat(501);
+    expect(()=>loadPortableProject(longText,'/project')).toThrow(/500-character safety limit/i);
+
+    const tooManyScenes=baseProject();
+    tooManyScenes.shots=[];tooManyScenes.renderOutputs=[];
+    tooManyScenes.scenes=Array.from({length:10_001},(_,index)=>({id:`scene-${index}`,index:index+1,heading:'INT. ROOM',body:'',shotIds:[]}));
+    expect(()=>loadPortableProject(tooManyScenes,'/project')).toThrow(/project scenes.*10,?000 items/i);
+  });
+  it('rejects malformed explicit identifiers instead of silently replacing identity',()=>{
+    const raw=baseProject();raw.id='bad project id with spaces';
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/invalid project identifier/i);
+    const missing=baseProject();delete (missing as any).id;
+    expect(loadPortableProject(missing,'/project').project.id).toMatch(/^[a-f0-9-]{36}$/i);
+  });
+  it('rejects explicit out-of-range project numerics instead of silently clamping them',()=>{
+    const raw=baseProject();raw.shots[0].generation.width=9000;
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/allowed range 256\.\.8192/i);
+    const timeline:any=baseProject();timeline.timeline=[{id:'clip',shotId:'shot-1',renderOutputId:'passing-output',track:0,order:0,trimInSec:0,volume:9}];
+    expect(()=>loadPortableProject(timeline,'/project')).toThrow(/allowed range 0\.\.8/i);
+  });
+  it('canonicalizes parseable timestamps before lexical latest/recovery ordering',()=>{
+    const raw=baseProject();raw.renderOutputs[0].createdAt='2026-01-01T09:00:00-05:00';
+    const loaded=loadPortableProject(raw,'/project').project;
+    expect(loaded.renderOutputs[0].createdAt).toBe('2026-01-01T14:00:00.000Z');
   });
   it('rejects render outputs that do not have a durable path',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
@@ -211,7 +286,13 @@ describe('project schema canonicalization',()=>{
   });
 
 });
-describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
+describe('screenplay parsing',()=>{
+  it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});
+  it('rejects screenplay and scene sizes that cannot be persisted losslessly',()=>{
+    expect(()=>parseScreenplay('x'.repeat(2_000_001))).toThrow(/screenplay exceeds/i);
+    expect(()=>parseScreenplay(`INT. ROOM - DAY\n${'x'.repeat(500_001)}`)).toThrow(/scene body exceeds/i);
+  });
+});
 describe('workflow binding object-key safety',()=>{
   it('rejects prototype-polluting Comfy binding inputs at runtime',()=>{
     const workflow:ApiWorkflow={'1':{class_type:'Node',inputs:{text:'old'}}};
@@ -596,6 +677,49 @@ describe('machine settings persistence trust',()=>{
       if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
       await rm(root,{recursive:true,force:true});
     }
+  });
+});
+describe('machine settings structural validation',()=>{
+  it('treats non-object primary settings as corruption instead of silently loading defaults',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-settings-shape-')),userdata=join(root,'userdata');
+    try{
+      const service=new AppSettingsService(userdata);await service.load();
+      const trusted=service.get();trusted.director.model='trusted';await service.save(trusted);
+      const newer=service.get();newer.director.temperature=0.4;await service.save(newer);
+      await writeFile(join(userdata,'machine-settings.v1.json'),'[]','utf8');
+      const recovered=new AppSettingsService(userdata);await recovered.load();
+      expect(recovered.get().director.model).toBe('trusted');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('machine settings recovery preservation and versioning',()=>{
+  it('preserves a rejected primary before restoring a trusted backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-settings-recovery-')),userdata=join(root,'userdata');
+    try{
+      const service=new AppSettingsService(userdata);await service.load();
+      const trusted=service.get();trusted.director.model='trusted';await service.save(trusted);
+      const newer=service.get();newer.director.temperature=0.4;await service.save(newer);
+      await writeFile(join(userdata,'machine-settings.v1.json'),JSON.stringify({schemaVersion:1,comfy:{url:'https://not-loopback.invalid'}}),'utf8');
+      const recovered=new AppSettingsService(userdata);await recovered.load();
+      expect(recovered.get().director.model).toBe('trusted');
+      const preserved=(await readdir(userdata)).find(name=>name.startsWith('machine-settings.v1.rejected-')&&name.endsWith('.json'));
+      expect(preserved).toBeTruthy();
+      const rejected=JSON.parse(await readFile(join(userdata,preserved!),'utf8'));
+      expect(rejected.comfy.url).toBe('https://not-loopback.invalid');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('future machine settings compatibility',()=>{
+  it('refuses to replace newer settings with a v1 backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-future-settings-')),userdata=join(root,'userdata');
+    try{
+      const service=new AppSettingsService(userdata);await service.load();
+      const current=service.get();current.director.model='v1';await service.save(current);
+      await writeFile(join(userdata,'machine-settings.v1.json'),JSON.stringify({schemaVersion:2,futureField:'keep-me'}),'utf8');
+      await expect(new AppSettingsService(userdata).load()).rejects.toThrow(/unsupported machine settings schema/i);
+      const primary=JSON.parse(await readFile(join(userdata,'machine-settings.v1.json'),'utf8'));
+      expect(primary.schemaVersion).toBe(2);expect(primary.futureField).toBe('keep-me');
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
 describe('machine settings bootstrap failure',()=>{

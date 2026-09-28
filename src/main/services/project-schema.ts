@@ -21,10 +21,12 @@ export interface LoadedProject {
   migrationNotes: string[];
 }
 
+export class UnsupportedProjectSchemaError extends Error {}
+
 export function loadPortableProject(raw: unknown, openedRoot: string): LoadedProject {
   const source = asObject(raw, 'project');
   const version = Number(source.schemaVersion ?? 1);
-  if (version !== 1 && version !== 2) throw new Error(`Unsupported project schema: ${String(source.schemaVersion)}`);
+  if (version !== 1 && version !== 2) throw new UnsupportedProjectSchemaError(`Unsupported project schema: ${String(source.schemaVersion)}`);
   const migrationNotes: string[] = [];
   const normalized = version === 1 ? migrateV1ToV2(source, migrationNotes) : source;
   const project = sanitizeV2(normalized, openedRoot);
@@ -55,18 +57,18 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
   const now = new Date().toISOString();
   const id = safeId(source.id);
   const settings = sanitizeProjectSettings(source.settings);
-  const scenes = array(source.scenes).slice(0,10_000).map(sanitizeScene);
+  const scenes = boundedArray(source.scenes,'project scenes',10_000).map(sanitizeScene);
   const sceneIds = new Set(scenes.map(s=>s.id));
-  const assets = array(source.assets).slice(0,100_000).map(sanitizeAsset);
+  const assets = boundedArray(source.assets,'project assets',100_000).map(sanitizeAsset);
   const assetIds = new Set(assets.map(a=>a.id));
   const assetKinds = new Map(assets.map(a=>[a.id,a.kind] as const));
-  const shots = array(source.shots).slice(0,100_000).map(value => sanitizeShot(value, sceneIds, assetIds, assetKinds));
+  const shots = boundedArray(source.shots,'project shots',100_000).map(value => sanitizeShot(value, sceneIds, assetIds, assetKinds));
   const shotIds = new Set(shots.map(s=>s.id));
-  const renderOutputs = array(source.renderOutputs).slice(0,100_000).map(value => sanitizeRenderOutput(value, shotIds));
+  const renderOutputs = boundedArray(source.renderOutputs,'project render outputs',100_000).map(value => sanitizeRenderOutput(value, shotIds));
   const outputById = new Map(renderOutputs.map(output=>[output.id,output] as const));
-  const renderJobs = array(source.renderJobs).slice(0,100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds, assetKinds));
+  const renderJobs = boundedArray(source.renderJobs,'project render jobs',100_000).map(value => sanitizeRenderJob(value, shotIds, settings.workflowProfiles, sceneIds, assetIds, assetKinds));
   const jobIds=new Set(renderJobs.map(job=>job.id));
-  const timeline = array(source.timeline).slice(0,100_000).map(value => sanitizeTimelineClip(value, shotIds, outputById));
+  const timeline = boundedArray(source.timeline,'project timeline clips',100_000).map(value => sanitizeTimelineClip(value, shotIds, outputById));
 
   assertUniqueIds('scene',scenes);
   assertUniqueIds('asset',assets);
@@ -115,8 +117,9 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
 
 function sanitizeProjectSettings(value: unknown): ProjectSettings {
   const source = asObject(value ?? {}, 'settings');
-  const profiles = array(source.workflowProfiles).slice(0,512).map(sanitizeWorkflowProfile);
+  const profiles = boundedArray(source.workflowProfiles,'workflow profiles',512).map(sanitizeWorkflowProfile);
   for (const builtin of BUILTIN_WORKFLOW_PROFILES) if (!profiles.some(p=>p.id===builtin.id)) profiles.push(structuredClone(builtin));
+  if(profiles.length>512)throw new Error('workflow profiles exceed the safety limit of 512 items after required built-ins are added.');
   assertUniqueIds('workflow profile',profiles);
   return {
     costPolicy: {
@@ -147,7 +150,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
     mode: MODES.has(source.mode) ? source.mode : 'i2v',
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
-    bindings: array(source.bindings).slice(0,256).map(sanitizeBinding),
+    bindings: boundedArray(source.bindings,'workflow bindings',256).map(sanitizeBinding),
     enabled: source.enabled===true,
     notes: str(source.notes, '', 20_000) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
@@ -193,7 +196,7 @@ function sanitizeScene(value: unknown): Scene {
     body: str(source.body, '', 500_000),
     location: str(source.location, '', 2000) || undefined,
     timeOfDay: str(source.timeOfDay, '', 500) || undefined,
-    shotIds: array(source.shotIds).slice(0,100_000).map(safeId)
+    shotIds: boundedArray(source.shotIds,'scene shot ids',100_000).map(safeId)
   };
 }
 
@@ -209,7 +212,7 @@ function sanitizeAsset(value: unknown): Asset {
     sourcePath: sourceLabel(source.sourcePath),
     projectPath: path,
     mimeType: str(source.mimeType, '', 512) || undefined,
-    tags: array(source.tags).slice(0,128).map(v=>str(v,'',256)).filter(Boolean),
+    tags: boundedArray(source.tags,'asset tags',128).map(v=>str(v,'',256)).filter(Boolean),
     notes: str(source.notes, '', 100_000),
     createdAt: iso(source.createdAt, new Date().toISOString())
   };
@@ -223,8 +226,8 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const rawModelFamily=typeof generationSource.modelFamily==='string'?generationSource.modelFamily:'';
   const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
   const defaults = MODEL_DEFAULTS[modelFamily];
-  const rawIds = (value: unknown) => array(value).slice(0,128).map(safeId).filter(id=>assetIds.has(id));
-  const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!)).slice(0,max);
+  const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(safeId).filter(id=>assetIds.has(id));
+  const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => {const filtered=rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!));if(filtered.length>max)throw new Error(`Shot asset role exceeds the ${max}-item safety limit.`);return filtered;};
   const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
     if (typeof value !== 'string' || !value) return undefined;
     return assetIds.has(value)&&allowed.has(assetKinds.get(value)!) ? value : undefined;
@@ -233,7 +236,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const startKinds=new Set<AssetKind>(['image','reference','keyframe','character','location']),endKinds=new Set<AssetKind>(['image','reference','keyframe']),videoKinds=new Set<AssetKind>(['video']),audioKinds=new Set<AssetKind>(['audio']);
   const rawPropIds=rawIds(source.propAssetIds);
   const legacyReferenceIds=source.referenceAssetIds==null?rawPropIds.filter(id=>assetKinds.get(id)==='reference'):[];
-  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,4,referenceKinds),...legacyReferenceIds])].slice(0,4);
+  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,4,referenceKinds),...legacyReferenceIds])];if(referenceAssetIds.length>4)throw new Error('Shot reference assets exceed the 4-item safety limit.');
   return {
     id: safeId(source.id),
     sceneId,
@@ -246,7 +249,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     continuityNotes: str(source.continuityNotes,'',100_000),
     characterAssetIds: filterIds(source.characterAssetIds,4,characterKinds),
     locationAssetId: optionalAsset(source.locationAssetId,locationKinds),
-    propAssetIds: rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!)).slice(0,2),
+    propAssetIds: (()=>{const ids=rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!));if(ids.length>2)throw new Error('Shot prop/wardrobe assets exceed the 2-item safety limit.');return ids;})(),
     referenceAssetIds,
     startFrameAssetId: optionalAsset(source.startFrameAssetId,startKinds),
     endFrameAssetId: optionalAsset(source.endFrameAssetId,endKinds),
@@ -305,7 +308,7 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
       effectivePrompt:str(rawSpec.effectivePrompt,'',300_000),
       queuedProjectUpdatedAt:iso(rawSpec.queuedProjectUpdatedAt,new Date().toISOString()),
       workflowSha256:sha(rawSpec.workflowSha256)??'0'.repeat(64),
-      assetFingerprints:array(rawSpec.assetFingerprints).slice(0,32).map(item=>{
+      assetFingerprints:boundedArray(rawSpec.assetFingerprints,'render job asset fingerprints',32).map(item=>{
         const fp=asObject(item,'asset fingerprint');return{assetId:safeId(fp.assetId),projectPath:str(fp.projectPath,'',4096),sha256:sha(fp.sha256)??'0'.repeat(64)};
       }),
       runtimeFingerprint:{
@@ -363,8 +366,8 @@ function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
     fps:finiteOptional(source.fps,0,1000),
     hasAudio:typeof source.hasAudio==='boolean'?source.hasAudio:undefined,
     audioPeakDb:finiteOptional(source.audioPeakDb,-300,100),
-    issues:array(source.issues).slice(0,128).map(item=>str(item,'',4096)).filter(Boolean),
-    warnings:array(source.warnings).slice(0,128).map(item=>str(item,'',4096)).filter(Boolean)
+    issues:boundedArray(source.issues,'technical QC issues',128).map(item=>str(item,'',4096)).filter(Boolean),
+    warnings:boundedArray(source.warnings,'technical QC warnings',128).map(item=>str(item,'',4096)).filter(Boolean)
   };
 }
 function finiteOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):undefined;}
@@ -379,15 +382,17 @@ function asObject(value: unknown, label: string): Record<string, any> {
   return value as Record<string, any>;
 }
 function array(value: unknown): any[] { return Array.isArray(value) ? value : []; }
-function str(value: unknown, fallback: string, max: number): string { return typeof value === 'string' ? value.slice(0,max) : fallback; }
+function boundedArray(value:unknown,label:string,max:number):any[]{const items=array(value);if(items.length>max)throw new Error(`${label} exceed the safety limit of ${max} items.`);return items;}
+function str(value: unknown, fallback: string, max: number): string { if(typeof value!=='string')return fallback;if(value.length>max)throw new Error(`Project string exceeds the ${max}-character safety limit.`);return value; }
 function safeId(value: unknown): string {
+  if(value==null||value==='')return randomUUID();
   if (typeof value === 'string' && /^[a-zA-Z0-9._:-]{1,256}$/.test(value)) return value;
-  return randomUUID();
+  throw new Error(`Invalid project identifier: ${typeof value==='string'?value.slice(0,128):String(value)}`);
 }
-function clampInt(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);return Number.isInteger(n)?Math.min(max,Math.max(min,n)):fallback;}
-function clampNumber(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;}
-function iso(value: unknown, fallback: string): string { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : fallback; }
-function maybeIso(value: unknown): string | undefined { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined; }
+function clampInt(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isInteger(n))return fallback;if(n<min||n>max)throw new Error(`Project integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function clampNumber(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isFinite(n))return fallback;if(n<min||n>max)throw new Error(`Project number is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function iso(value: unknown, fallback: string): string { if(typeof value!=='string')return fallback;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():fallback; }
+function maybeIso(value: unknown): string | undefined { if(typeof value!=='string')return undefined;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():undefined; }
 function sourceLabel(value:unknown):string{
   if(typeof value!=='string')return'';
   const parts=value.replace(/\\/g,'/').split('/').filter(Boolean);
