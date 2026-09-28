@@ -140,13 +140,13 @@ function sanitizeMachineSettings(raw:any):AppMachineSettings{
   assertLocalUrl(out.comfy.url,true);assertLocalUrl(out.director.baseUrl,true);return out;
 }
 function preferBootstrapPath(value:unknown,bootstrap:string,generic:string):string{
-  const current=typeof value==='string'?value.trim():'';
-  const concreteBootstrap=bootstrap.trim()&&bootstrap.trim().toLowerCase()!==generic.toLowerCase();
-  if(concreteBootstrap&&(!current||current.toLowerCase()===generic.toLowerCase()))return bootstrap.trim();
-  return current||bootstrap;
+  const current=typeof value==='string'?value.trim():'',bootstrapValue=bootstrap.trim();
+  const concreteBootstrap=bootstrapValue&&bootstrapValue.toLowerCase()!==generic.toLowerCase();
+  return boundedMachineString(concreteBootstrap&&(!current||current.toLowerCase()===generic.toLowerCase())?bootstrapValue:(current||bootstrap),4096);
 }
-function asString(value:unknown,fallback:string):string{return typeof value==='string'?value:fallback;}
-function asNonEmptyString(value:unknown,fallback:string):string{return typeof value==='string'&&value.trim()?value.trim():fallback;}
+function boundedMachineString(value:string,max=4096):string{if(value.length>max)throw new Error(`Machine setting string exceeds the ${max}-character safety limit.`);return value;}
+function asString(value:unknown,fallback:string):string{return boundedMachineString(typeof value==='string'?value:fallback);}
+function asNonEmptyString(value:unknown,fallback:string):string{const text=typeof value==='string'&&value.trim()?value.trim():fallback;return boundedMachineString(text);}
 function clampNumber(value:unknown,min:number,max:number,fallback:number):number{const num=Number(value);return Number.isFinite(num)?Math.min(max,Math.max(min,num)):fallback;}
 function sanitizeDockerImageRef(value:unknown,fallback:string):string{const text=asString(value,fallback).trim();if(!text)return'';if(text.length>1024)throw new Error('WanGP Docker image reference exceeds the 1024-character machine-settings safety limit.');if(text.startsWith('-')||/\s|[\u0000-\u001f\u007f]/.test(text))throw new Error('WanGP Docker image must be a single image reference, not a Docker CLI option.');return text;}
 function sanitizeLeaf(value:unknown,fallback:string):string{const text=asNonEmptyString(value,fallback);if(text.includes('/')||text.includes('\\')||text==='.'||text==='..')throw new Error('WanGP entrypoint must be a filename, not a path.');return text;}
