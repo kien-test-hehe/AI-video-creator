@@ -9,8 +9,8 @@
           ▼                ▼                ▼
    CINEFORGE STATE      LOCAL AI        LOCAL MEDIA
    project / shots      WanGP main      FFmpeg
-   continuity / jobs    ComfyUI lab     ASR/TTS tools*
-   immutable snapshots  local LLM       upscale/interp*
+   states / topology    ComfyUI lab     ASR/TTS tools*
+   QC provenance/jobs   local LLM       upscale/interp*
           │                │                │
           └──────────── generated media ────┘
                            │
@@ -58,3 +58,10 @@ Each queued render stores an immutable snapshot of:
 - an optional model/checkpoint fingerprint.
 
 Retry reuses that snapshot. If the workflow/settings file, referenced assets, runtime environment, or recorded model fingerprint changed after queue time, retry fails instead of silently claiming an exact reproduction.
+
+
+## State and QC authority
+
+A rendered take is canonical only when its stored production-input fingerprint still matches the current shot/reference/workflow/structured-state inputs and the required current QC records match their own input fingerprints. Changing upstream continuity state, shot topology, keyframes, assets or render inputs invalidates downstream generated truth rather than silently reusing historical PASS records.
+
+Default sequential continuity edges are rebuilt when shot order/membership changes. Custom dependency edges are preserved. Human-owned start frames are never overwritten by automatic propagation.
