@@ -363,6 +363,19 @@ describe('project schema canonicalization',()=>{
     const badSource:any=baseProject();badSource.assets=[{id:'asset',kind:'reference',name:'A',sourcePath:'x'.repeat(2049),projectPath:'assets/reference/a.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];
     expect(()=>loadPortableProject(badSource,'/project')).toThrow(/asset source label.*2048-character/i);
   });
+  it('rejects malformed nested provenance instead of silently dropping it',()=>{
+    const badQc:any=baseProject();badQc.renderOutputs[0].technicalQc='not-an-object';
+    expect(()=>loadPortableProject(badQc,'/project')).toThrow(/invalid technical QC.*expected an object/i);
+
+    const badMeta:any=baseProject();badMeta.renderOutputs[0].comfyMeta={filename:42};
+    expect(()=>loadPortableProject(badMeta,'/project')).toThrow(/comfy metadata filename must be a string/i);
+
+    const badSpec:any=baseProject();badSpec.renderJobs=[{id:'job',shotId:'shot-1',createdAt:'2026-01-03T00:00:00.000Z',updatedAt:'2026-01-03T00:00:00.000Z',status:'failed',progress:0,message:'',modelFamily:'ltx-2.5-fast',outputs:[],spec:'corrupt'}];
+    expect(()=>loadPortableProject(badSpec,'/project')).toThrow(/invalid render job spec.*expected an object/i);
+
+    const badHash:any=baseProject();badHash.settings={workflowProfiles:[{id:'wf',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/project/workflows/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:false,validation:{structuralStatus:'valid',sourceSha256:'not-a-sha'}}]};
+    expect(()=>loadPortableProject(badHash,'/project')).toThrow(/invalid SHA-256 project fingerprint/i);
+  });
   it('rejects render outputs that do not have a durable path',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/render output path is required/i);
