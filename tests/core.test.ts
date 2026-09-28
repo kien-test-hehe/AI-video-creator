@@ -665,6 +665,17 @@ describe('rendered take QC policy',()=>{
     expect(latestPassingVideoTake([failingNew])).toBeUndefined();
   });
 });
+describe('Windows bootstrap source integrity guards',()=>{
+  it('refuses dirty pinned WanGP source and rebuilds dirty CineForge working trees',async()=>{
+    const setup=await readFile(join(process.cwd(),'scripts','setup-windows.ps1'),'utf8');
+    const run=await readFile(join(process.cwd(),'scripts','run-windows.ps1'),'utf8');
+    expect(setup).toMatch(/fetch origin --tags --prune/i);
+    expect(setup).toMatch(/diff --quiet HEAD --/i);
+    expect(setup).toMatch(/ls-files --others --exclude-standard -- '\*\.py' '\*\.pyi'/i);
+    expect(run).toMatch(/status --porcelain --untracked-files=normal/i);
+    expect(run).toMatch(/\$workingTreeDirty/);
+  });
+});
 describe('machine settings persistence trust',()=>{
   it('uses strict booleans and backs up trusted memory instead of tampered disk bytes',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-settings-trust-')),bootstrap=join(root,'bootstrap.json'),userdata=join(root,'userdata'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
