@@ -8,7 +8,7 @@ import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
 import { alternateShotTitle, appendProjectText, isStudioWorkflowReady, resolveStudioWorkflow, studioWorkflowIssue } from '../studio-logic';
 import { takeUseConfirmationMessage } from '../../../shared/take-policy';
-import { rebuildDefaultSequentialDependencies } from '../../../shared/production-state';
+import { continuityFrameForShot, rebuildDefaultSequentialDependencies } from '../../../shared/production-state';
 
 const MODELS: ModelFamily[] = ['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom'];
 const MODES: GenerationMode[] = ['t2v','i2v','flf2v','ia2v','v2v'];
@@ -31,23 +31,19 @@ export function Shots(){
   const queue=async()=>{if(!selected)return;try{await useAppStore.getState().persist();const snapshot=await window.cineforge.render.enqueue({projectRoot:project.rootPath,shotId:selected.id});setQueue(snapshot);setView('queue');}catch(e){setError(e instanceof Error?e.message:String(e));}};
   const generateKeyframe=async(role:'start'|'end')=>{if(!selected||!activeKeyframeProfileId){setError('Import and enable an image workflow profile in Settings first.');return;}try{setKeyframeBusy(role);setBusy(true);await useAppStore.getState().runProjectMutation(async()=>{await useAppStore.getState().persist();const next=await window.cineforge.keyframe.generate({projectRoot:project.rootPath,shotId:selected.id,role,workflowProfileId:activeKeyframeProfileId});setProject(next);setNotice(`${role==='start'?'Start':'End'} keyframe generated and attached to ${selected.title}.`);});}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setKeyframeBusy(null);setBusy(false);}};
   const cancelKeyframe=async()=>{try{if(await window.cineforge.keyframe.cancel())setNotice('Keyframe cancellation requested. The local runtime is stopping…');}catch(e){setError(e instanceof Error?e.message:String(e));}};
-  const finalContinuityFrame=(shot:Shot|undefined)=>{
-    if(!shot)return undefined;
-    const observed=shot.observedFinalStateId?project.shotStates.find(state=>state.id===shot.observedFinalStateId&&state.status==='current'):undefined;
-    return observed?.frameAssetId?{assetId:observed.frameAssetId,actual:true as const}:shot.endFrameAssetId?{assetId:shot.endFrameAssetId,actual:false as const}:undefined;
-  };
+
   const chainPreviousEnd=()=>{
     if(!selected||!previousShot){setError('There is no previous shot in this scene.');return;}
-    const source=finalContinuityFrame(previousShot);if(!source){setError('The previous shot has neither an observed final frame nor a planned end keyframe.');return;}
-    if(!source.actual&&!window.confirm(`${previousShot.title} has no observed generated final frame yet. Use its planned end keyframe as a provisional start reference for ${selected.title}?`))return;
+    const source=continuityFrameForShot(project,previousShot);if(!source){setError('The previous shot has neither an observed final frame nor a planned end keyframe.');return;}
+    if(source.source==='planned-end'&&!window.confirm(`${previousShot.title} has no observed generated final frame yet. Use its planned end keyframe as a provisional start reference for ${selected.title}?`))return;
     mutate(s=>{s.startFrameAssetId=source.assetId;});
-    setNotice(source.actual
+    setNotice(source.source==='observed-final'
       ?`Chained ${previousShot.title} observed final frame → ${selected.title} start frame.`
       :`Chained ${previousShot.title} planned end keyframe → ${selected.title} as a provisional start reference.`);
   };
   const propagateEnd=()=>{
     if(!selected||!nextShot){setError(!nextShot?'There is no next shot in this scene.':'Select a shot first.');return;}
-    const source=finalContinuityFrame(selected);if(!source){setError('This shot has neither an observed final frame nor a planned end keyframe.');return;}
+    const source=continuityFrameForShot(project,selected);if(!source){setError('This shot has neither an observed final frame nor a planned end keyframe.');return;}
     if(!source.actual&&!window.confirm(`${selected.title} has no observed generated final frame yet. Use its planned end keyframe as a provisional start reference for ${nextShot.title}?`))return;
     updateProject(p=>{const next=p.shots.find(s=>s.id===nextShot.id);if(next)next.startFrameAssetId=source.assetId;});
     setNotice(source.actual
