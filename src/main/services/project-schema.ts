@@ -350,7 +350,7 @@ function sanitizeComfyMeta(value:unknown):Record<string,unknown>|undefined{
   if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
   const source=value as Record<string,unknown>,out:Record<string,unknown>={};
   for(const key of ['filename','subfolder','type','runtime','profile']){
-    const v=source[key];if(typeof v==='string')out[key]=v.slice(0,4096);
+    const v=source[key];if(typeof v==='string'){if(v.length>4096)throw new Error(`Comfy metadata ${key} exceeds the 4096-character project safety limit.`);out[key]=v;}
   }
   return Object.keys(out).length?out:undefined;
 }
@@ -391,11 +391,12 @@ function safeId(value: unknown): string {
 }
 function clampInt(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isInteger(n))return fallback;if(n<min||n>max)throw new Error(`Project integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
 function clampNumber(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isFinite(n))return fallback;if(n<min||n>max)throw new Error(`Project number is outside the allowed range ${min}..${max}: ${n}`);return n;}
-function iso(value: unknown, fallback: string): string { if(typeof value!=='string')return fallback;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():fallback; }
-function maybeIso(value: unknown): string | undefined { if(typeof value!=='string')return undefined;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():undefined; }
+function iso(value: unknown, fallback: string): string { if(value==null||value==='')return fallback;if(typeof value!=='string')throw new Error('Project timestamp must be an ISO-compatible string.');const time=Date.parse(value);if(!Number.isFinite(time))throw new Error(`Invalid project timestamp: ${value.slice(0,128)}`);return new Date(time).toISOString(); }
+function maybeIso(value: unknown): string | undefined { if(value==null||value==='')return undefined;if(typeof value!=='string')throw new Error('Optional project timestamp must be an ISO-compatible string.');const time=Date.parse(value);if(!Number.isFinite(time))throw new Error(`Invalid optional project timestamp: ${value.slice(0,128)}`);return new Date(time).toISOString(); }
 function sourceLabel(value:unknown):string{
   if(typeof value!=='string')return'';
-  const parts=value.replace(/\\/g,'/').split('/').filter(Boolean);
-  return (parts.at(-1)||'').slice(0,2048);
+  const parts=value.replace(/\\/g,'/').split('/').filter(Boolean),label=parts.at(-1)||'';
+  if(label.length>2048)throw new Error('Asset source label exceeds the 2048-character project safety limit.');
+  return label;
 }
 function sha(value: unknown): string | undefined { return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined; }
