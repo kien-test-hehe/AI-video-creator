@@ -97,7 +97,7 @@ function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile
   return candidates.find(profile=>profile.validation?.structuralStatus==='valid')??candidates[0];
 }
 
-export function shotProjectRenderInputKey(project:FilmProject,shot:Shot):string{
+export function shotProjectRenderInputKeyForProfile(project:FilmProject,shot:Shot,profile:WorkflowProfile|undefined):string{
   const ids=[...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId].filter((id):id is string=>Boolean(id));
   const promptAssets=[...new Set(ids)].map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({
     id:asset!.id,kind:asset!.kind,name:asset!.name,notes:asset!.notes
@@ -108,8 +108,12 @@ export function shotProjectRenderInputKey(project:FilmProject,shot:Shot):string{
     actualStartState:stateRenderKey(project,shot.actualStartStateId),
     plannedStartState:stateRenderKey(project,shot.plannedStartStateId),
     plannedEndState:stateRenderKey(project,shot.plannedEndStateId),
-    workflow:workflowExecutionKey(effectiveWorkflowProfile(project,shot))
+    workflow:workflowExecutionKey(profile)
   });
+}
+
+export function shotProjectRenderInputKey(project:FilmProject,shot:Shot):string{
+  return shotProjectRenderInputKeyForProfile(project,shot,effectiveWorkflowProfile(project,shot));
 }
 
 
