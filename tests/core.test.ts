@@ -42,7 +42,7 @@ import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
-import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
+import { buildWorkflowImportNotes, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
 import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, latestShotQcResult, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 import { advisePreviz } from '../src/main/services/previz-service';
@@ -554,6 +554,22 @@ describe('workflow engine',()=>{
    const workflow:ApiWorkflow={};
    for(let i=0;i<=WORKFLOW_BINDING_LIMIT;i++)workflow[String(i)]={class_type:'CLIPTextEncode',inputs:{text:'prompt'},_meta:{title:`Positive ${i}`}};
    expect(()=>suggestBindings(workflow)).toThrow(/binding project safety limit/i);
+ });
+ it('rejects auto-suggested bindings whose node id cannot round-trip through the project schema',()=>{
+   const nodeId='n'.repeat(WORKFLOW_BINDING_NODE_ID_LIMIT+1);
+   const workflow:ApiWorkflow={[nodeId]:{class_type:'CLIPTextEncode',inputs:{text:'prompt'},_meta:{title:'Positive'}}};
+   expect(()=>suggestBindings(workflow)).toThrow(/node id.*project safety limit/i);
+ });
+ it('rejects auto-suggested bindings whose input name cannot round-trip through the project schema',()=>{
+   const input='prompt_'+('x'.repeat(WORKFLOW_BINDING_INPUT_LIMIT));
+   const workflow:ApiWorkflow={'1':{class_type:'CLIPTextEncode',inputs:{[input]:'prompt'},_meta:{title:'Positive'}}};
+   expect(()=>suggestBindings(workflow)).toThrow(/input name.*project safety limit/i);
+ });
+ it('keeps generated Comfy selectors minimal and schema-safe',()=>{
+   const workflow:ApiWorkflow={'17':{class_type:'CLIPTextEncode',inputs:{text:'prompt'},_meta:{title:'Positive Prompt'}}};
+   const binding=suggestBindings(workflow).find(item=>item.key==='prompt');
+   expect(binding?.selector).toEqual({nodeId:'17'});
+   expect(binding?.input).toBe('text');
  });
  it('caps generated workflow import notes while preserving an explicit truncation marker',()=>{
    const notes=buildWorkflowImportNotes('Imported workflow.',Array.from({length:400},(_,i)=>`warning-${i}-${'x'.repeat(100)}`));
