@@ -63,9 +63,7 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
     };
     await projects.mutate(p=>{
       const before=new Map(p.shots.map(shot=>[shot.id,shotProjectRenderInputKey(p,shot)]));
-      const index=p.settings.workflowProfiles.findIndex(existing=>existing.id===id);
-      if(index<0&&p.settings.workflowProfiles.length>=512)throw new Error('Managed profile provisioning would exceed the 512-profile project safety limit.');
-      if(index>=0)p.settings.workflowProfiles[index]=profile;else p.settings.workflowProfiles.push(profile);
+      upsertManagedProfile(p,profile);
       invalidateChangedRoutes(p,before);
     });
     await validateAndRecordProfile(projects,machine,id);
@@ -77,6 +75,12 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
   }
   if(!created.length)throw new Error('Managed profiles were generated but none passed structural validation.');
   return projects.getCurrent()!;
+}
+
+export function upsertManagedProfile(project:FilmProject,profile:WorkflowProfile):void{
+  const index=project.settings.workflowProfiles.findIndex(existing=>existing.id===profile.id);
+  if(index<0&&project.settings.workflowProfiles.length>=512)throw new Error('Managed profile provisioning would exceed the 512-profile project safety limit.');
+  if(index>=0)project.settings.workflowProfiles[index]=profile;else project.settings.workflowProfiles.push(profile);
 }
 
 function invalidateChangedRoutes(project:FilmProject,before:Map<string,string>):void{
