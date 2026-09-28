@@ -999,6 +999,12 @@ describe('Comfy file record validation',()=>{
     expect(()=>validateComfyFileRef({filename:'ok.png',type:'x'.repeat(4097)},'output')).toThrow(/4096-character project safety limit/i);
   });
 });
+describe('Comfy prompt identity bounds',()=>{
+  it('ignores overlong recovered prompt ids instead of persisting invalid job identity',()=>{
+    const id='p'.repeat(513),queue={queue_running:[[1,id,{}, {cineforge:{jobId:'job'}}]],queue_pending:[]};
+    expect(cineforgePromptIdentities(queue,{},'job')).toEqual([]);
+  });
+});
 describe('Comfy queue identity',()=>{
   it('matches prompt ids only in structured queue entries, not arbitrary metadata text',()=>{
     const queue={queue_running:[[1,'running-id',{note:'target-id'}]],queue_pending:[[2,'pending-id',{prompt:'target-id'}]]};
