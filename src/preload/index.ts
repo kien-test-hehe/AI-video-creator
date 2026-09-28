@@ -27,7 +27,8 @@ const api: CineforgeApi = {
   system: {
     probe: () => ipcRenderer.invoke(IPC.systemProbe),
     pingComfy: url => ipcRenderer.invoke(IPC.comfyPing, url),
-    reveal: path => ipcRenderer.invoke(IPC.systemReveal, path)
+    reveal: path => ipcRenderer.invoke(IPC.systemReveal, path),
+    readiness: () => ipcRenderer.invoke(IPC.systemReadiness)
   },
   render: {
     enqueue: request => ipcRenderer.invoke(IPC.renderEnqueue, request),
@@ -51,6 +52,18 @@ const api: CineforgeApi = {
     createHumanTask: request => ipcRenderer.invoke(IPC.productionCreateHumanTask, request),
     resolveHumanTask: request => ipcRenderer.invoke(IPC.productionResolveHumanTask, request),
     promoteCanonicalTake: request => ipcRenderer.invoke(IPC.productionPromoteCanonical, request)
+  },
+  automation: {
+    start: request => ipcRenderer.invoke(IPC.automationStart, request),
+    pause: () => ipcRenderer.invoke(IPC.automationPause),
+    resume: () => ipcRenderer.invoke(IPC.automationResume),
+    stop: () => ipcRenderer.invoke(IPC.automationStop),
+    status: () => ipcRenderer.invoke(IPC.automationStatus),
+    onStatus: handler => {
+      const listener=(_event:unknown,status:any)=>handler(status);
+      ipcRenderer.on(IPC.automationEvent,listener);
+      return()=>ipcRenderer.removeListener(IPC.automationEvent,listener);
+    }
   },
   capcut: { prepareHandoff: () => ipcRenderer.invoke(IPC.capcutPrepareHandoff) }
 };
