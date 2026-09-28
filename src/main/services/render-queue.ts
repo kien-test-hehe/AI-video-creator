@@ -559,7 +559,9 @@ export class RenderQueueService extends EventEmitter {
 
   private async commitQueuedJobs(jobs:RenderJob[]):Promise<void>{
     if(!jobs.length)return;
-    const root=this.requireProject().rootPath;
+    const current=this.requireProject();
+    if(current.renderJobs.length+jobs.length>100_000)throw new Error('Render job history would exceed the 100000-job project safety limit. Remove/archive old project history before queueing more work.');
+    const root=current.rootPath;
     for(const job of jobs)await this.journal.write(root,job);
     await this.projects.mutate(project=>{project.renderJobs.unshift(...[...jobs].reverse());for(const job of jobs){const shot=project.shots.find(s=>s.id===job.shotId);if(shot)shot.status='queued';}});
     for(const job of jobs){this.liveJobs.set(job.id,structuredClone(job));this.pending.push(job.id);}
@@ -820,6 +822,8 @@ export class RenderQueueService extends EventEmitter {
 
   private async commitOutputs(job:RenderJob,outputs:RenderOutput[]):Promise<void>{
     const currentProject=this.requireProject();
+    const newOutputCount=outputs.filter(output=>!currentProject.renderOutputs.some(existing=>existing.id===output.id)).length;
+    if(currentProject.renderOutputs.length+newOutputCount>100_000)throw new Error('Render outputs would exceed the 100000-output project safety limit. Remove/archive old takes before attaching more render media.');
     if(!currentProject.shots.some(shot=>shot.id===job.shotId)){
       const detached={...structuredClone(job),status:'orphaned' as const,progress:1,message:'Render completed after its shot was removed; media files were left on disk but were not attached to the project.',error:'The target shot no longer exists in the current project.',outputs:[],updatedAt:new Date().toISOString()};
       this.liveJobs.set(job.id,detached);await this.journal.write(currentProject.rootPath,detached);this.emitSnapshot();return;
