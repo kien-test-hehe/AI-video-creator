@@ -85,6 +85,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   };
   const runPostSwitchStep=async(operation:()=>Promise<unknown>):Promise<string|undefined>=>{try{await operation();return undefined;}catch(error){const message=error instanceof Error?error.message:String(error);console.warn('Post-switch project task failed:',message);return message;}};
   const showPostSwitchWarning=(label:string,message:string)=>{void dialog.showMessageBox({type:'warning',title:'CineForge project warning',message:`Project opened, but ${label} did not complete.`,detail:`${message}\n\nReview System / Preflight before rendering.`}).catch(()=>undefined);};
+  const showProjectRecoveryNotice=(message:string)=>{void dialog.showMessageBox({type:'warning',title:'CineForge project recovery',message:'Project recovered from a trusted backup.',detail:message}).catch(()=>undefined);};
 
   handle(IPC.projectCreate, (name?: string) => withProjectSwitchLock(async()=>{
     const created=await projects.createWithDialog(name);
@@ -98,6 +99,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.projectOpen, () => withProjectSwitchLock(async()=>{
     const opened = await projects.openWithDialog();
     if (opened) {
+      const projectRecoveryNotice=projects.consumeOpenRecoveryNotice();if(projectRecoveryNotice)showProjectRecoveryNotice(projectRecoveryNotice);
       const provisionWarning=await runPostSwitchStep(()=>withWorkflowValidationLock(()=>autoProvisionWanGpIfNeeded(projects,settings)));if(provisionWarning){console.warn('WanGP auto-provision warning:',provisionWarning);showPostSwitchWarning('WanGP auto-provisioning',provisionWarning);}
       const recoveryWarning=await runPostSwitchStep(()=>queue.reconcileAfterProjectOpen());if(recoveryWarning){console.warn('Render recovery warning:',recoveryWarning);showPostSwitchWarning('render recovery',recoveryWarning);}
       const automationWarning=await runPostSwitchStep(()=>automation.reconcileAfterProjectOpen());if(automationWarning){console.warn('Automation recovery warning:',automationWarning);showPostSwitchWarning('autonomous production recovery',automationWarning);}
