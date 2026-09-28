@@ -7,7 +7,6 @@ import type { AppMachineSettings, AssetKind, FilmProject, KeyframeRequest, Rende
 import { removedActiveRenderShotIds } from '../shared/project-guards';
 import { capcutHandoffInputKey, timelineExportInputKey } from '../shared/timeline-policy';
 import { WORKFLOW_PROFILE_LIMIT } from '../shared/workflow-limits';
-import { WORKFLOW_PROFILE_LIMIT } from '../shared/workflow-limits';
 import { AppSettingsService } from './services/app-settings-service';
 import { ProjectService } from './services/project-service';
 import { parseScreenplay } from './services/script-parser';
