@@ -40,9 +40,13 @@ export async function evaluateVisualQc(machine:AppMachineSettings,shot:Shot,fram
   }catch(error){if(error instanceof LocalVisionUnavailableError)return unavailable(error,'VISUAL_REVIEW_REQUIRED');throw error;}
 }
 
-export async function evaluateSemanticQc(machine:AppMachineSettings,shot:Shot,framePaths:string[]):Promise<AutoQcEvaluation>{
+export async function evaluateSemanticQc(machine:AppMachineSettings,project:FilmProject,shot:Shot,framePaths:string[]):Promise<AutoQcEvaluation>{
   try{
-    const contract=`TITLE: ${text(shot.title,500)}\nPROMPT: ${text(shot.prompt,8000)}\nCAMERA: ${text(shot.camera,2000)}\nACTION: ${text(shot.action,4000)}\nDIALOGUE/AUDIO INTENT: ${text(shot.dialogue,3000)}\nCONTINUITY NOTES: ${text(shot.continuityNotes,4000)}`;
+    const assetIds=[...new Set([...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId].filter((id):id is string=>Boolean(id)))];
+    const assetContract=assetIds.map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({
+      id:asset!.id,kind:asset!.kind,name:asset!.name,notes:text(asset!.notes,3000),continuity:asset!.continuity
+    }));
+    const contract=`TITLE: ${text(shot.title,500)}\nPROMPT: ${text(shot.prompt,8000)}\nCAMERA: ${text(shot.camera,2000)}\nACTION: ${text(shot.action,4000)}\nDIALOGUE/AUDIO INTENT: ${text(shot.dialogue,3000)}\nCONTINUITY NOTES: ${text(shot.continuityNotes,4000)}\nASSET BIBLE: ${text(JSON.stringify(assetContract),20_000)}`;
     const raw=await analyzeImagesWithLocalVision(machine,
       `These chronological frames must satisfy this shot contract:\n${contract}\nJudge only evidence visible in the supplied frames. Check required subject, location, broad action progression, composition/camera intent and obvious prop/wardrobe requirements. If motion/action cannot be established from sparse frames, use human-verify rather than guessing. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","expected":"...","observed":"..."}],"note":"..."}.`,framePaths);
     return normalizeEvaluation(raw,'Shot intent cannot be verified confidently from sampled frames.');
