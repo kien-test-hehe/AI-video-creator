@@ -1,4 +1,5 @@
 import type { FilmProject, RenderOutput, TimelineClip } from './types';
+import { canonicalTakeReadiness } from './production-state';
 
 export function timelineOutputIssue(
   clip:Pick<TimelineClip,'id'|'shotId'|'renderOutputId'>,
@@ -8,6 +9,26 @@ export function timelineOutputIssue(
   if(output.shotId!==clip.shotId)return `Timeline clip ${clip.id} belongs to shot ${clip.shotId} but render output ${output.id} belongs to shot ${output.shotId}.`;
   if(output.mediaType!=='video')return `Timeline clip ${clip.id} references a non-video render output: ${output.id}.`;
   return undefined;
+}
+
+export function timelineClipApprovalIssue(project:FilmProject,clip:TimelineClip):string|undefined{
+  const shot=project.shots.find(item=>item.id===clip.shotId);
+  if(!shot)return `Timeline clip ${clip.id} references a missing shot: ${clip.shotId}.`;
+  const approval=clip.approval??'legacy';
+  if(approval==='human-override'){
+    if(!clip.approvalReason?.trim())return `Timeline clip ${clip.id} is marked as a human override without a recorded reason.`;
+    return undefined;
+  }
+  if(approval==='legacy')return `Timeline clip ${clip.id} uses legacy take approval. Re-approve this clip or rebuild the cut from canonical takes before export.`;
+  if(shot.canonicalRenderId!==clip.renderOutputId)return `Timeline clip ${clip.id} is marked canonical but no longer matches the shot's canonical take.`;
+  const readiness=canonicalTakeReadiness(project,clip.shotId,clip.renderOutputId);
+  if(!readiness.ready)return `Timeline clip ${clip.id} is no longer canonical-ready: ${readiness.blockers.join(' ')}`;
+  return undefined;
+}
+
+export function timelineClipUseIssue(project:FilmProject,clip:TimelineClip):string|undefined{
+  const output=project.renderOutputs.find(item=>item.id===clip.renderOutputId);
+  return timelineOutputIssue(clip,output)??timelineClipApprovalIssue(project,clip);
 }
 
 export function duplicateTimelineOrderKey(clips:Array<Pick<TimelineClip,'track'|'order'>>):string|undefined{
