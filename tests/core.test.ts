@@ -221,6 +221,12 @@ describe('project schema canonicalization',()=>{
     tooManyScenes.scenes=Array.from({length:10_001},(_,index)=>({id:`scene-${index}`,index:index+1,heading:'INT. ROOM',body:'',shotIds:[]}));
     expect(()=>loadPortableProject(tooManyScenes,'/project')).toThrow(/project scenes.*10,?000 items/i);
   });
+  it('rejects explicit out-of-range project numerics instead of silently clamping them',()=>{
+    const raw=baseProject();raw.shots[0].generation.width=9000;
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/allowed range 256\.\.8192/i);
+    const timeline=baseProject();timeline.timeline=[{id:'clip',shotId:'shot-1',renderOutputId:'passing-output',track:0,order:0,trimInSec:0,volume:9}];
+    expect(()=>loadPortableProject(timeline,'/project')).toThrow(/allowed range 0\.\.8/i);
+  });
   it('canonicalizes parseable timestamps before lexical latest/recovery ordering',()=>{
     const raw=baseProject();raw.renderOutputs[0].createdAt='2026-01-01T09:00:00-05:00';
     const loaded=loadPortableProject(raw,'/project').project;
@@ -646,6 +652,22 @@ describe('machine settings persistence trust',()=>{
       if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
       await rm(root,{recursive:true,force:true});
     }
+  });
+});
+describe('machine settings recovery preservation and versioning',()=>{
+  it('preserves a rejected primary before restoring a trusted backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-settings-recovery-')),userdata=join(root,'userdata');
+    try{
+      const service=new AppSettingsService(userdata);await service.load();
+      const trusted=service.get();trusted.director.model='trusted';await service.save(trusted);
+      await writeFile(join(userdata,'machine-settings.v1.json'),JSON.stringify({schemaVersion:2,director:{model:'future'}}),'utf8');
+      const recovered=new AppSettingsService(userdata);await recovered.load();
+      expect(recovered.get().director.model).toBe('trusted');
+      const preserved=(await readdir(userdata)).find(name=>name.startsWith('machine-settings.v1.rejected-')&&name.endsWith('.json'));
+      expect(preserved).toBeTruthy();
+      const rejected=JSON.parse(await readFile(join(userdata,preserved!),'utf8'));
+      expect(rejected.schemaVersion).toBe(2);
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
 describe('machine settings bootstrap failure',()=>{
