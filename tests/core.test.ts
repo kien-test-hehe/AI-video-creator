@@ -67,12 +67,14 @@ describe('WanGP source-tree runtime fingerprint',()=>{
   it('changes for mounted source edits but ignores model-weight payloads',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-wangp-source-'));
     try{
-      await mkdir(join(root,'pkg'),{recursive:true});await mkdir(join(root,'models'),{recursive:true});
+      await mkdir(join(root,'pkg'),{recursive:true});await mkdir(join(root,'models'),{recursive:true});await mkdir(join(root,'env_venv','Lib','site-packages','dep'),{recursive:true});
       await writeFile(join(root,'wgp.py'),'from pkg.worker import run\n','utf8');
       await writeFile(join(root,'pkg','worker.py'),'def run(): return 1\n','utf8');
       await writeFile(join(root,'models','weights.safetensors'),Buffer.alloc(1024,1));
+      await writeFile(join(root,'env_venv','Lib','site-packages','dep','module.py'),'VERSION=1\n','utf8');
       const first=await fingerprintWanGpSourceTree(root,'wgp.py');
       await writeFile(join(root,'models','weights.safetensors'),Buffer.alloc(2048,2));
+      await writeFile(join(root,'env_venv','Lib','site-packages','dep','module.py'),'VERSION=2\n','utf8');
       expect(await fingerprintWanGpSourceTree(root,'wgp.py')).toBe(first);
       await writeFile(join(root,'pkg','worker.py'),'def run(): return 2\n','utf8');
       expect(await fingerprintWanGpSourceTree(root,'wgp.py')).not.toBe(first);
