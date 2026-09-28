@@ -207,6 +207,10 @@ describe('project backup recovery preservation',()=>{
       await writeFile(join(root,'cineforge.project.json'),JSON.stringify(rejected,null,2),'utf8');
       const reader=new ProjectService(),opened=await reader.openAt(root);
       expect(opened.story.title).toBe('Film');
+      const recoveryNotice=reader.consumeOpenRecoveryNotice();
+      expect(recoveryNotice).toMatch(/opened the trusted backup/i);
+      expect(recoveryNotice).toMatch(/rejected primary preserved/i);
+      expect(reader.consumeOpenRecoveryNotice()).toBeUndefined();
       const preserved=(await readdir(root)).find(name=>name.startsWith('cineforge.project.rejected-')&&name.endsWith('.json'));
       expect(preserved).toBeTruthy();
       const raw=JSON.parse(await readFile(join(root,preserved!),'utf8'));
