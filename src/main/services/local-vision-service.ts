@@ -51,3 +51,15 @@ export async function analyzeImagesWithLocalVision(machine:AppMachineSettings,in
   if(!text)throw new Error('Local visual evaluator returned no message content.');
   return parseJsonObject(text);
 }
+
+export async function releaseLocalVisionModel(machine:AppMachineSettings):Promise<void>{
+  const cfg=machine.director;if(!cfg.model.trim())return;
+  let base:URL;
+  try{base=assertLocalUrl(cfg.baseUrl,true);}catch{return;}
+  const hostname=base.hostname.toLowerCase(),port=base.port||'80';
+  if(!['127.0.0.1','localhost','::1','[::1]'].includes(hostname)||port!=='11434')return;
+  try{
+    const url=new URL('/api/generate',base.origin);
+    await fetchLocalUrl(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:cfg.model,keep_alive:0}),signal:AbortSignal.timeout(15_000)});
+  }catch(error){console.warn('Could not unload local Ollama QC model:',error);}
+}
