@@ -319,6 +319,13 @@ describe('project schema canonicalization',()=>{
     const missingOutput:any=baseProject();delete missingOutput.renderOutputs[0].id;
     expect(()=>loadPortableProject(missingOutput,'/project')).toThrow(/missing canonical project entity identifier/i);
   });
+  it('rejects missing IDs inside canonical reference arrays instead of generating replacements from map indices',()=>{
+    const raw:any=baseProject();raw.scenes[0].shotIds=['shot-1',null];
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/missing canonical project entity identifier/i);
+
+    const rawRefs:any=baseProject();rawRefs.assets=[{id:'ref',kind:'reference',name:'Ref',sourcePath:'ref.png',projectPath:'assets/reference/ref.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];rawRefs.shots[0].referenceAssetIds=['ref',null];
+    expect(()=>loadPortableProject(rawRefs,'/project')).toThrow(/missing canonical project entity identifier/i);
+  });
   it('rejects explicit out-of-range project numerics instead of silently clamping them',()=>{
     const raw=baseProject();raw.shots[0].generation.width=9000;
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/allowed range 256\.\.8192/i);
