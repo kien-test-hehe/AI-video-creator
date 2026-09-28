@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
 import { ProjectService, serializeProjectForStorage } from '../src/main/services/project-service';
-import { promoteCanonicalTake, recordObservedFinalState, recordShotQc, resolveHumanTask } from '../src/main/services/production-state-service';
+import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, recordShotQc, resolveHumanTask } from '../src/main/services/production-state-service';
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe } from '../src/main/services/keyframe-service';
@@ -45,6 +45,7 @@ import { writeResponseBodyToFileLimited } from '../src/main/services/http-respon
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
 import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, latestShotQcResult, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
+import { advisePreviz } from '../src/main/services/previz-service';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1913,5 +1914,53 @@ describe('QC ordering determinism',()=>{
       {id:'pass',shotId:'s',renderOutputId:'o',layer:'semantic',status:'pass',issues:[],inputKey:'k',createdAt:'2026-01-01T00:00:00.000Z'}
     ]} as unknown as FilmProject;
     expect(latestShotQcResult(project,'s','o','semantic','k')?.id).toBe('pass');
+  });
+});
+
+
+describe('automatic previz advisor',()=>{
+  const shot=(patch:Partial<Shot>={}):Shot=>({
+    id:'shot-previz',sceneId:'scene',index:1,title:'Previz shot',prompt:'A quiet medium shot',camera:'locked medium',action:'stands still',dialogue:'',continuityNotes:'',
+    characterAssetIds:['char-1'],propAssetIds:[],referenceAssetIds:[],status:'ready',
+    generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false},
+    ...patch
+  });
+  it('keeps simple coverage out of Blender while escalating spatially hard shots',()=>{
+    expect(advisePreviz(shot()).requirement).toBe('none');
+    const hard=advisePreviz(shot({
+      camera:'360 orbit tracking shot around three performers',
+      action:'three characters hand off a prop while walking through a doorway',
+      characterAssetIds:['a','b','c'],
+      propAssetIds:['p1','p2'],
+      continuityNotes:'Precise blocking and screen direction must match.'
+    }));
+    expect(hard.requirement).toBe('required');
+    expect(hard.score).toBeGreaterThanOrEqual(4);
+    expect(hard.reasons.length).toBeGreaterThan(1);
+  });
+});
+
+describe('previz human-task lifecycle',()=>{
+  it('marks required previz ready when the human explicitly approves its review task',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-previz-task-'));
+    const service=new ProjectService();
+    try{
+      await service.createAt(root,'Previz Task');
+      await service.mutate(project=>{
+        project.scenes.push({id:'scene',index:1,heading:'INT. SET',body:'',shotIds:['shot']});
+        project.shots.push({
+          id:'shot',sceneId:'scene',index:1,title:'Spatial shot',prompt:'orbit',camera:'orbit',action:'walk around table',dialogue:'',continuityNotes:'',
+          characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+          previz:{requirement:'required',status:'pending',reason:'Auto previz advisor',createdAt:'2026-01-01T00:00:00.000Z'},
+          generation:{modelFamily:'ltx-2.5-fast',mode:'t2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+        });
+      });
+      const created=await createHumanTask(service,{projectRoot:root,type:'verify-previz',shotId:'shot',title:'3D previz required',reason:'Spatial blocking needs review.'});
+      const task=created.humanTasks.find(item=>item.status==='open'&&item.type==='verify-previz')!;
+      const resolved=await resolveHumanTask(service,{projectRoot:root,taskId:task.id,status:'resolved',resolution:'Approved viewport blocking and camera path.'});
+      expect(resolved.humanTasks.find(item=>item.id===task.id)?.status).toBe('resolved');
+      expect(resolved.shots.find(item=>item.id==='shot')?.previz).toMatchObject({requirement:'required',status:'ready'});
+      expect(resolved.shots.find(item=>item.id==='shot')?.previz?.reason).toMatch(/Human override: previz approved/i);
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
