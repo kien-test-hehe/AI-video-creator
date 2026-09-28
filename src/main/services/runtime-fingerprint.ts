@@ -37,7 +37,7 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
       nodeCatalogSha256,
       stableSystem: stableComfySystem(ping.systemStats)
     });
-    return { backend, runtimeVersion, environmentSha256 };
+    return { backend, runtimeVersion:runtimeVersion.slice(0,2048), environmentSha256 };
   }
 
   if (machine.wangp.executionMode === 'docker') {
@@ -53,7 +53,7 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
     return {
       backend,
       executionMode: 'docker',
-      runtimeVersion,
+      runtimeVersion:runtimeVersion.slice(0,2048),
       runtimeSha256:sourceSha256,
       environmentSha256: sha256Json({
         backend, executionMode:'docker', runtimeVersion, sourceSha256,
@@ -75,7 +75,7 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
   return {
     backend,
     executionMode: 'native',
-    runtimeVersion,
+    runtimeVersion:runtimeVersion.slice(0,2048),
     runtimeSha256,
     environmentSha256: sha256Json({
       backend, executionMode:'native', runtimeVersion, runtimeSha256, packagesSha256,
