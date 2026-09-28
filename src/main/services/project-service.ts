@@ -88,10 +88,12 @@ export class ProjectService {
     const storedRoot = typeof (raw as any)?.rootPath === 'string' ? resolve((raw as any).rootPath) : openedRoot;
     if (storedRoot !== openedRoot) this.rebasePortablePaths(project, storedRoot, openedRoot);
 
+    let rejectedPrimaryPath:string|undefined;
+    if(recoveredFromBackup)rejectedPrimaryPath=await this.preserveRejectedPrimary(openedRoot,file);
     await this.ensureFolders(project.rootPath);
     await this.validateStoragePaths(project);
     const committed=await this.persistUnlocked(project);
-    if(recoveredFromBackup)console.warn('Recovered CineForge project from backup after the primary project file failed validation.',primaryFailure);
+    if(recoveredFromBackup)console.warn(`Recovered CineForge project from backup after the primary project file failed validation.${rejectedPrimaryPath?` Rejected primary preserved at ${rejectedPrimaryPath}.`:''}`,primaryFailure);
     if (loaded.migrationNotes.length) console.warn(loaded.migrationNotes.join('\n'));
     return committed;
   }
@@ -303,6 +305,19 @@ export class ProjectService {
       try{await assertExistingPathInside(resolve(root,'workflows'),lexical,`job workflow path for ${job.id}`);}
       catch(error:any){if(error?.code!=='ENOENT')throw error;}
     }
+  }
+
+  private async preserveRejectedPrimary(rootPath:string,projectFile:string):Promise<string|undefined>{
+    try{
+      await this.assertProjectStateFileNotSymlink(projectFile,'Rejected CineForge project file');
+      await stat(projectFile);
+    }catch(error:any){
+      if(error?.code==='ENOENT')return undefined;
+      throw new Error(`CineForge found a usable backup but could not safely preserve the rejected primary project before recovery: ${error instanceof Error?error.message:String(error)}`);
+    }
+    const target=await assertSafeWritePath(rootPath,join(rootPath,`cineforge.project.rejected-${Date.now()}-${randomUUID()}.json`),'rejected CineForge project preservation');
+    try{await copyFile(projectFile,target);return target;}
+    catch(error){throw new Error(`CineForge found a usable backup but refused to overwrite the rejected primary because preserving it failed: ${error instanceof Error?error.message:String(error)}`);}
   }
 
   private async persistUnlocked(project: FilmProject): Promise<FilmProject> {
