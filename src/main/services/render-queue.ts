@@ -645,9 +645,10 @@ export class RenderQueueService extends EventEmitter {
 
   private isCurrentJobSpec(project:FilmProject,job:RenderJob,shot:Shot):boolean{
     if(!job.spec)return false;
-    let currentWorkflowKey:string|undefined;
+    let currentWorkflowKey:string|undefined,currentPrompt:string|undefined;
     try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(project,shot));}catch{currentWorkflowKey=undefined;}
-    return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildRenderPrompt(project,shot)===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
+    try{currentPrompt=buildRenderPrompt(project,shot);}catch{return false;}
+    return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&currentPrompt===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
   }
 
   private async immutableFilesStillCurrent(project:FilmProject,job:RenderJob):Promise<boolean>{
