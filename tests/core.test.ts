@@ -17,7 +17,7 @@ import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMeta
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
-import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
+import { hasActiveRenderJobs, removedActiveRenderShotIds, workflowProfileCapacityIssue } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
 import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -200,6 +200,8 @@ describe('project backup recovery preservation',()=>{
       await writeFile(join(root,'cineforge.project.json'),JSON.stringify(rejected,null,2),'utf8');
       const reader=new ProjectService(),opened=await reader.openAt(root);
       expect(opened.story.title).toBe('Film');
+      const recoveryNotice=reader.consumeOpenRecoveryNotice();expect(recoveryNotice).toMatch(/opened the trusted backup/i);expect(recoveryNotice).toMatch(/rejected primary preserved/i);
+      expect(reader.consumeOpenRecoveryNotice()).toBeUndefined();
       const preserved=(await readdir(root)).find(name=>name.startsWith('cineforge.project.rejected-')&&name.endsWith('.json'));
       expect(preserved).toBeTruthy();
       const raw=JSON.parse(await readFile(join(root,preserved!),'utf8'));
@@ -212,6 +214,13 @@ describe('project serialized-size round trip',()=>{
     const project={schemaVersion:2,id:'p',name:'Film',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',story:{title:'Film',logline:'',script:'',notes:'💥'.repeat(100)},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}} as FilmProject;
     expect(()=>serializeProjectForStorage(project,256)).toThrow(/storage safety limit/i);
     expect(serializeProjectForStorage(project,4096)).toContain('"Film"');
+  });
+});
+describe('workflow profile capacity guard',()=>{
+  it('blocks a 513th workflow profile before import/provisioning work begins',()=>{
+    const profiles:any[]=[];profiles.length=512;
+    expect(workflowProfileCapacityIssue({settings:{workflowProfiles:profiles}} as any)).toMatch(/maximum of 512 workflow profiles/i);
+    profiles.length=511;expect(workflowProfileCapacityIssue({settings:{workflowProfiles:profiles}} as any)).toBeUndefined();
   });
 });
 describe('main-process asset kind validation',()=>{
