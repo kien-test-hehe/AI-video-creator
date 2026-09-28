@@ -12,6 +12,7 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafe
 import { sampleVideoFrames, type SampledVideoFrames } from './media-analysis';
 import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft } from './automatic-qc-service';
 import { createHumanTask, recordObservedFinalState, recordShotQc } from './production-state-service';
+import { ensurePrevizPlan } from './previz-service';
 
 const ACTIVE_RENDER=new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 
@@ -83,11 +84,16 @@ export class ProductionRuntimeService extends EventEmitter{
       do{
         this.advanceAgain=false;
         if(!this.status.running||this.status.paused)break;
-        const project=this.projects.getCurrent();
+        let project=this.projects.getCurrent();
         if(!project||project.rootPath!==this.status.projectRoot){this.fail('The open project changed while automation was running.');break;}
-        const shot=this.nextIncompleteShot(project);
+        let shot=this.nextIncompleteShot(project);
         if(!shot){await this.finish();break;}
         this.setStatus({currentShotId:shot.id,blockedHumanTaskIds:[]});
+        await this.ensureShotPreviz(shot.id);
+        project=this.projects.getCurrent();
+        if(!project){this.fail('Project closed while preparing previz.');break;}
+        shot=project.shots.find(item=>item.id===shot!.id);
+        if(!shot){this.fail('Current shot disappeared while preparing previz.');break;}
 
         const blockers=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id);
         if(blockers.length){
@@ -176,7 +182,7 @@ export class ProductionRuntimeService extends EventEmitter{
     await this.ensureQcLayer(shotId,outputId,'visual',frames);
     await this.ensureQcLayer(shotId,outputId,'semantic',frames);
     project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
-    if(project.shotDependencies.some(edge=>(edge.fromShotId===shotId||edge.toShotId===shotId)&&edge.relation!=='parallel'&&edge.propagate.length>0))await this.ensureQcLayer(shotId,outputId,'continuity',frames);
+    if(project.shotDependencies.some(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0))await this.ensureQcLayer(shotId,outputId,'continuity',frames);
   }
 
   private async ensureQcLayer(shotId:string,outputId:string,layer:Exclude<QcLayer,'technical'>,frames:SampledVideoFrames):Promise<void>{
@@ -230,6 +236,22 @@ export class ProductionRuntimeService extends EventEmitter{
     this.setStatus({phase:'retrying',message:`Retrying ${shot.title} after ${failure.layer} QC failure (${count+1}/${this.maxAutoRetries}).`});
     await this.queue.enqueue({projectRoot:project.rootPath,shotId:shot.id});
     return true;
+  }
+
+  private async ensureShotPreviz(shotId:string):Promise<void>{
+    const project=this.projects.getCurrent();if(!project)return;
+    const shot=project.shots.find(item=>item.id===shotId);if(!shot)return;
+    const current=shot.previz;
+    if(current?.reason?.startsWith('Human override:')&&current.requirement==='none')return;
+    const plan=await ensurePrevizPlan(project,shot);
+    const requirement=plan.advice.requirement;
+    const reason=current?.reason?.startsWith('Human override:')?current.reason:`Auto previz advisor · score ${plan.advice.score}: ${plan.advice.reasons.join('; ')||'no complex spatial trigger'}`;
+    const nextStatus=requirement==='none'?'not-needed':current?.status==='ready'?'ready':current?.status==='human-verify'?'human-verify':'pending';
+    if(current?.requirement===requirement&&current.status===nextStatus&&current.reason===reason&&current.manifestPath===plan.manifestPath)return;
+    await this.projects.mutate(next=>{
+      const target=next.shots.find(item=>item.id===shotId);if(!target)return;
+      target.previz={requirement,status:nextStatus,reason,manifestPath:plan.manifestPath,previewAssetId:target.previz?.previewAssetId,createdAt:target.previz?.createdAt??new Date().toISOString(),updatedAt:new Date().toISOString()};
+    });
   }
 
   private async ensureHumanTask(shot:Shot,type:'verify-previz'|'manual-qc',title:string,reason:string,recommendedAction:string):Promise<void>{
