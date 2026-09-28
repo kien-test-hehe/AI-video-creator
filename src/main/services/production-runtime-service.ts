@@ -382,7 +382,7 @@ export class ProductionRuntimeService extends EventEmitter{
       if(taskTitle==='Reference video required')return Boolean(shot.referenceVideoAssetId);
       return false;
     };
-    const closable=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId&&['verify-keyframe','route-unsupported'].includes(task.type)&&satisfied(task.title));
+    const closable=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id&&['verify-keyframe','route-unsupported'].includes(task.type)&&satisfied(task.title));
     if(!closable.length)return;
     await this.projects.mutate(next=>{for(const task of next.humanTasks){if(!closable.some(item=>item.id===task.id))continue;task.status='resolved';task.resolvedAt=now;task.resolution='Automatically resolved because the required generation input is now attached.';}});
   }
@@ -405,7 +405,7 @@ export class ProductionRuntimeService extends EventEmitter{
 
   private async ensureHumanTask(shot:Shot,type:HumanTaskType,title:string,reason:string,recommendedAction:string,relatedRenderOutputIds:string[]=[]):Promise<void>{
     const project=this.projects.getCurrent();if(!project)return;
-    if(project.humanTasks.some(task=>task.status==='open'&&task.shotId===currentShotId&&task.type===type&&task.title===title&&relatedRenderOutputIds.every(id=>task.relatedRenderOutputIds.includes(id))))return;
+    if(project.humanTasks.some(task=>task.status==='open'&&task.shotId===shot.id&&task.type===type&&task.title===title&&relatedRenderOutputIds.every(id=>task.relatedRenderOutputIds.includes(id))))return;
     await createHumanTask(this.projects,{projectRoot:project.rootPath,type,shotId:shot.id,title,reason,recommendedAction,relatedRenderOutputIds});
   }
 
