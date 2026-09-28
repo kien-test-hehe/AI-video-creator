@@ -1972,7 +1972,7 @@ describe('autonomous production journal',()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-auto-journal-'));
     const service=new ProjectService();
     try{
-      const project=await service.createAt(root,'Auto Journal');
+      await service.createAt(root,'Auto Journal');
       await service.mutate(next=>{
         next.scenes.push({id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['shot']});
         next.shots.push({
