@@ -531,7 +531,7 @@ export class RenderQueueService extends EventEmitter {
     if(!profile.validation?.runtimeFingerprint)throw new Error(`Profile “${profile.name}” has no validated runtime fingerprint. Revalidate it on this workstation before rendering.`);
     if(profile.validation.runtimeFingerprint!==runtimeFingerprint.environmentSha256)throw new Error(`Profile “${profile.name}” was validated against a different local AI runtime. Revalidate it before rendering.`);
     const now=new Date().toISOString();
-    return{id:randomUUID(),shotId:shot.id,createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(profile),effectivePrompt:buildPrompt(project,shot),queuedProjectUpdatedAt:project.updatedAt,workflowSha256,assetFingerprints,runtimeFingerprint,modelFingerprint:profile.modelFingerprint}};
+    return{id:randomUUID(),shotId:shot.id,createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(profile),effectivePrompt:buildRenderPrompt(project,shot),queuedProjectUpdatedAt:project.updatedAt,workflowSha256,assetFingerprints,runtimeFingerprint,modelFingerprint:profile.modelFingerprint}};
   }
 
   private assertExecutionEnvironment(machine:AppMachineSettings,profile:WorkflowProfile,probe:SystemProbe):void{
@@ -559,7 +559,9 @@ export class RenderQueueService extends EventEmitter {
 
   private async commitQueuedJobs(jobs:RenderJob[]):Promise<void>{
     if(!jobs.length)return;
-    const root=this.requireProject().rootPath;
+    const current=this.requireProject();
+    if(current.renderJobs.length+jobs.length>100_000)throw new Error('Render job history would exceed the 100000-job project safety limit. Remove/archive old project history before queueing more work.');
+    const root=current.rootPath;
     for(const job of jobs)await this.journal.write(root,job);
     await this.projects.mutate(project=>{project.renderJobs.unshift(...[...jobs].reverse());for(const job of jobs){const shot=project.shots.find(s=>s.id===job.shotId);if(shot)shot.status='queued';}});
     for(const job of jobs){this.liveJobs.set(job.id,structuredClone(job));this.pending.push(job.id);}
@@ -643,9 +645,10 @@ export class RenderQueueService extends EventEmitter {
 
   private isCurrentJobSpec(project:FilmProject,job:RenderJob,shot:Shot):boolean{
     if(!job.spec)return false;
-    let currentWorkflowKey:string|undefined;
+    let currentWorkflowKey:string|undefined,currentPrompt:string|undefined;
     try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(project,shot));}catch{currentWorkflowKey=undefined;}
-    return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&buildPrompt(project,shot)===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
+    try{currentPrompt=buildRenderPrompt(project,shot);}catch{return false;}
+    return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&currentPrompt===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
   }
 
   private async immutableFilesStillCurrent(project:FilmProject,job:RenderJob):Promise<boolean>{
@@ -820,6 +823,8 @@ export class RenderQueueService extends EventEmitter {
 
   private async commitOutputs(job:RenderJob,outputs:RenderOutput[]):Promise<void>{
     const currentProject=this.requireProject();
+    const newOutputCount=outputs.filter(output=>!currentProject.renderOutputs.some(existing=>existing.id===output.id)).length;
+    if(currentProject.renderOutputs.length+newOutputCount>100_000)throw new Error('Render outputs would exceed the 100000-output project safety limit. Remove/archive old takes before attaching more render media.');
     if(!currentProject.shots.some(shot=>shot.id===job.shotId)){
       const detached={...structuredClone(job),status:'orphaned' as const,progress:1,message:'Render completed after its shot was removed; media files were left on disk but were not attached to the project.',error:'The target shot no longer exists in the current project.',outputs:[],updatedAt:new Date().toISOString()};
       this.liveJobs.set(job.id,detached);await this.journal.write(currentProject.rootPath,detached);this.emitSnapshot();return;
@@ -871,7 +876,10 @@ export class RenderQueueService extends EventEmitter {
 
   private async updateJob(jobId:string,patch:Partial<RenderJob>,persistSummary=false,forceJournal=false):Promise<void>{
     const project=this.requireProject(),base=this.liveJobs.get(jobId)??project.renderJobs.find(j=>j.id===jobId);if(!base)return;
-    const next={...structuredClone(base),...patch,updatedAt:new Date().toISOString()} as RenderJob;
+    const normalizedPatch={...patch};
+    if(typeof normalizedPatch.message==='string'&&normalizedPatch.message.length>10_000)normalizedPatch.message=normalizedPatch.message.slice(0,10_000);
+    if(typeof normalizedPatch.error==='string'&&normalizedPatch.error.length>50_000)normalizedPatch.error=normalizedPatch.error.slice(0,50_000);
+    const next={...structuredClone(base),...normalizedPatch,updatedAt:new Date().toISOString()} as RenderJob;
     const now=Date.now(),last=this.lastJournalWrite.get(jobId)??0,writeJournal=forceJournal||now-last>=1500;
     if(writeJournal){await this.journal.write(project.rootPath,next);this.lastJournalWrite.set(jobId,now);}
     this.liveJobs.set(jobId,next);
@@ -884,5 +892,5 @@ export class RenderQueueService extends EventEmitter {
 
 function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
 function assetLine(asset:Asset|undefined,label:string):string{if(!asset)return'';return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}`;}
-function buildPrompt(project:FilmProject,shot:Shot):string{const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],refs=(shot.referenceAssetIds??[]).map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;return[shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',...characters.map(a=>assetLine(a,'Character continuity')),...refs.map(a=>assetLine(a,'Visual reference')),...props.map(a=>assetLine(a,'Prop / wardrobe continuity')),shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''].filter(Boolean).join('\n');}
+export function buildRenderPrompt(project:FilmProject,shot:Shot):string{const characters=shot.characterAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],refs=(shot.referenceAssetIds??[]).map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[],location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;const prompt=[shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',...characters.map(a=>assetLine(a,'Character continuity')),...refs.map(a=>assetLine(a,'Visual reference')),...props.map(a=>assetLine(a,'Prop / wardrobe continuity')),shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''].filter(Boolean).join('\n');if(prompt.length>300_000)throw new Error(`Effective render prompt exceeds the 300000-character immutable job safety limit for ${shot.title}. Shorten shot text or attached asset continuity notes before queueing.`);return prompt;}
 function sleep(ms:number):Promise<void>{return new Promise(resolve=>setTimeout(resolve,ms));}

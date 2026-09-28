@@ -55,7 +55,8 @@ function migrateV1ToV2(source: Record<string, any>, notes: string[]): Record<str
 
 function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProject {
   const now = new Date().toISOString();
-  const id = safeId(source.id);
+  const id = safeId(source.id,true);
+  const storySource=optionalObject(source.story,'story')??{};
   const settings = sanitizeProjectSettings(source.settings);
   const scenes = boundedArray(source.scenes,'project scenes',10_000).map(sanitizeScene);
   const sceneIds = new Set(scenes.map(s=>s.id));
@@ -106,10 +107,10 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
     updatedAt: iso(source.updatedAt, now),
     rootPath: openedRoot,
     story: {
-      title: str(source.story?.title, str(source.name, 'Untitled Film', 240), 500),
-      logline: str(source.story?.logline, '', 10_000),
-      script: str(source.story?.script, '', 2_000_000),
-      notes: str(source.story?.notes, '', 200_000)
+      title: str(storySource.title, str(source.name, 'Untitled Film', 240), 500),
+      logline: str(storySource.logline, '', 10_000),
+      script: str(storySource.script, '', 2_000_000),
+      notes: str(storySource.notes, '', 200_000)
     },
     scenes, assets, shots, renderJobs, renderOutputs, timeline, settings
   };
@@ -117,6 +118,7 @@ function sanitizeV2(source: Record<string, any>, openedRoot: string): FilmProjec
 
 function sanitizeProjectSettings(value: unknown): ProjectSettings {
   const source = asObject(value ?? {}, 'settings');
+  const costPolicy=optionalObject(source.costPolicy,'project cost policy')??{},capcut=optionalObject(source.capcut,'CapCut project settings')??{};
   const profiles = boundedArray(source.workflowProfiles,'workflow profiles',512).map(sanitizeWorkflowProfile);
   for (const builtin of BUILTIN_WORKFLOW_PROFILES) if (!profiles.some(p=>p.id===builtin.id)) profiles.push(structuredClone(builtin));
   if(profiles.length>512)throw new Error('workflow profiles exceed the safety limit of 512 items after required built-ins are added.');
@@ -124,38 +126,38 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
   return {
     costPolicy: {
       mode: 'codex-capcut-only',
-      allowCapcutAiCredits: source.costPolicy?.allowCapcutAiCredits===true
+      allowCapcutAiCredits: booleanOrDefault(costPolicy.allowCapcutAiCredits,false,'CapCut AI credits policy')
     },
     capcut: {
-      enabled: typeof source.capcut?.enabled==='boolean'?source.capcut.enabled:true,
-      pro: source.capcut?.pro === true
+      enabled: booleanOrDefault(capcut.enabled,true,'CapCut enabled setting'),
+      pro: booleanOrDefault(capcut.pro,false,'CapCut Pro setting')
     },
     defaultFps: clampInt(source.defaultFps, 1, 120, 24),
-    outputContainer: ['mp4','mov','webm'].includes(source.outputContainer) ? source.outputContainer : 'mp4',
+    outputContainer: enumOrDefault(source.outputContainer,new Set(['mp4','mov','webm'] as const),'mp4','project output container'),
     workflowProfiles: profiles
   };
 }
 
 function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
   const source = asObject(value, 'workflow profile');
-  const format = source.workflowFormat === 'wangp-settings' ? 'wangp-settings' : source.workflowFormat === 'ui' ? 'ui' : 'api';
-  const runtime = source.runtime === 'wangp' ? 'wangp' : source.runtime === 'comfyui' ? 'comfyui' : format === 'wangp-settings' ? 'wangp' : 'comfyui';
-  const validationSource = source.validation && typeof source.validation === 'object' ? source.validation : {};
+  const format = enumOrDefault(source.workflowFormat,new Set(['wangp-settings','ui','api'] as const),'api','workflow format');
+  const runtime = source.runtime==null||source.runtime===''?(format==='wangp-settings'?'wangp':'comfyui'):enumOrDefault(source.runtime,new Set(['wangp','comfyui'] as const),'comfyui','workflow runtime');
+  const validationSource = optionalObject(source.validation,'workflow validation') ?? {};
   return {
     id: safeId(source.id),
     runtime,
-    purpose: PURPOSES.has(source.purpose) ? source.purpose : 'video',
+    purpose: enumOrDefault(source.purpose,PURPOSES,'video','workflow purpose'),
     name: str(source.name, 'Workflow', 240),
-    modelFamily: MODEL_FAMILIES.has(source.modelFamily) ? source.modelFamily : 'custom',
-    mode: MODES.has(source.mode) ? source.mode : 'i2v',
+    modelFamily: enumOrDefault(source.modelFamily,MODEL_FAMILIES,'custom','workflow model family'),
+    mode: enumOrDefault(source.mode,MODES,'i2v','workflow generation mode'),
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
     bindings: boundedArray(source.bindings,'workflow bindings',256).map(sanitizeBinding),
-    enabled: source.enabled===true,
+    enabled: booleanOrDefault(source.enabled,false,'workflow enabled flag'),
     notes: str(source.notes, '', 20_000) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
     validation: {
-      structuralStatus: ['valid','invalid'].includes(validationSource.structuralStatus) ? validationSource.structuralStatus : 'unvalidated',
+      structuralStatus: enumOrDefault(validationSource.structuralStatus,new Set(['valid','invalid','unvalidated'] as const),'unvalidated','workflow validation status'),
       validatedAt: maybeIso(validationSource.validatedAt),
       sourceSha256: sha(validationSource.sourceSha256),
       runtimeFingerprint: str(validationSource.runtimeFingerprint, '', 512) || undefined,
@@ -182,8 +184,8 @@ function sanitizeBinding(value: unknown): WorkflowBinding {
     selector,
     input,
     jsonPath,
-    transform: ['integer','float','boolean','string'].includes(source.transform) ? source.transform : 'identity',
-    required: source.required===true
+    transform: enumOrDefault(source.transform,new Set(['integer','float','boolean','string','identity'] as const),'identity','workflow binding transform'),
+    required: booleanOrDefault(source.required,false,'workflow binding required flag')
   } as WorkflowBinding;
 }
 
@@ -196,7 +198,7 @@ function sanitizeScene(value: unknown): Scene {
     body: str(source.body, '', 500_000),
     location: str(source.location, '', 2000) || undefined,
     timeOfDay: str(source.timeOfDay, '', 500) || undefined,
-    shotIds: boundedArray(source.shotIds,'scene shot ids',100_000).map(safeId)
+    shotIds: boundedArray(source.shotIds,'scene shot ids',100_000).map(value=>safeId(value))
   };
 }
 
@@ -223,14 +225,13 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const sceneId = safeId(source.sceneId);
   if (!sceneIds.has(sceneId)) throw new Error(`Shot references unknown scene: ${sceneId}`);
   const generationSource = asObject(source.generation ?? {}, 'shot generation');
-  const rawModelFamily=typeof generationSource.modelFamily==='string'?generationSource.modelFamily:'';
-  const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
+  const modelFamily=enumOrDefault(generationSource.modelFamily,MODEL_FAMILIES,PRIMARY_VIDEO_MODEL,'shot model family');
   const defaults = MODEL_DEFAULTS[modelFamily];
-  const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(safeId).filter(id=>assetIds.has(id));
+  const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(item=>safeId(item)).filter(id=>assetIds.has(id));
   const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => {const filtered=rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!));if(filtered.length>max)throw new Error(`Shot asset role exceeds the ${max}-item safety limit.`);return filtered;};
   const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
-    if (typeof value !== 'string' || !value) return undefined;
-    return assetIds.has(value)&&allowed.has(assetKinds.get(value)!) ? value : undefined;
+    const id=optionalString(value,'shot asset reference');if(!id)return undefined;
+    return assetIds.has(id)&&allowed.has(assetKinds.get(id)!) ? id : undefined;
   };
   const characterKinds=new Set<AssetKind>(['character']),locationKinds=new Set<AssetKind>(['location']),propKinds=new Set<AssetKind>(['prop','wardrobe']),referenceKinds=new Set<AssetKind>(['reference']);
   const startKinds=new Set<AssetKind>(['image','reference','keyframe','character','location']),endKinds=new Set<AssetKind>(['image','reference','keyframe']),videoKinds=new Set<AssetKind>(['video']),audioKinds=new Set<AssetKind>(['audio']);
@@ -255,11 +256,11 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     endFrameAssetId: optionalAsset(source.endFrameAssetId,endKinds),
     referenceVideoAssetId: optionalAsset(source.referenceVideoAssetId,videoKinds),
     audioAssetId: optionalAsset(source.audioAssetId,audioKinds),
-    status: SHOT_STATUSES.has(source.status) ? source.status : 'draft',
+    status: enumOrDefault(source.status,SHOT_STATUSES,'draft','shot status'),
     generation: {
       modelFamily,
-      mode: MODES.has(generationSource.mode) ? generationSource.mode : (defaults.mode ?? 'i2v'),
-      quality: QUALITIES.has(generationSource.quality) ? generationSource.quality : (defaults.quality ?? 'balanced'),
+      mode: enumOrDefault(generationSource.mode,MODES,defaults.mode ?? 'i2v','shot generation mode'),
+      quality: enumOrDefault(generationSource.quality,QUALITIES,defaults.quality ?? 'balanced','shot quality intent'),
       width: clampInt(generationSource.width,256,8192,defaults.width ?? 768),
       height: clampInt(generationSource.height,256,8192,defaults.height ?? 432),
       frames: clampInt(generationSource.frames,1,100_000,defaults.frames ?? 121),
@@ -268,10 +269,10 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
       cfg: generationSource.cfg == null ? defaults.cfg : clampNumber(generationSource.cfg,0,100,defaults.cfg ?? 1),
       seed: clampInt(generationSource.seed,0,2_147_483_647,Math.floor(Math.random()*2_147_483_647)),
       negativePrompt: str(generationSource.negativePrompt,'',100_000),
-      includeAudio: typeof generationSource.includeAudio==='boolean'?generationSource.includeAudio:(defaults.includeAudio??false),
-      workflowProfileId: typeof generationSource.workflowProfileId === 'string' ? generationSource.workflowProfileId : undefined
+      includeAudio: booleanOrDefault(generationSource.includeAudio,defaults.includeAudio??false,'shot includeAudio flag'),
+      workflowProfileId: optionalString(generationSource.workflowProfileId,'shot workflow profile id')
     },
-    latestRenderId: typeof source.latestRenderId === 'string' ? source.latestRenderId : undefined
+    latestRenderId: optionalString(source.latestRenderId,'shot latest render id')
   };
 }
 
@@ -283,7 +284,7 @@ function sanitizeRenderOutput(value: unknown, shotIds: Set<string>): RenderOutpu
   return {
     id:safeId(source.id), jobId:safeId(source.jobId), shotId,
     path, filename:str(source.filename,'output',2048),
-    mediaType:['video','image','audio'].includes(source.mediaType) ? source.mediaType : 'unknown',
+    mediaType:enumOrDefault(source.mediaType,new Set(['video','image','audio','unknown'] as const),'unknown','render output media type'),
     createdAt:iso(source.createdAt,new Date().toISOString()),
     comfyMeta:sanitizeComfyMeta(source.comfyMeta),
     technicalQc:sanitizeTechnicalQc(source.technicalQc)
@@ -294,12 +295,12 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
   const source = asObject(value, 'render job');
   const shotId = safeId(source.shotId);
   if (!shotIds.has(shotId)) throw new Error(`Render job references unknown shot: ${shotId}`);
-  const profileId = typeof source.workflowProfileId === 'string' ? source.workflowProfileId : undefined;
+  const profileId = optionalString(source.workflowProfileId,'render job workflow profile id');
   let spec: RenderJob['spec'];
-  if(source.spec&&typeof source.spec==='object'){
-    const rawSpec=asObject(source.spec,'render job spec');
+  const rawSpec=optionalObject(source.spec,'render job spec');
+  if(rawSpec){
     const workflowProfile=sanitizeWorkflowProfile(rawSpec.workflowProfile);
-    const runtimeRaw=rawSpec.runtimeFingerprint&&typeof rawSpec.runtimeFingerprint==='object'?rawSpec.runtimeFingerprint:{};
+    const runtimeRaw=optionalObject(rawSpec.runtimeFingerprint,'runtime fingerprint') ?? {};
     const specShot=sanitizeShot(rawSpec.shot,sceneIds,assetIds,assetKinds);
     if(specShot.id!==shotId)throw new Error(`Render job ${String(source.id)} immutable spec shot id ${specShot.id} does not match job shotId ${shotId}.`);
     spec={
@@ -312,8 +313,8 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
         const fp=asObject(item,'asset fingerprint');return{assetId:safeId(fp.assetId),projectPath:str(fp.projectPath,'',4096),sha256:sha(fp.sha256)??'0'.repeat(64)};
       }),
       runtimeFingerprint:{
-        backend:runtimeRaw.backend==='wangp'?'wangp':'comfyui',
-        executionMode:runtimeRaw.executionMode==='docker'?'docker':runtimeRaw.executionMode==='native'?'native':undefined,
+        backend:enumOrDefault(runtimeRaw.backend,new Set(['wangp','comfyui'] as const),'comfyui','runtime fingerprint backend'),
+        executionMode:optionalEnum(runtimeRaw.executionMode,new Set(['docker','native'] as const),'runtime fingerprint execution mode'),
         runtimeVersion:str(runtimeRaw.runtimeVersion,'',2048)||undefined,
         runtimeSha256:sha(runtimeRaw.runtimeSha256),
         environmentSha256:sha(runtimeRaw.environmentSha256)??'0'.repeat(64)
@@ -323,11 +324,11 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
   }
   return {
     id:safeId(source.id), shotId, createdAt:iso(source.createdAt,new Date().toISOString()), updatedAt:iso(source.updatedAt,new Date().toISOString()),
-    status:JOB_STATUSES.has(source.status) ? source.status : 'failed', progress:clampNumber(source.progress,0,1,0),
-    message:str(source.message,'',10_000), modelFamily:MODEL_FAMILIES.has(source.modelFamily)?source.modelFamily:'custom',
+    status:enumOrDefault(source.status,JOB_STATUSES,'failed','render job status'), progress:clampNumber(source.progress,0,1,0),
+    message:str(source.message,'',10_000), modelFamily:enumOrDefault(source.modelFamily,MODEL_FAMILIES,'custom','render job model family'),
     workflowProfileId: profileId && profiles.some(p=>p.id===profileId) ? profileId : undefined,
     comfyPromptId:str(source.comfyPromptId,'',512)||undefined,
-    backendPid:Number.isInteger(source.backendPid)&&source.backendPid>0?source.backendPid:undefined,
+    backendPid:optionalPositiveInteger(source.backendPid,'render job backend pid'),
     lastHeartbeatAt:maybeIso(source.lastHeartbeatAt),
     error:str(source.error,'',50_000)||undefined,
     outputs:[],
@@ -347,55 +348,86 @@ function sanitizeTimelineClip(value: unknown, shotIds: Set<string>, outputs: Map
 }
 
 function sanitizeComfyMeta(value:unknown):Record<string,unknown>|undefined{
-  if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
-  const source=value as Record<string,unknown>,out:Record<string,unknown>={};
+  const source=optionalObject(value,'Comfy metadata');if(!source)return undefined;const out:Record<string,unknown>={};
   for(const key of ['filename','subfolder','type','runtime','profile']){
-    const v=source[key];if(typeof v==='string')out[key]=v.slice(0,4096);
+    const v=source[key];if(v==null)continue;if(typeof v!=='string')throw new Error(`Comfy metadata ${key} must be a string.`);if(v.length>4096)throw new Error(`Comfy metadata ${key} exceeds the 4096-character project safety limit.`);out[key]=v;
   }
   return Object.keys(out).length?out:undefined;
 }
 function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
-  if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
-  const source=value as Record<string,unknown>;
+  const source=optionalObject(value,'technical QC');if(!source)return undefined;
   return{
     checkedAt:iso(source.checkedAt,new Date().toISOString()),
-    passed:source.passed===true,
+    passed:booleanOrDefault(source.passed,false,'technical QC passed flag'),
     durationSec:finiteOptional(source.durationSec,0,1_000_000),
     width:intOptional(source.width,1,16384),
     height:intOptional(source.height,1,16384),
     fps:finiteOptional(source.fps,0,1000),
-    hasAudio:typeof source.hasAudio==='boolean'?source.hasAudio:undefined,
+    hasAudio:optionalBoolean(source.hasAudio,'technical QC hasAudio flag'),
     audioPeakDb:finiteOptional(source.audioPeakDb,-300,100),
     issues:boundedArray(source.issues,'technical QC issues',128).map(item=>str(item,'',4096)).filter(Boolean),
     warnings:boundedArray(source.warnings,'technical QC warnings',128).map(item=>str(item,'',4096)).filter(Boolean)
   };
 }
-function finiteOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):undefined;}
-function intOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isInteger(n)?Math.min(max,Math.max(min,n)):undefined;}
+function finiteOptional(value:unknown,min:number,max:number):number|undefined{if(value==null||value==='')return undefined;const n=Number(value);if(!Number.isFinite(n))throw new Error(`Project optional number is not finite: ${String(value).slice(0,128)}`);if(n<min||n>max)throw new Error(`Project optional number is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function intOptional(value:unknown,min:number,max:number):number|undefined{if(value==null||value==='')return undefined;const n=Number(value);if(!Number.isInteger(n))throw new Error(`Project optional integer is invalid: ${String(value).slice(0,128)}`);if(n<min||n>max)throw new Error(`Project optional integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
 
 function assertUniqueIds(label:string,items:Array<{id:string}>):void{
   const seen=new Set<string>();for(const item of items){if(seen.has(item.id))throw new Error(`Duplicate ${label} id: ${item.id}`);seen.add(item.id);}
 }
 
+function optionalObject(value:unknown,label:string):Record<string,any>|undefined{
+  if(value==null)return undefined;
+  if(typeof value!=='object'||Array.isArray(value))throw new Error(`Invalid ${label}: expected an object.`);
+  return value as Record<string,any>;
+}
+function optionalString(value:unknown,label:string):string|undefined{
+  if(value==null||value==='')return undefined;
+  if(typeof value!=='string')throw new Error(`Invalid ${label}: expected a string.`);
+  return value;
+}
+function optionalPositiveInteger(value:unknown,label:string):number|undefined{
+  if(value==null||value==='')return undefined;
+  const n=Number(value);if(!Number.isInteger(n)||n<=0)throw new Error(`Invalid ${label}: expected a positive integer.`);return n;
+}
 function asObject(value: unknown, label: string): Record<string, any> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label}: expected an object.`);
   return value as Record<string, any>;
 }
 function array(value: unknown): any[] { return Array.isArray(value) ? value : []; }
 function boundedArray(value:unknown,label:string,max:number):any[]{const items=array(value);if(items.length>max)throw new Error(`${label} exceed the safety limit of ${max} items.`);return items;}
-function str(value: unknown, fallback: string, max: number): string { if(typeof value!=='string')return fallback;if(value.length>max)throw new Error(`Project string exceeds the ${max}-character safety limit.`);return value; }
-function safeId(value: unknown): string {
-  if(value==null||value==='')return randomUUID();
+function str(value: unknown, fallback: string, max: number): string { if(value==null)return fallback;if(typeof value!=='string')throw new Error(`Project string must be a string, got ${typeof value}.`);if(value.length>max)throw new Error(`Project string exceeds the ${max}-character safety limit.`);return value; }
+function booleanOrDefault(value:unknown,fallback:boolean,_label:string):boolean{
+  if(value==null||value==='')return fallback;
+  return typeof value==='boolean'?value:false;
+}
+function optionalBoolean(value:unknown,_label:string):boolean|undefined{
+  if(value==null||value==='')return undefined;
+  return typeof value==='boolean'?value:undefined;
+}
+function enumOrDefault<T extends string>(value:unknown,allowed:ReadonlySet<T>,fallback:T,label:string):T{
+  if(value==null||value==='')return fallback;
+  if(typeof value==='string'&&allowed.has(value as T))return value as T;
+  throw new Error(`Invalid ${label}: ${String(value).slice(0,128)}`);
+}
+function optionalEnum<T extends string>(value:unknown,allowed:ReadonlySet<T>,label:string):T|undefined{
+  if(value==null||value==='')return undefined;
+  if(typeof value==='string'&&allowed.has(value as T))return value as T;
+  throw new Error(`Invalid ${label}: ${String(value).slice(0,128)}`);
+}
+function safeId(value: unknown,allowMissing=false): string {
+  if(value==null||value===''){if(allowMissing)return randomUUID();throw new Error('Missing canonical project entity identifier.');}
   if (typeof value === 'string' && /^[a-zA-Z0-9._:-]{1,256}$/.test(value)) return value;
   throw new Error(`Invalid project identifier: ${typeof value==='string'?value.slice(0,128):String(value)}`);
 }
-function clampInt(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isInteger(n))return fallback;if(n<min||n>max)throw new Error(`Project integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
-function clampNumber(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isFinite(n))return fallback;if(n<min||n>max)throw new Error(`Project number is outside the allowed range ${min}..${max}: ${n}`);return n;}
-function iso(value: unknown, fallback: string): string { if(typeof value!=='string')return fallback;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():fallback; }
-function maybeIso(value: unknown): string | undefined { if(typeof value!=='string')return undefined;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():undefined; }
+function clampInt(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isInteger(n))throw new Error(`Project integer is invalid: ${String(value).slice(0,128)}`);if(n<min||n>max)throw new Error(`Project integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function clampNumber(value: unknown,min:number,max:number,fallback:number):number{if(value==null||value==='')return fallback;const n=Number(value);if(!Number.isFinite(n))throw new Error(`Project number is invalid: ${String(value).slice(0,128)}`);if(n<min||n>max)throw new Error(`Project number is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function iso(value: unknown, fallback: string): string { if(value==null||value==='')return fallback;if(typeof value!=='string')throw new Error('Project timestamp must be an ISO-compatible string.');const time=Date.parse(value);if(!Number.isFinite(time))throw new Error(`Invalid project timestamp: ${value.slice(0,128)}`);return new Date(time).toISOString(); }
+function maybeIso(value: unknown): string | undefined { if(value==null||value==='')return undefined;if(typeof value!=='string')throw new Error('Optional project timestamp must be an ISO-compatible string.');const time=Date.parse(value);if(!Number.isFinite(time))throw new Error(`Invalid optional project timestamp: ${value.slice(0,128)}`);return new Date(time).toISOString(); }
 function sourceLabel(value:unknown):string{
   if(typeof value!=='string')return'';
-  const parts=value.replace(/\\/g,'/').split('/').filter(Boolean);
-  return (parts.at(-1)||'').slice(0,2048);
+  const parts=value.replace(/\\/g,'/').split('/').filter(Boolean),label=parts.at(-1)||'';
+  if(label.length>2048)throw new Error('Asset source label exceeds the 2048-character project safety limit.');
+  return label;
 }
-function sha(value: unknown): string | undefined { return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined; }
+function sha(value: unknown): string | undefined { if(value==null||value==='')return undefined;if(typeof value==='string'&&/^[a-f0-9]{64}$/i.test(value))return value.toLowerCase();throw new Error('Invalid SHA-256 project fingerprint.'); }

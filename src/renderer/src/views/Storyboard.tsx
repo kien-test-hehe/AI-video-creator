@@ -11,12 +11,17 @@ export function Storyboard(){
   const[planningSceneId,setPlanningSceneId]=useState<string>();
   if(!project)return <Page title="Storyboard"><Empty>Open a project first.</Empty></Page>;
 
-  const addShot=(sceneId:string)=>updateProject(p=>{
+  const addShot=(sceneId:string)=>{
+    const source=project.scenes.find(scene=>scene.id===sceneId);if(!source)return;
+    if(source.body.length>200_000){setError('Scene body exceeds the 200000-character shot prompt safety limit. Shorten or split the scene before creating a shot from it.');return;}
+    if(project.shots.length>=100_000){setError('Adding a shot would exceed the 100000-shot project safety limit.');return;}
+    updateProject(p=>{
     const scene=p.scenes.find(s=>s.id===sceneId);if(!scene)return;
     const index=p.shots.filter(s=>s.sceneId===sceneId).length+1,id=crypto.randomUUID(),d=MODEL_DEFAULTS[PRIMARY_VIDEO_MODEL];
     const shot:Shot={id,sceneId,index,title:'Shot '+scene.index+'.'+index,prompt:scene.body,camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'draft',generation:{modelFamily:PRIMARY_VIDEO_MODEL,mode:d.mode||'i2v',quality:'balanced',width:d.width!,height:d.height!,frames:d.frames!,fps:d.fps!,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??true}};
     p.shots.push(shot);scene.shotIds.push(id);
-  });
+    });
+  };
 
   const aiPlan=async(sceneId:string)=>{
     if(planningSceneId)return;
@@ -28,6 +33,7 @@ export function Storyboard(){
       const drafts=await window.cineforge.director.planScene(sceneId);
       const current=useAppStore.getState().project,currentScene=current?.scenes.find(scene=>scene.id===sceneId);
       if(!current||!currentScene||sceneDirectorInputKey(current,currentScene)!==signature){setNotice('Director result was discarded because the story, scene, assets, or validated model routes changed while planning.');return;}
+      if(current.shots.length+drafts.length>100_000)throw new Error('Director result would exceed the 100000-shot project safety limit.');
       updateProject(p=>{
         const scene=p.scenes.find(s=>s.id===sceneId);if(!scene||sceneDirectorInputKey(p,scene)!==signature)return;
         let index=p.shots.filter(s=>s.sceneId===sceneId).length,added=0;

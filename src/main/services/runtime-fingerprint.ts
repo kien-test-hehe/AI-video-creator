@@ -37,7 +37,7 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
       nodeCatalogSha256,
       stableSystem: stableComfySystem(ping.systemStats)
     });
-    return { backend, runtimeVersion, environmentSha256 };
+    return { backend, runtimeVersion:runtimeVersion.slice(0,2048), environmentSha256 };
   }
 
   if (machine.wangp.executionMode === 'docker') {
@@ -53,7 +53,7 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
     return {
       backend,
       executionMode: 'docker',
-      runtimeVersion,
+      runtimeVersion:runtimeVersion.slice(0,2048),
       runtimeSha256:sourceSha256,
       environmentSha256: sha256Json({
         backend, executionMode:'docker', runtimeVersion, sourceSha256,
@@ -75,7 +75,7 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
   return {
     backend,
     executionMode: 'native',
-    runtimeVersion,
+    runtimeVersion:runtimeVersion.slice(0,2048),
     runtimeSha256,
     environmentSha256: sha256Json({
       backend, executionMode:'native', runtimeVersion, runtimeSha256, packagesSha256,
@@ -85,7 +85,7 @@ export async function fingerprintRuntime(machine: AppMachineSettings, profile: W
 }
 
 const WANGP_SOURCE_EXTENSIONS=new Set(['.py','.pyi','.json','.yaml','.yml','.toml','.cfg','.ini','.txt','.c','.cc','.cpp','.h','.hpp','.cu','.cuh']);
-const WANGP_SOURCE_SKIP_DIRS=new Set(['.git','.venv','venv','env','models','model','checkpoints','checkpoint','ckpts','loras','lora','outputs','output','cache','.cache','__pycache__','node_modules']);
+const WANGP_SOURCE_SKIP_DIRS=new Set(['.git','.venv','venv','env','env_venv','models','model','checkpoints','checkpoint','ckpts','loras','lora','outputs','output','cache','.cache','__pycache__','node_modules']);
 
 export async function fingerprintWanGpSourceTree(rootPath:string,entrypointName:string):Promise<string>{
   const root=resolve(rootPath);if(!rootPath.trim())throw new Error('WanGP root path is not configured.');

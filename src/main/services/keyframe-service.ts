@@ -60,6 +60,7 @@ async function assertKeyframeSnapshotCurrent(
 export async function generateKeyframe(projects:ProjectService,machine:AppMachineSettings,request:KeyframeRequest,leaseStore:KeyframeLeaseStore,signal?:AbortSignal):Promise<FilmProject>{
   throwIfAborted(signal);
   const project=projects.getCurrent();if(!project)throw new Error('Open a project first.');if(project.rootPath!==request.projectRoot)throw new Error('Keyframe request does not match the open project.');
+  if(project.assets.length>=100_000)throw new Error('Keyframe generation would exceed the 100000-asset project safety limit. Remove/archive assets before generating another keyframe.');
   const shot=project.shots.find(s=>s.id===request.shotId);if(!shot)throw new Error('Shot not found.');
   const profile=chooseProfile(project,request.workflowProfileId),inputSignature=keyframeProjectInputKey(project,shot,request.role,profile);
   const workflowPath=await assertExistingPathInside(join(project.rootPath,'workflows'),assertPathInside(join(project.rootPath,'workflows'),profile.workflowPath,`workflow path for ${profile.name}`),`workflow path for ${profile.name}`);
@@ -122,11 +123,12 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   const keyframeAssetDir=await ensureSafeDirectory(join(project.rootPath,'assets'),join(project.rootPath,'assets','keyframe'),'generated keyframe directory');
   const target=await assertSafeWritePath(keyframeAssetDir,join(project.rootPath,relativePath),'generated keyframe');
   await copyFile(generatedPath,target);await rm(generatedPath,{force:true}).catch(()=>undefined);
-  const asset:Asset={id:assetId,kind:'keyframe',name:`${shot.title} ${request.role} keyframe`,sourcePath:`generated-${request.role}${extension}`,projectPath:relativePath,tags:['generated','keyframe',request.role,profile.modelFamily],notes:`Generated locally with profile ${profile.name}.`,createdAt:new Date().toISOString()};
+  const asset:Asset={id:assetId,kind:'keyframe',name:`${shot.title} ${request.role} keyframe`.slice(0,1000),sourcePath:`generated-${request.role}${extension}`,projectPath:relativePath,tags:['generated','keyframe',request.role,profile.modelFamily],notes:`Generated locally with profile ${profile.name}.`,createdAt:new Date().toISOString()};
   try{
     return await projects.mutate(p=>{
       const targetShot=p.shots.find(s=>s.id===shot.id),targetProfile=p.settings.workflowProfiles.find(item=>item.id===profile.id);
       if(!targetShot||!targetProfile||keyframeProjectInputKey(p,targetShot,request.role,targetProfile)!==inputSignature)throw new Error('The shot or keyframe workflow changed before the generated frame could be attached.');
+      if(p.assets.length>=100_000)throw new Error('Keyframe attachment would exceed the 100000-asset project safety limit.');
       p.assets.push(asset);
       if(request.role==='start')targetShot.startFrameAssetId=asset.id;else targetShot.endFrameAssetId=asset.id;
       targetShot.latestRenderId=undefined;

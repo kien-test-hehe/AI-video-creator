@@ -8,10 +8,16 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { loadPortableProject, UnsupportedProjectSchemaError } from './project-schema';
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
-import { readJsonFileLimited } from './json-file';
+import { readJsonFileLimited, stringifyJsonLimited } from './json-file';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
+export const MAX_PROJECT_JSON_BYTES=50*1024*1024;
+const ASSET_KINDS=new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
+
+export function serializeProjectForStorage(project:FilmProject,maxBytes=MAX_PROJECT_JSON_BYTES):string{
+  return stringifyJsonLimited(project,'CineForge project',maxBytes);
+}
 
 export class ProjectService {
   private current: FilmProject | null = null;
@@ -26,6 +32,8 @@ export class ProjectService {
   }
 
   async createAt(rootPath: string, name: string): Promise<FilmProject> {
+    if(typeof name!=='string')throw new Error('Project name must be a string.');
+    if(name.length>240)throw new Error('Project name exceeds the 240-character project safety limit.');
     const resolvedRoot=resolve(rootPath),projectFile=join(resolvedRoot,PROJECT_FILE);
     try{await stat(projectFile);throw new Error('This folder already contains a CineForge project. Use Open instead, or choose a new/empty folder.');}
     catch(error:any){if(error?.code!=='ENOENT')throw error;}
@@ -71,13 +79,13 @@ export class ProjectService {
     await this.assertProjectStateFileNotSymlink(backup,'CineForge backup project file');
     let raw:unknown,loaded:ReturnType<typeof loadPortableProject>,recoveredFromBackup=false,primaryFailure:unknown;
     try{
-      raw=await readJsonFileLimited(file,'CineForge project file',50*1024*1024);
+      raw=await readJsonFileLimited(file,'CineForge project file',MAX_PROJECT_JSON_BYTES);
       loaded=loadPortableProject(raw,openedRoot);
     }catch(primaryError){
       if(primaryError instanceof UnsupportedProjectSchemaError)throw primaryError;
       primaryFailure=primaryError;
       try{
-        raw=await readJsonFileLimited(backup,'CineForge backup project file',50*1024*1024);
+        raw=await readJsonFileLimited(backup,'CineForge backup project file',MAX_PROJECT_JSON_BYTES);
         loaded=loadPortableProject(raw,openedRoot);
         recoveredFromBackup=true;
       }catch(backupError){
@@ -150,7 +158,9 @@ export class ProjectService {
   }
 
   async importAsset(kind: AssetKind): Promise<FilmProject | null> {
+    if(!ASSET_KINDS.has(kind))throw new Error(`Invalid asset kind: ${String(kind)}`);
     if (!this.current) throw new Error('Open a project first.');
+    if(this.current.assets.length>=100_000)throw new Error('Asset import would exceed the 100000-asset project safety limit.');
     const origin={id:this.current.id,rootPath:this.current.rootPath};
     const result = await dialog.showOpenDialog({ title: `Import ${kind}`, properties: ['openFile', 'multiSelections'], filters: assetImportFilters(kind) });
     if (result.canceled || result.filePaths.length === 0) return null;
@@ -158,6 +168,7 @@ export class ProjectService {
     try{
       return await this.mutate(async project => {
         if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while the asset import dialog was open. Import was cancelled.');
+        if(project.assets.length+result.filePaths.length>100_000)throw new Error('Asset import would exceed the 100000-asset project safety limit.');
         for (const sourcePath of result.filePaths) {
           const id = randomUUID();
           const original = basename(sourcePath);
@@ -248,6 +259,8 @@ export class ProjectService {
     return this.mutate(project => {
       const scene = project.scenes.find(s => s.id === sceneId);
       if (!scene) throw new Error('Scene not found.');
+      if(scene.body.length>200_000)throw new Error('Scene body exceeds the 200000-character shot prompt safety limit. Shorten or split the scene before creating a shot from it.');
+      if(project.shots.length>=100_000)throw new Error('Adding a shot would exceed the 100000-shot project safety limit.');
       const index = project.shots.filter(s => s.sceneId === sceneId).length + 1;
       const id = randomUUID();
       const base = MODEL_DEFAULTS[PRIMARY_VIDEO_MODEL];
@@ -330,10 +343,10 @@ export class ProjectService {
     const tempFile = join(project.rootPath, `.${PROJECT_FILE}.${randomUUID()}.tmp`);
     await this.assertProjectStateFileNotSymlink(projectFile,'CineForge project file');
     await this.assertProjectStateFileNotSymlink(backupFile,'CineForge backup project file');
-    const payload = JSON.stringify(serializable, null, 2);
+    const payload = serializeProjectForStorage(serializable);
     const previous=this.current&&this.current.id===project.id&&this.current.rootPath===project.rootPath?structuredClone(this.current):undefined;
     if(previous){
-      const backupPayload=JSON.stringify(previous,null,2);
+      const backupPayload=serializeProjectForStorage(previous);
       try{await writeFile(backupFile,backupPayload,{encoding:'utf8',mode:0o600});}
       catch(error){throw new Error(`Could not create trusted project backup before saving: ${error instanceof Error?error.message:String(error)}`);}
     }else{

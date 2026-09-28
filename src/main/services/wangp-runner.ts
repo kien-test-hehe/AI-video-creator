@@ -77,7 +77,7 @@ export async function collectWanGpOutputs(root:string):Promise<string[]>{
       if(entry.isDirectory()){pending.push(path);continue;}
       if(!entry.isFile())continue;
       const lower=entry.name.toLowerCase(),dot=lower.lastIndexOf('.');
-      if(dot>=0&&MEDIA_EXT.has(lower.slice(dot)))out.push(path);
+      if(dot>=0&&MEDIA_EXT.has(lower.slice(dot))){if(out.length>=4096)throw new Error('WanGP produced more than the 4096-media-output safety limit for one job.');out.push(path);}
     }
   }
   return out.sort();

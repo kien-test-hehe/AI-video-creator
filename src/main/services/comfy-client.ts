@@ -20,8 +20,11 @@ export function validateComfyFileRef(value:unknown,label='ComfyUI file'):ComfyFi
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${label} returned an invalid file record.`);
   const candidate=value as Record<string,unknown>;
   if(typeof candidate.filename!=='string'||!candidate.filename.trim())throw new Error(`${label} returned no usable filename.`);
+  if(candidate.filename.length>2048)throw new Error(`${label} filename exceeds the 2048-character project safety limit.`);
   if(candidate.subfolder!=null&&typeof candidate.subfolder!=='string')throw new Error(`${label} returned an invalid subfolder.`);
+  if(typeof candidate.subfolder==='string'&&candidate.subfolder.length>4096)throw new Error(`${label} subfolder exceeds the 4096-character project safety limit.`);
   if(candidate.type!=null&&typeof candidate.type!=='string')throw new Error(`${label} returned an invalid file type.`);
+  if(typeof candidate.type==='string'&&candidate.type.length>4096)throw new Error(`${label} file type exceeds the 4096-character project safety limit.`);
   return{filename:candidate.filename,...(candidate.subfolder!=null?{subfolder:candidate.subfolder as string}:{}),...(candidate.type!=null?{type:candidate.type as string}:{})};
 }
 
@@ -79,6 +82,7 @@ export class ComfyClient {
       throw new Error(`ComfyUI rejected prompt (${res.status}): ${JSON.stringify(payload).slice(0,4000)}`);
     }
     if(typeof payload.prompt_id!=='string'||!payload.prompt_id)throw new Error(`ComfyUI /prompt returned success without a prompt_id: ${JSON.stringify(payload).slice(0,2000)}`);
+    if(payload.prompt_id.length>512)throw new Error('ComfyUI /prompt returned a prompt_id that exceeds the 512-character project safety limit.');
     return payload as ComfyPromptResult;
   }
 
@@ -198,7 +202,7 @@ export function cineforgePromptIdentitiesByMetadata(queue:unknown,history:unknow
     if(!Array.isArray(record))return;
     const promptId=typeof record[1]==='string'?record[1]:fallbackId;
     const extra=(record[3] as any)?.cineforge;
-    if(!promptId||!extra||!Object.entries(metadata).every(([key,value])=>extra[key]===value))return;
+    if(!promptId||promptId.length>512||!extra||!Object.entries(metadata).every(([key,value])=>extra[key]===value))return;
     const prior=found.get(promptId);
     if(!prior||prior.state==='history'||state==='running')found.set(promptId,{promptId,state});
   };

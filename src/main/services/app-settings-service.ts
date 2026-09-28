@@ -132,22 +132,28 @@ function sanitizeMachineSettings(raw:any):AppMachineSettings{
   const out:AppMachineSettings={
     schemaVersion:1,endpointPolicy:'loopback-only',
     ffmpeg:{path:preferBootstrapPath(source.ffmpeg?.path,defaults.ffmpeg.path,'ffmpeg'),ffprobePath:preferBootstrapPath(source.ffmpeg?.ffprobePath,defaults.ffmpeg.ffprobePath,'ffprobe'),preferredH264Encoder:source.ffmpeg?.preferredH264Encoder==='libx264'?'libx264':'h264_nvenc'},
-    wangp:{executionMode:source.wangp?.executionMode==='docker'?'docker':'native',rootPath:asNonEmptyString(source.wangp?.rootPath,defaults.wangp.rootPath),pythonPath:preferBootstrapPath(source.wangp?.pythonPath,defaults.wangp.pythonPath,'python'),entrypoint:sanitizeLeaf(source.wangp?.entrypoint,defaults.wangp.entrypoint),profile:[1,2,3,4,5].includes(Number(source.wangp?.profile))?Number(source.wangp.profile) as 1|2|3|4|5:defaults.wangp.profile,attention:['auto','sdpa','flash','sage','sage2'].includes(source.wangp?.attention)?source.wangp.attention:defaults.wangp.attention,dryRunBeforeRender:typeof source.wangp?.dryRunBeforeRender==='boolean'?source.wangp.dryRunBeforeRender:defaults.wangp.dryRunBeforeRender,docker:{command:asNonEmptyString(source.wangp?.docker?.command,defaults.wangp.docker.command),image:asString(source.wangp?.docker?.image,''),projectMount:sanitizeContainerPath(source.wangp?.docker?.projectMount,defaults.wangp.docker.projectMount),wangpMount:sanitizeContainerPath(source.wangp?.docker?.wangpMount,defaults.wangp.docker.wangpMount)}},
+    wangp:{executionMode:machineEnumOrDefault(source.wangp?.executionMode,new Set(['native','docker'] as const),defaults.wangp.executionMode,'WanGP execution mode'),rootPath:asNonEmptyString(source.wangp?.rootPath,defaults.wangp.rootPath),pythonPath:preferBootstrapPath(source.wangp?.pythonPath,defaults.wangp.pythonPath,'python'),entrypoint:sanitizeLeaf(source.wangp?.entrypoint,defaults.wangp.entrypoint),profile:[1,2,3,4,5].includes(Number(source.wangp?.profile))?Number(source.wangp.profile) as 1|2|3|4|5:defaults.wangp.profile,attention:['auto','sdpa','flash','sage','sage2'].includes(source.wangp?.attention)?source.wangp.attention:defaults.wangp.attention,dryRunBeforeRender:typeof source.wangp?.dryRunBeforeRender==='boolean'?source.wangp.dryRunBeforeRender:defaults.wangp.dryRunBeforeRender,docker:{command:asNonEmptyString(source.wangp?.docker?.command,defaults.wangp.docker.command),image:sanitizeDockerImageRef(source.wangp?.docker?.image,''),projectMount:sanitizeContainerPath(source.wangp?.docker?.projectMount,defaults.wangp.docker.projectMount),wangpMount:sanitizeContainerPath(source.wangp?.docker?.wangpMount,defaults.wangp.docker.wangpMount)}},
     comfy:{url:asNonEmptyString(source.comfy?.url,defaults.comfy.url),inputDir:asString(source.comfy?.inputDir,defaults.comfy.inputDir),dedicatedInstance:typeof source.comfy?.dedicatedInstance==='boolean'?source.comfy.dedicatedInstance:defaults.comfy.dedicatedInstance},
     director:{baseUrl:asNonEmptyString(source.director?.baseUrl,defaults.director.baseUrl),model:asString(source.director?.model,defaults.director.model),temperature:clampNumber(source.director?.temperature,0,2,defaults.director.temperature)},
     diagnostics:{persistVerboseLogs:source.diagnostics?.persistVerboseLogs===true}
   };
   assertLocalUrl(out.comfy.url,true);assertLocalUrl(out.director.baseUrl,true);return out;
 }
-function preferBootstrapPath(value:unknown,bootstrap:string,generic:string):string{
-  const current=typeof value==='string'?value.trim():'';
-  const concreteBootstrap=bootstrap.trim()&&bootstrap.trim().toLowerCase()!==generic.toLowerCase();
-  if(concreteBootstrap&&(!current||current.toLowerCase()===generic.toLowerCase()))return bootstrap.trim();
-  return current||bootstrap;
+function machineEnumOrDefault<T extends string>(value:unknown,allowed:ReadonlySet<T>,fallback:T,label:string):T{
+  if(value==null||value==='')return fallback;
+  if(typeof value==='string'&&allowed.has(value as T))return value as T;
+  throw new Error(`Invalid ${label}: ${String(value).slice(0,128)}`);
 }
-function asString(value:unknown,fallback:string):string{return typeof value==='string'?value:fallback;}
-function asNonEmptyString(value:unknown,fallback:string):string{return typeof value==='string'&&value.trim()?value.trim():fallback;}
+function preferBootstrapPath(value:unknown,bootstrap:string,generic:string):string{
+  const current=typeof value==='string'?value.trim():'',bootstrapValue=bootstrap.trim();
+  const concreteBootstrap=bootstrapValue&&bootstrapValue.toLowerCase()!==generic.toLowerCase();
+  return boundedMachineString(concreteBootstrap&&(!current||current.toLowerCase()===generic.toLowerCase())?bootstrapValue:(current||bootstrap),4096);
+}
+function boundedMachineString(value:string,max=4096):string{if(value.length>max)throw new Error(`Machine setting string exceeds the ${max}-character safety limit.`);return value;}
+function asString(value:unknown,fallback:string):string{return boundedMachineString(typeof value==='string'?value:fallback);}
+function asNonEmptyString(value:unknown,fallback:string):string{const text=typeof value==='string'&&value.trim()?value.trim():fallback;return boundedMachineString(text);}
 function clampNumber(value:unknown,min:number,max:number,fallback:number):number{const num=Number(value);return Number.isFinite(num)?Math.min(max,Math.max(min,num)):fallback;}
+function sanitizeDockerImageRef(value:unknown,fallback:string):string{const text=asString(value,fallback).trim();if(!text)return'';if(text.length>1024)throw new Error('WanGP Docker image reference exceeds the 1024-character machine-settings safety limit.');if(text.startsWith('-')||/\s|[\u0000-\u001f\u007f]/.test(text))throw new Error('WanGP Docker image must be a single image reference, not a Docker CLI option.');return text;}
 function sanitizeLeaf(value:unknown,fallback:string):string{const text=asNonEmptyString(value,fallback);if(text.includes('/')||text.includes('\\')||text==='.'||text==='..')throw new Error('WanGP entrypoint must be a filename, not a path.');return text;}
-function sanitizeContainerPath(value:unknown,fallback:string):string{const text=asNonEmptyString(value,fallback).replace(/\\/g,'/');if(!text.startsWith('/')||text.includes('/../')||text.endsWith('/..'))throw new Error('Container mount path must be an absolute normalized Unix path.');return text.replace(/\/+$/,'')||'/';}
+function sanitizeContainerPath(value:unknown,fallback:string):string{const text=asNonEmptyString(value,fallback).replace(/\\/g,'/');if(!text.startsWith('/')||text.includes('/../')||text.endsWith('/..')||text.includes(':')||/[\u0000-\u001f\u007f]/.test(text))throw new Error('Container mount path must be an absolute normalized Unix path without Docker volume-option delimiters.');return text.replace(/\/+$/,'')||'/';}
 

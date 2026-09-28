@@ -24,9 +24,11 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
-import { ProjectService } from '../src/main/services/project-service';
+import { ProjectService, serializeProjectForStorage } from '../src/main/services/project-service';
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
+import { generateKeyframe } from '../src/main/services/keyframe-service';
+import { upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
@@ -34,6 +36,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
+import { buildRenderPrompt } from '../src/main/services/render-queue';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
 import { loadPortableProject } from '../src/main/services/project-schema';
@@ -64,12 +67,14 @@ describe('WanGP source-tree runtime fingerprint',()=>{
   it('changes for mounted source edits but ignores model-weight payloads',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-wangp-source-'));
     try{
-      await mkdir(join(root,'pkg'),{recursive:true});await mkdir(join(root,'models'),{recursive:true});
+      await mkdir(join(root,'pkg'),{recursive:true});await mkdir(join(root,'models'),{recursive:true});await mkdir(join(root,'env_venv','Lib','site-packages','dep'),{recursive:true});
       await writeFile(join(root,'wgp.py'),'from pkg.worker import run\n','utf8');
       await writeFile(join(root,'pkg','worker.py'),'def run(): return 1\n','utf8');
       await writeFile(join(root,'models','weights.safetensors'),Buffer.alloc(1024,1));
+      await writeFile(join(root,'env_venv','Lib','site-packages','dep','module.py'),'VERSION=1\n','utf8');
       const first=await fingerprintWanGpSourceTree(root,'wgp.py');
       await writeFile(join(root,'models','weights.safetensors'),Buffer.alloc(2048,2));
+      await writeFile(join(root,'env_venv','Lib','site-packages','dep','module.py'),'VERSION=2\n','utf8');
       expect(await fingerprintWanGpSourceTree(root,'wgp.py')).toBe(first);
       await writeFile(join(root,'pkg','worker.py'),'def run(): return 2\n','utf8');
       expect(await fingerprintWanGpSourceTree(root,'wgp.py')).not.toBe(first);
@@ -202,6 +207,73 @@ describe('project backup recovery preservation',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
+describe('project serialized-size round trip',()=>{
+  it('rejects a project payload before write when it exceeds the loader byte limit',()=>{
+    const project={schemaVersion:2,id:'p',name:'Film',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',story:{title:'Film',logline:'',script:'',notes:'💥'.repeat(100)},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}} as FilmProject;
+    expect(()=>serializeProjectForStorage(project,256)).toThrow(/storage safety limit/i);
+    expect(serializeProjectForStorage(project,4096)).toContain('"Film"');
+  });
+});
+describe('main-process asset kind validation',()=>{
+  it('rejects runtime values outside AssetKind before opening a file dialog',async()=>{
+    const service=new ProjectService();
+    await expect(service.importAsset('../escape' as any)).rejects.toThrow(/invalid asset kind/i);
+  });
+});
+describe('new project creation bounds',()=>{
+  it('rejects an oversized project name before creating project files',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-project-name-bound-'));
+    try{
+      const service=new ProjectService();
+      await expect(service.createAt(root,'x'.repeat(241))).rejects.toThrow(/240-character project safety limit/i);
+      await expect(readFile(join(root,'cineforge.project.json'),'utf8')).rejects.toMatchObject({code:'ENOENT'});
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('internal shot creation bounds',()=>{
+  it('refuses a scene body that cannot fit the canonical shot prompt',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-shot-prompt-bound-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Film');
+      await service.mutate(project=>{project.scenes.push({id:'scene-long',index:1,heading:'INT. LONG',body:'x'.repeat(200_001),shotIds:[]});});
+      await expect(service.addShot('scene-long')).rejects.toThrow(/shot prompt safety limit/i);
+      expect(service.getCurrent()?.shots).toHaveLength(0);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('internal project collection capacity',()=>{
+  it('rejects asset import and manual shot creation at canonical capacity before mutating state',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-producer-capacity-'));
+    try{
+      const service=new ProjectService(),created=await service.createAt(root,'Film');
+      const assets:any[]=[];assets.length=100_000;
+      (service as any).current={...structuredClone(created),assets};
+      await expect(service.importAsset('image')).rejects.toThrow(/100000-asset project safety limit/i);
+
+      const shots:any[]=[];shots.length=100_000;
+      (service as any).current={...structuredClone(created),scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:[]}],shots};
+      await expect(service.addShot('scene')).rejects.toThrow(/100000-shot project safety limit/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('rejects keyframe generation at asset capacity before touching the GPU runtime',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-keyframe-capacity-'));
+    try{
+      const service=new ProjectService(),created=await service.createAt(root,'Film'),assets:any[]=[];assets.length=100_000;
+      (service as any).current={...structuredClone(created),assets};
+      await expect(generateKeyframe(service,{} as AppMachineSettings,{projectRoot:root,shotId:'missing',role:'start'} as any,{} as any)).rejects.toThrow(/100000-asset project safety limit/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('rejects a new managed workflow profile at capacity but still permits replacement by id',()=>{
+    const profile={id:'new-profile',runtime:'wangp',purpose:'video',name:'Managed',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/w.json',workflowFormat:'wangp-settings',bindings:[],enabled:false} as WorkflowProfile;
+    const profiles=Array.from({length:512},(_,index)=>({...profile,id:`profile-${index}`}));
+    const project={settings:{workflowProfiles:profiles}} as unknown as FilmProject;
+    expect(()=>upsertManagedProfile(project,profile)).toThrow(/512-profile project safety limit/i);
+    expect(()=>upsertManagedProfile(project,{...profile,id:'profile-0'})).not.toThrow();
+    expect(profiles[0].id).toBe('profile-0');
+  });
+});
 describe('project schema canonicalization',()=>{
   const baseProject=()=>({
     schemaVersion:2,id:'project-1',name:'Film',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
@@ -234,11 +306,25 @@ describe('project schema canonicalization',()=>{
     tooManyScenes.scenes=Array.from({length:10_001},(_,index)=>({id:`scene-${index}`,index:index+1,heading:'INT. ROOM',body:'',shotIds:[]}));
     expect(()=>loadPortableProject(tooManyScenes,'/project')).toThrow(/project scenes.*10,?000 items/i);
   });
-  it('rejects malformed explicit identifiers instead of silently replacing identity',()=>{
+  it('rejects malformed or missing canonical entity identifiers without breaking legacy top-level project id recovery',()=>{
     const raw=baseProject();raw.id='bad project id with spaces';
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/invalid project identifier/i);
-    const missing=baseProject();delete (missing as any).id;
-    expect(loadPortableProject(missing,'/project').project.id).toMatch(/^[a-f0-9-]{36}$/i);
+
+    const missingProject=baseProject();delete (missingProject as any).id;
+    expect(loadPortableProject(missingProject,'/project').project.id).toMatch(/^[a-f0-9-]{36}$/i);
+
+    const missingShot:any=baseProject();delete missingShot.shots[0].id;
+    expect(()=>loadPortableProject(missingShot,'/project')).toThrow(/missing canonical project entity identifier/i);
+
+    const missingOutput:any=baseProject();delete missingOutput.renderOutputs[0].id;
+    expect(()=>loadPortableProject(missingOutput,'/project')).toThrow(/missing canonical project entity identifier/i);
+  });
+  it('rejects missing IDs inside canonical reference arrays instead of generating replacements from map indices',()=>{
+    const raw:any=baseProject();raw.scenes[0].shotIds=['shot-1',null];
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/missing canonical project entity identifier/i);
+
+    const rawRefs:any=baseProject();rawRefs.assets=[{id:'ref',kind:'reference',name:'Ref',sourcePath:'ref.png',projectPath:'assets/reference/ref.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];rawRefs.shots[0].referenceAssetIds=['ref',null];
+    expect(()=>loadPortableProject(rawRefs,'/project')).toThrow(/missing canonical project entity identifier/i);
   });
   it('rejects explicit out-of-range project numerics instead of silently clamping them',()=>{
     const raw=baseProject();raw.shots[0].generation.width=9000;
@@ -246,10 +332,75 @@ describe('project schema canonicalization',()=>{
     const timeline:any=baseProject();timeline.timeline=[{id:'clip',shotId:'shot-1',renderOutputId:'passing-output',track:0,order:0,trimInSec:0,volume:9}];
     expect(()=>loadPortableProject(timeline,'/project')).toThrow(/allowed range 0\.\.8/i);
   });
+  it('rejects explicit invalid project enums instead of silently changing render semantics',()=>{
+    const badMode:any=baseProject();badMode.shots[0].generation.mode='telepathy';
+    expect(()=>loadPortableProject(badMode,'/project')).toThrow(/invalid shot generation mode/i);
+
+    const badContainer:any=baseProject();badContainer.settings={outputContainer:'avi'};
+    expect(()=>loadPortableProject(badContainer,'/project')).toThrow(/invalid project output container/i);
+
+    const badJob:any=baseProject();badJob.renderJobs=[{id:'job',shotId:'shot-1',createdAt:'2026-01-03T00:00:00.000Z',updatedAt:'2026-01-03T00:00:00.000Z',status:'teleported',progress:0,message:'',modelFamily:'ltx-2.5-fast',outputs:[]}];
+    expect(()=>loadPortableProject(badJob,'/project')).toThrow(/invalid render job status/i);
+
+    const badProfile:any=baseProject();badProfile.settings={workflowProfiles:[{id:'wf',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/project/workflows/wf.json',workflowFormat:'mystery',bindings:[],enabled:false}]};
+    expect(()=>loadPortableProject(badProfile,'/project')).toThrow(/invalid workflow format/i);
+  });
+  it('rejects explicit invalid project scalar types instead of silently defaulting them',()=>{
+    const badNumber:any=baseProject();badNumber.shots[0].generation.fps='not-a-number';
+    expect(()=>loadPortableProject(badNumber,'/project')).toThrow(/project integer is invalid/i);
+
+    const badBoolean:any=baseProject();badBoolean.shots[0].generation.includeAudio='yes';
+    expect(loadPortableProject(badBoolean,'/project').project.shots[0].generation.includeAudio).toBe(false);
+
+    const badString:any=baseProject();badString.story.title=123;
+    expect(()=>loadPortableProject(badString,'/project')).toThrow(/project string must be a string/i);
+
+    const badQc:any=baseProject();badQc.renderOutputs[0].technicalQc={checkedAt:'2026-01-02T00:00:00.000Z',passed:'true',issues:[],warnings:[]};
+    expect(loadPortableProject(badQc,'/project').project.renderOutputs[0].technicalQc?.passed).toBe(false);
+  });
   it('canonicalizes parseable timestamps before lexical latest/recovery ordering',()=>{
     const raw=baseProject();raw.renderOutputs[0].createdAt='2026-01-01T09:00:00-05:00';
     const loaded=loadPortableProject(raw,'/project').project;
     expect(loaded.renderOutputs[0].createdAt).toBe('2026-01-01T14:00:00.000Z');
+  });
+  it('rejects out-of-range technical QC measurements instead of silently clamping them',()=>{
+    const raw:any=baseProject();raw.renderOutputs[0].technicalQc={checkedAt:'2026-01-02T00:00:00.000Z',passed:false,issues:[],warnings:[],width:20_000};
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/optional integer.*1\.\.16384/i);
+    raw.renderOutputs[0].technicalQc.width=1920;raw.renderOutputs[0].technicalQc.audioPeakDb=101;
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/optional number.*-300\.\.100/i);
+  });
+  it('rejects explicit invalid timestamps and oversized metadata instead of rewriting them',()=>{
+    const badTime:any=baseProject();badTime.updatedAt='not-a-date';
+    expect(()=>loadPortableProject(badTime,'/project')).toThrow(/invalid project timestamp/i);
+
+    const badMeta:any=baseProject();badMeta.renderOutputs[0].comfyMeta={filename:'x'.repeat(4097)};
+    expect(()=>loadPortableProject(badMeta,'/project')).toThrow(/comfy metadata filename.*4096-character/i);
+
+    const badSource:any=baseProject();badSource.assets=[{id:'asset',kind:'reference',name:'A',sourcePath:'x'.repeat(2049),projectPath:'assets/reference/a.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];
+    expect(()=>loadPortableProject(badSource,'/project')).toThrow(/asset source label.*2048-character/i);
+  });
+  it('rejects malformed nested provenance instead of silently dropping it',()=>{
+    const badQc:any=baseProject();badQc.renderOutputs[0].technicalQc='not-an-object';
+    expect(()=>loadPortableProject(badQc,'/project')).toThrow(/invalid technical QC.*expected an object/i);
+
+    const badMeta:any=baseProject();badMeta.renderOutputs[0].comfyMeta={filename:42};
+    expect(()=>loadPortableProject(badMeta,'/project')).toThrow(/comfy metadata filename must be a string/i);
+
+    const badSpec:any=baseProject();badSpec.renderJobs=[{id:'job',shotId:'shot-1',createdAt:'2026-01-03T00:00:00.000Z',updatedAt:'2026-01-03T00:00:00.000Z',status:'failed',progress:0,message:'',modelFamily:'ltx-2.5-fast',outputs:[],spec:'corrupt'}];
+    expect(()=>loadPortableProject(badSpec,'/project')).toThrow(/invalid render job spec.*expected an object/i);
+
+    const badHash:any=baseProject();badHash.settings={workflowProfiles:[{id:'wf',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/project/workflows/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:false,validation:{structuralStatus:'valid',sourceSha256:'not-a-sha'}}]};
+    expect(()=>loadPortableProject(badHash,'/project')).toThrow(/invalid SHA-256 project fingerprint/i);
+  });
+  it('rejects malformed nested story/settings objects instead of replacing them with defaults',()=>{
+    const badStory:any=baseProject();badStory.story='lost story';
+    expect(()=>loadPortableProject(badStory,'/project')).toThrow(/invalid story.*expected an object/i);
+
+    const badPolicy:any=baseProject();badPolicy.settings={costPolicy:'free-for-all'};
+    expect(()=>loadPortableProject(badPolicy,'/project')).toThrow(/invalid project cost policy.*expected an object/i);
+
+    const badCapcut:any=baseProject();badCapcut.settings={capcut:'pro-ish'};
+    expect(()=>loadPortableProject(badCapcut,'/project')).toThrow(/invalid CapCut project settings.*expected an object/i);
   });
   it('rejects render outputs that do not have a durable path',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
@@ -526,6 +677,13 @@ describe('stale creative result guards',()=>{
     const review=continuityReviewInputKey(project,project.shots[0]);project.shots[0].prompt='new';expect(continuityReviewInputKey(project,project.shots[0])).not.toBe(review);
   });
 });
+describe('immutable render prompt bounds',()=>{
+  it('rejects a valid shot whose combined effective prompt would exceed the job schema limit',()=>{
+    const shot:Shot={id:'s',sceneId:'scene',index:1,title:'Huge prompt',prompt:'p'.repeat(200_000),camera:'',action:'a'.repeat(100_000),dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}};
+    const project={assets:[]} as unknown as FilmProject;
+    expect(()=>buildRenderPrompt(project,shot)).toThrow(/300000-character immutable job safety limit/i);
+  });
+});
 describe('active render project guards',()=>{
   it('detects active renders and rejects structural removal only for active shot ids',()=>{
     const jobs=[
@@ -659,6 +817,22 @@ describe('rendered take QC policy',()=>{
     expect(latestPassingVideoTake([failingNew])).toBeUndefined();
   });
 });
+describe('Windows bootstrap source integrity guards',()=>{
+  it('refuses dirty pinned WanGP source without mistaking the managed venv for source',async()=>{
+    const setup=await readFile(join(process.cwd(),'scripts','setup-windows.ps1'),'utf8');
+    expect(setup).toMatch(/fetch origin --tags --prune/i);
+    expect(setup).toMatch(/diff --quiet HEAD --/i);
+    expect(setup).toMatch(/ls-files --others --exclude-standard -- '\*\.py' '\*\.pyi'/i);
+    expect(setup).toMatch(/env_venv/);
+    expect(setup).toMatch(/envs\.json maps env_venv outside its managed runtime directory/i);
+    expect(setup).toMatch(/IsPathRooted\(\$registeredText\)/);
+  });
+  it('rebuilds CineForge when tracked or untracked working-tree source differs from the stamped build',async()=>{
+    const run=await readFile(join(process.cwd(),'scripts','run-windows.ps1'),'utf8');
+    expect(run).toMatch(/status --porcelain --untracked-files=normal/i);
+    expect(run).toMatch(/\$workingTreeDirty/);
+  });
+});
 describe('machine settings persistence trust',()=>{
   it('uses strict booleans and backs up trusted memory instead of tampered disk bytes',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-settings-trust-')),bootstrap=join(root,'bootstrap.json'),userdata=join(root,'userdata'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
@@ -719,6 +893,56 @@ describe('future machine settings compatibility',()=>{
       await expect(new AppSettingsService(userdata).load()).rejects.toThrow(/unsupported machine settings schema/i);
       const primary=JSON.parse(await readFile(join(userdata,'machine-settings.v1.json'),'utf8'));
       expect(primary.schemaVersion).toBe(2);expect(primary.futureField).toBe('keep-me');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('WanGP Docker image argument safety',()=>{
+  it('rejects option-like Docker image values before docker run can parse them as flags',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-docker-image-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,JSON.stringify({schemaVersion:1,wangp:{executionMode:'docker',docker:{image:'--privileged'}}}),'utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      await expect(new AppSettingsService(join(root,'userdata')).load()).rejects.toThrow(/docker image.*not a docker cli option/i);
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+});
+describe('WanGP Docker mount argument safety',()=>{
+  it('rejects container mount paths that can inject docker volume options',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-docker-mount-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,JSON.stringify({schemaVersion:1,wangp:{executionMode:'docker',docker:{image:'wan2gp:test',projectMount:'/workspace/project:ro'}}}),'utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      await expect(new AppSettingsService(join(root,'userdata')).load()).rejects.toThrow(/volume-option delimiters/i);
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+});
+describe('machine execution-mode integrity',()=>{
+  it('rejects an explicit invalid WanGP execution mode instead of falling back to native',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-machine-mode-'));
+    try{
+      const service=new AppSettingsService(root),before=await service.load(),next:any=structuredClone(before);
+      next.wangp.executionMode='container-ish';
+      await expect(service.save(next)).rejects.toThrow(/invalid wangp execution mode/i);
+      expect(service.get().wangp.executionMode).toBe(before.wangp.executionMode);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('machine settings string bounds',()=>{
+  it('rejects oversized values before save so persisted settings remain reloadable',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-machine-string-bound-'));
+    try{
+      const service=new AppSettingsService(root),before=await service.load(),next=structuredClone(before);
+      next.director.model='x'.repeat(4097);
+      await expect(service.save(next)).rejects.toThrow(/machine setting string.*4096-character safety limit/i);
+      expect(service.get().director.model).toBe(before.director.model);
+      const disk=JSON.parse(await readFile(join(root,'machine-settings.v1.json'),'utf8'));
+      expect(disk.director.model).toBe(before.director.model);
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
@@ -888,6 +1112,11 @@ describe('Comfy runtime fingerprint inputs',()=>{
     expect(comfyNodeCatalogFingerprint({A:{input:{required:{x:['INT']}}}})).not.toBe(comfyNodeCatalogFingerprint({A:{input:{required:{x:['FLOAT']}}}}));
   });
 });
+describe('Comfy history output bounds',()=>{
+  it('rejects overlong history file metadata before download or project persistence',()=>{
+    expect(()=>collectComfyHistoryOutputRefs({outputs:{node:{images:[{filename:'x'.repeat(2049),subfolder:'',type:'output'}]}}})).toThrow(/2048-character project safety limit/i);
+  });
+});
 describe('Comfy output identity',()=>{
   it('collects filenames only from history.outputs and never from prompt/input metadata',()=>{
     const completedWithoutOutputs={status:{completed:true},prompt:{inputs:{filename:'uploaded-input.png',type:'input'}}};
@@ -920,6 +1149,17 @@ describe('Comfy file record validation',()=>{
     expect(()=>validateComfyFileRef({subfolder:'x'},'upload')).toThrow(/filename/i);
     expect(()=>validateComfyFileRef({filename:'x.png',subfolder:4},'upload')).toThrow(/subfolder/i);
     expect(validateComfyFileRef({filename:'x.png',subfolder:'cineforge',type:'input'},'upload')).toEqual({filename:'x.png',subfolder:'cineforge',type:'input'});
+  });
+  it('rejects output metadata that cannot fit the canonical project schema',()=>{
+    expect(()=>validateComfyFileRef({filename:'x'.repeat(2049)},'output')).toThrow(/2048-character project safety limit/i);
+    expect(()=>validateComfyFileRef({filename:'ok.png',subfolder:'x'.repeat(4097)},'output')).toThrow(/4096-character project safety limit/i);
+    expect(()=>validateComfyFileRef({filename:'ok.png',type:'x'.repeat(4097)},'output')).toThrow(/4096-character project safety limit/i);
+  });
+});
+describe('Comfy prompt identity bounds',()=>{
+  it('ignores overlong recovered prompt ids instead of persisting invalid job identity',()=>{
+    const id='p'.repeat(513),queue={queue_running:[[1,id,{}, {cineforge:{jobId:'job'}}]],queue_pending:[]};
+    expect(cineforgePromptIdentities(queue,{},'job')).toEqual([]);
   });
 });
 describe('Comfy queue identity',()=>{

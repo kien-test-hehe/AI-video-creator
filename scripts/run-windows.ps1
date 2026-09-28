@@ -33,9 +33,15 @@ try {
 
   $git = Get-Command git.exe -ErrorAction SilentlyContinue
   $currentCommit = if ($git) { (& $git.Source -C $RepoRoot rev-parse HEAD).Trim() } else { '' }
+  $workingTreeDirty = $false
+  if ($git) {
+    $dirtyLines = @(& $git.Source -C $RepoRoot status --porcelain --untracked-files=normal)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the CineForge working tree before launch.' }
+    $workingTreeDirty = $dirtyLines.Count -gt 0
+  }
   $builtCommit = if (Test-Path $BuildStamp) { (Get-Content $BuildStamp -Raw).Trim() } else { '' }
   $buildMissing = -not (Test-Path (Join-Path $RepoRoot 'out\main\index.js'))
-  if ($buildMissing -or -not $currentCommit -or $currentCommit -ne $builtCommit -or $currentLock -ne $savedLock) {
+  if ($buildMissing -or $workingTreeDirty -or -not $currentCommit -or $currentCommit -ne $builtCommit -or $currentLock -ne $savedLock) {
     Write-Host 'Source changed or built output is missing; rebuilding CineForge...' -ForegroundColor Yellow
     & $npm run build
     if ($LASTEXITCODE -ne 0) { throw 'CineForge build failed.' }
