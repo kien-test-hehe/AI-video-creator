@@ -1437,9 +1437,10 @@ describe('production state main-process authority',()=>{
       expect(task).toMatchObject({type:'manual-qc',shotId:'shot-auth'});
       expect(uncertain.qcResults.find(item=>item.layer==='semantic'&&item.status==='human-verify')?.humanOverrideTaskId).toBe(task?.id);
       await expect(promoteCanonicalTake(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth'})).rejects.toThrow(/semantic QC is human-verify/i);
+      await expect(resolveHumanTask(service,{projectRoot:root,taskId:task!.id,status:'resolved',resolution:'Premature close.'})).rejects.toThrow(/PASS or FAIL verdict/i);
 
-      await resolveHumanTask(service,{projectRoot:root,taskId:task!.id,status:'resolved',resolution:'Reviewed; request a fresh semantic verdict.'});
       await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'pass',issues:[]});
+      await expect(resolveHumanTask(service,{projectRoot:root,taskId:task!.id,status:'resolved',resolution:'Human review confirmed semantic QC PASS.'})).resolves.toMatchObject({schemaVersion:3});
       expect(service.getCurrent()?.shots.find(item=>item.id==='shot-auth')?.canonicalRenderId).toBe('out-auth');
       await expect(promoteCanonicalTake(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth'})).resolves.toMatchObject({schemaVersion:3});
     }finally{await rm(root,{recursive:true,force:true});}
@@ -1562,5 +1563,28 @@ describe('production topology and destructive mutation regression guards',()=>{
     expect(buildRenderPrompt(project,a)).toMatch(/Actual start state:.*blue moonlight.*mid reach/);
     const first=shotProjectRenderInputKey(project,a);(project.shotStates[0] as any).actionPhase='reach complete';
     expect(shotProjectRenderInputKey(project,a)).not.toBe(first);
+  });
+
+  it('cascades stale upstream continuity truth through A → B → C instead of leaving B final state alive',()=>{
+    const a=shot('a',1),b=shot('b',2),cc=shot('c',3);
+    const project={
+      schemaVersion:3,id:'cascade',name:'cascade',rootPath:'/tmp/cascade',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'cascade',logline:'',script:'',notes:''},scenes:[{id:'scene-topology',index:1,heading:'',body:'',shotIds:['a','b','c']}],
+      assets:[],shots:[a,b,cc],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    rebuildDefaultSequentialDependencies(project,['scene-topology']);
+    project.shotStates.push(
+      {id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'a-end',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+      {id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',derivedFromStateId:'final-a',characters:[],props:[],environment:{},camera:{},actionPhase:'a-end',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'},
+      {id:'final-b',shotId:'b',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'b-end',dialogueState:'',createdAt:'2026-01-01T00:00:03.000Z'},
+      {id:'start-c',shotId:'c',role:'actual-start',source:'generated',status:'unreviewed',derivedFromStateId:'final-b',characters:[],props:[],environment:{},camera:{},actionPhase:'b-end',dialogueState:'',createdAt:'2026-01-01T00:00:04.000Z'}
+    );
+    a.observedFinalStateId='final-a';b.actualStartStateId='start-b';b.observedFinalStateId='final-b';cc.actualStartStateId='start-c';
+    invalidateObservedFinalState(project,'a','A changed.');
+    expect(project.shotStates.find(state=>state.id==='start-b')?.status).toBe('stale');
+    expect(project.shotStates.find(state=>state.id==='final-b')?.status).toBe('stale');
+    expect(project.shotStates.find(state=>state.id==='start-c')?.status).toBe('stale');
+    expect(b.actualStartStateId).toBeUndefined();expect(b.observedFinalStateId).toBeUndefined();expect(cc.actualStartStateId).toBeUndefined();
   });
 });
