@@ -1151,6 +1151,13 @@ describe('main-process workflow routing authority',()=>{
 describe('model routing',()=>{
  it('keeps dialogue/audio on LTX 2.5 Fast',()=>{expect(chooseModelForShot(routedShot({dialogue:'Hello.'}))).toBe('ltx-2.5-fast');expect(chooseModelForShot(routedShot({generation:{...routedShot().generation,includeAudio:true}}))).toBe('ltx-2.5-fast');});
  it('routes hero shots to Hunyuan and action shots to Wan',()=>{expect(chooseModelForShot(routedShot({generation:{...routedShot().generation,quality:'hero'}}))).toBe('hunyuan-video-1.5');expect(chooseModelForShot(routedShot({camera:'fast tracking orbit',action:'car chase'}))).toBe('wan-2.2-5b');});
+ it('limits auto-routing to models that have validated local production routes',()=>{
+   const action=routedShot({camera:'fast tracking orbit',action:'car chase'});
+   expect(chooseModelForShot(action,{validatedModels:['ltx-2.5-fast']})).toBe('ltx-2.5-fast');
+   expect(chooseModelForShot(action,{validatedModels:['ltx-2.5-fast','wan-2.2-5b']})).toBe('wan-2.2-5b');
+   const hero=routedShot({generation:{...routedShot().generation,quality:'hero'}});
+   expect(chooseModelForShot(hero,{validatedModels:['ltx-2.5-fast']})).toBe('ltx-2.5-fast');
+ });
  it('keeps long shots on the managed LTX route instead of auto-selecting optional FramePack',()=>{expect(chooseModelForShot(routedShot({dialogue:'Long dialogue.',generation:{...routedShot().generation,frames:265,fps:24}}))).toBe('ltx-2.5-fast');});
 });
 describe('project path containment',()=>{const root='/tmp/cineforge-project';it('accepts paths contained by the project',()=>{expect(assertPathInside(root,`${root}/assets/character/a.png`)).toContain('/assets/character/a.png');expect(assertRelativeProjectPath(root,'assets/character/a.png','assets','asset')).toContain('/assets/character/a.png');});it('blocks path traversal and absolute project-relative values',()=>{expect(()=>assertPathInside(root,'/tmp/outside/secret.txt')).toThrow(/outside the allowed project directory/);expect(()=>assertRelativeProjectPath(root,'../outside/secret.txt','assets','asset')).toThrow(/outside the allowed project directory/);expect(()=>assertRelativeProjectPath(root,'/etc/passwd','assets','asset')).toThrow(/project-relative/);});});
