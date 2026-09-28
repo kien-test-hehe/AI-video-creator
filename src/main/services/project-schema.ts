@@ -131,23 +131,23 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
       pro: source.capcut?.pro === true
     },
     defaultFps: clampInt(source.defaultFps, 1, 120, 24),
-    outputContainer: ['mp4','mov','webm'].includes(source.outputContainer) ? source.outputContainer : 'mp4',
+    outputContainer: enumOrDefault(source.outputContainer,new Set(['mp4','mov','webm'] as const),'mp4','project output container'),
     workflowProfiles: profiles
   };
 }
 
 function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
   const source = asObject(value, 'workflow profile');
-  const format = source.workflowFormat === 'wangp-settings' ? 'wangp-settings' : source.workflowFormat === 'ui' ? 'ui' : 'api';
-  const runtime = source.runtime === 'wangp' ? 'wangp' : source.runtime === 'comfyui' ? 'comfyui' : format === 'wangp-settings' ? 'wangp' : 'comfyui';
+  const format = enumOrDefault(source.workflowFormat,new Set(['wangp-settings','ui','api'] as const),'api','workflow format');
+  const runtime = source.runtime==null||source.runtime===''?(format==='wangp-settings'?'wangp':'comfyui'):enumOrDefault(source.runtime,new Set(['wangp','comfyui'] as const),'comfyui','workflow runtime');
   const validationSource = source.validation && typeof source.validation === 'object' ? source.validation : {};
   return {
     id: safeId(source.id),
     runtime,
-    purpose: PURPOSES.has(source.purpose) ? source.purpose : 'video',
+    purpose: enumOrDefault(source.purpose,PURPOSES,'video','workflow purpose'),
     name: str(source.name, 'Workflow', 240),
-    modelFamily: MODEL_FAMILIES.has(source.modelFamily) ? source.modelFamily : 'custom',
-    mode: MODES.has(source.mode) ? source.mode : 'i2v',
+    modelFamily: enumOrDefault(source.modelFamily,MODEL_FAMILIES,'custom','workflow model family'),
+    mode: enumOrDefault(source.mode,MODES,'i2v','workflow generation mode'),
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
     bindings: boundedArray(source.bindings,'workflow bindings',256).map(sanitizeBinding),
@@ -155,7 +155,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
     notes: str(source.notes, '', 20_000) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
     validation: {
-      structuralStatus: ['valid','invalid'].includes(validationSource.structuralStatus) ? validationSource.structuralStatus : 'unvalidated',
+      structuralStatus: enumOrDefault(validationSource.structuralStatus,new Set(['valid','invalid','unvalidated'] as const),'unvalidated','workflow validation status'),
       validatedAt: maybeIso(validationSource.validatedAt),
       sourceSha256: sha(validationSource.sourceSha256),
       runtimeFingerprint: str(validationSource.runtimeFingerprint, '', 512) || undefined,
@@ -182,7 +182,7 @@ function sanitizeBinding(value: unknown): WorkflowBinding {
     selector,
     input,
     jsonPath,
-    transform: ['integer','float','boolean','string'].includes(source.transform) ? source.transform : 'identity',
+    transform: enumOrDefault(source.transform,new Set(['integer','float','boolean','string','identity'] as const),'identity','workflow binding transform'),
     required: source.required===true
   } as WorkflowBinding;
 }
@@ -223,8 +223,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const sceneId = safeId(source.sceneId);
   if (!sceneIds.has(sceneId)) throw new Error(`Shot references unknown scene: ${sceneId}`);
   const generationSource = asObject(source.generation ?? {}, 'shot generation');
-  const rawModelFamily=typeof generationSource.modelFamily==='string'?generationSource.modelFamily:'';
-  const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
+  const modelFamily=enumOrDefault(generationSource.modelFamily,MODEL_FAMILIES,PRIMARY_VIDEO_MODEL,'shot model family');
   const defaults = MODEL_DEFAULTS[modelFamily];
   const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(safeId).filter(id=>assetIds.has(id));
   const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => {const filtered=rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!));if(filtered.length>max)throw new Error(`Shot asset role exceeds the ${max}-item safety limit.`);return filtered;};
@@ -255,11 +254,11 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     endFrameAssetId: optionalAsset(source.endFrameAssetId,endKinds),
     referenceVideoAssetId: optionalAsset(source.referenceVideoAssetId,videoKinds),
     audioAssetId: optionalAsset(source.audioAssetId,audioKinds),
-    status: SHOT_STATUSES.has(source.status) ? source.status : 'draft',
+    status: enumOrDefault(source.status,SHOT_STATUSES,'draft','shot status'),
     generation: {
       modelFamily,
-      mode: MODES.has(generationSource.mode) ? generationSource.mode : (defaults.mode ?? 'i2v'),
-      quality: QUALITIES.has(generationSource.quality) ? generationSource.quality : (defaults.quality ?? 'balanced'),
+      mode: enumOrDefault(generationSource.mode,MODES,defaults.mode ?? 'i2v','shot generation mode'),
+      quality: enumOrDefault(generationSource.quality,QUALITIES,defaults.quality ?? 'balanced','shot quality intent'),
       width: clampInt(generationSource.width,256,8192,defaults.width ?? 768),
       height: clampInt(generationSource.height,256,8192,defaults.height ?? 432),
       frames: clampInt(generationSource.frames,1,100_000,defaults.frames ?? 121),
@@ -283,7 +282,7 @@ function sanitizeRenderOutput(value: unknown, shotIds: Set<string>): RenderOutpu
   return {
     id:safeId(source.id), jobId:safeId(source.jobId), shotId,
     path, filename:str(source.filename,'output',2048),
-    mediaType:['video','image','audio'].includes(source.mediaType) ? source.mediaType : 'unknown',
+    mediaType:enumOrDefault(source.mediaType,new Set(['video','image','audio','unknown'] as const),'unknown','render output media type'),
     createdAt:iso(source.createdAt,new Date().toISOString()),
     comfyMeta:sanitizeComfyMeta(source.comfyMeta),
     technicalQc:sanitizeTechnicalQc(source.technicalQc)
@@ -312,8 +311,8 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
         const fp=asObject(item,'asset fingerprint');return{assetId:safeId(fp.assetId),projectPath:str(fp.projectPath,'',4096),sha256:sha(fp.sha256)??'0'.repeat(64)};
       }),
       runtimeFingerprint:{
-        backend:runtimeRaw.backend==='wangp'?'wangp':'comfyui',
-        executionMode:runtimeRaw.executionMode==='docker'?'docker':runtimeRaw.executionMode==='native'?'native':undefined,
+        backend:enumOrDefault(runtimeRaw.backend,new Set(['wangp','comfyui'] as const),'comfyui','runtime fingerprint backend'),
+        executionMode:optionalEnum(runtimeRaw.executionMode,new Set(['docker','native'] as const),'runtime fingerprint execution mode'),
         runtimeVersion:str(runtimeRaw.runtimeVersion,'',2048)||undefined,
         runtimeSha256:sha(runtimeRaw.runtimeSha256),
         environmentSha256:sha(runtimeRaw.environmentSha256)??'0'.repeat(64)
@@ -323,8 +322,8 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
   }
   return {
     id:safeId(source.id), shotId, createdAt:iso(source.createdAt,new Date().toISOString()), updatedAt:iso(source.updatedAt,new Date().toISOString()),
-    status:JOB_STATUSES.has(source.status) ? source.status : 'failed', progress:clampNumber(source.progress,0,1,0),
-    message:str(source.message,'',10_000), modelFamily:MODEL_FAMILIES.has(source.modelFamily)?source.modelFamily:'custom',
+    status:enumOrDefault(source.status,JOB_STATUSES,'failed','render job status'), progress:clampNumber(source.progress,0,1,0),
+    message:str(source.message,'',10_000), modelFamily:enumOrDefault(source.modelFamily,MODEL_FAMILIES,'custom','render job model family'),
     workflowProfileId: profileId && profiles.some(p=>p.id===profileId) ? profileId : undefined,
     comfyPromptId:str(source.comfyPromptId,'',512)||undefined,
     backendPid:Number.isInteger(source.backendPid)&&source.backendPid>0?source.backendPid:undefined,
@@ -384,6 +383,16 @@ function asObject(value: unknown, label: string): Record<string, any> {
 function array(value: unknown): any[] { return Array.isArray(value) ? value : []; }
 function boundedArray(value:unknown,label:string,max:number):any[]{const items=array(value);if(items.length>max)throw new Error(`${label} exceed the safety limit of ${max} items.`);return items;}
 function str(value: unknown, fallback: string, max: number): string { if(typeof value!=='string')return fallback;if(value.length>max)throw new Error(`Project string exceeds the ${max}-character safety limit.`);return value; }
+function enumOrDefault<T extends string>(value:unknown,allowed:ReadonlySet<T>,fallback:T,label:string):T{
+  if(value==null||value==='')return fallback;
+  if(typeof value==='string'&&allowed.has(value as T))return value as T;
+  throw new Error(`Invalid ${label}: ${String(value).slice(0,128)}`);
+}
+function optionalEnum<T extends string>(value:unknown,allowed:ReadonlySet<T>,label:string):T|undefined{
+  if(value==null||value==='')return undefined;
+  if(typeof value==='string'&&allowed.has(value as T))return value as T;
+  throw new Error(`Invalid ${label}: ${String(value).slice(0,128)}`);
+}
 function safeId(value: unknown): string {
   if(value==null||value==='')return randomUUID();
   if (typeof value === 'string' && /^[a-zA-Z0-9._:-]{1,256}$/.test(value)) return value;
