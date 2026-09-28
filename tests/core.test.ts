@@ -35,6 +35,7 @@ import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
+import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 
@@ -43,6 +44,14 @@ const api: ApiWorkflow = {
   '2': { class_type: 'KSampler', inputs: { seed: 1, steps: 20, cfg: 1 } }
 };
 
+describe('WanGP recursive input safety',()=>{
+  it('rejects pathological nesting before recursive traversal can exhaust the JS stack',()=>{
+    let deep:any='/project/assets/input.png';for(let index=0;index<300;index++)deep={nested:deep};
+    expect(()=>suggestWanGpBindings(deep)).toThrow(/nesting safety limit/i);
+    const project={rootPath:'/project'} as any,machine={wangp:{executionMode:'docker',rootPath:'/wangp',docker:{projectMount:'/workspace/project',wangpMount:'/workspace/Wan2GP'}}} as any;
+    expect(()=>mapJsonHostPathsForWanGp(project,machine,deep)).toThrow(/nesting safety limit/i);
+  });
+});
 describe('WanGP entrypoint containment',()=>{
   it('rejects native/docker entrypoints that escape the configured WanGP root',()=>{
     const root=join(tmpdir(),'cineforge-wangp-root'),machine={wangp:{rootPath:root,entrypoint:'../outside.py'}} as any as AppMachineSettings;
@@ -211,6 +220,11 @@ describe('project schema canonicalization',()=>{
     tooManyScenes.shots=[];tooManyScenes.renderOutputs=[];
     tooManyScenes.scenes=Array.from({length:10_001},(_,index)=>({id:`scene-${index}`,index:index+1,heading:'INT. ROOM',body:'',shotIds:[]}));
     expect(()=>loadPortableProject(tooManyScenes,'/project')).toThrow(/project scenes.*10,?000 items/i);
+  });
+  it('canonicalizes parseable timestamps before lexical latest/recovery ordering',()=>{
+    const raw=baseProject();raw.renderOutputs[0].createdAt='2026-01-01T09:00:00-05:00';
+    const loaded=loadPortableProject(raw,'/project').project;
+    expect(loaded.renderOutputs[0].createdAt).toBe('2026-01-01T14:00:00.000Z');
   });
   it('rejects render outputs that do not have a durable path',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
