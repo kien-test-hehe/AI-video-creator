@@ -20,7 +20,7 @@ import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessa
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
 import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
@@ -150,6 +150,22 @@ describe('renderer save runtime authority',()=>{
       const saved=await service.saveFromRenderer(rendererProject),shot=saved.shots.find(item=>item.id===shotId)!;
       expect(shot.status).toBe('draft');
       expect(shot.latestRenderId).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('project backup recovery preservation',()=>{
+  it('preserves a rejected primary project before restoring the backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-project-recovery-'));
+    try{
+      const writer=new ProjectService(),created=await writer.createAt(root,'Film');
+      const rejected={...created,story:{...created.story,title:'x'.repeat(501)}};
+      await writeFile(join(root,'cineforge.project.json'),JSON.stringify(rejected,null,2),'utf8');
+      const reader=new ProjectService(),opened=await reader.openAt(root);
+      expect(opened.story.title).toBe('Film');
+      const preserved=(await readdir(root)).find(name=>name.startsWith('cineforge.project.rejected-')&&name.endsWith('.json'));
+      expect(preserved).toBeTruthy();
+      const raw=JSON.parse(await readFile(join(root,preserved!),'utf8'));
+      expect(raw.story.title).toHaveLength(501);
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
