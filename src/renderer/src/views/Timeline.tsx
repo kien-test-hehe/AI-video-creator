@@ -3,7 +3,7 @@ import type { TimelineClip } from '../../../shared/types';
 import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
-import { insertTimelineOutput, reorderTimeline } from '../studio-logic';
+import { insertTimelineOutput, reorderTimeline, timelineInsertIssue } from '../studio-logic';
 import { takeUseConfirmationMessage } from '../../../shared/take-policy';
 import { compareTimelineClips } from '../../../shared/timeline-policy';
 
@@ -18,7 +18,7 @@ export function Timeline(){
     const message=takeUseConfirmationMessage(output,'timeline');
     return !message||window.confirm(message);
   };
-  const add=(outputId:string)=>{if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});};
+  const add=(outputId:string)=>{const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});};
   const remove=(id:string)=>updateProject(next=>{const removed=next.timeline.find(clip=>clip.id===id);next.timeline=next.timeline.filter(clip=>clip.id!==id);if(removed){next.timeline.filter(clip=>clip.track===removed.track).sort(compareTimelineClips).forEach((clip,order)=>clip.order=order);}});
   const move=(id:string,delta:number)=>updateProject(next=>{
     const clip=next.timeline.find(item=>item.id===id);if(!clip)return;
@@ -30,7 +30,7 @@ export function Timeline(){
   const dropClip=(event:DragEvent<HTMLElement>,targetId:string)=>{
     event.preventDefault();event.stopPropagation();
     const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');
-    if(outputId){if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId,targetId);});setNotice('Inserted rendered take into the timeline.');return;}
+    if(outputId){const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId,targetId);});setNotice('Inserted rendered take into the timeline.');return;}
     const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');
     if(sourceId){
       const source=project.timeline.find(clip=>clip.id===sourceId),target=project.timeline.find(clip=>clip.id===targetId);
@@ -41,7 +41,7 @@ export function Timeline(){
   };
   const dropTrack=(event:DragEvent<HTMLElement>)=>{
     const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');if(!outputId)return;
-    event.preventDefault();if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});setNotice('Added rendered take to the end of the timeline.');
+    event.preventDefault();const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}if(!confirmTake(outputId))return;updateProject(next=>{insertTimelineOutput(next,outputId);});setNotice('Added rendered take to the end of the timeline.');
   };
 
   const buildLatestCut=()=>{

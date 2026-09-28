@@ -10,7 +10,7 @@ import { directorText } from '../src/main/services/director-service';
 import { parseVolumeDetectPeak, technicalQcStructuralIssues } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
-import { insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue } from '../src/renderer/src/studio-logic';
+import { alternateShotTitle, appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
@@ -622,6 +622,19 @@ describe('Studio workflow routing and timeline drag',()=>{
  it('inserts a rendered take at the requested canonical timeline position',()=>{
    const project={shots:[{id:'s1'},{id:'s2'}],renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'}],timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}]} as unknown as FilmProject;
    expect(insertTimelineOutput(project,'o2','a')).toBe(true);const canonical=[...project.timeline].sort(compareTimelineClips);expect(canonical.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(canonical.map(clip=>clip.order)).toEqual([0,1]);
+ });
+ it('refuses timeline insertion once the canonical 100000-clip limit is reached',()=>{
+   const timeline:any[]=[];timeline.length=100_000;
+   const project={shots:[{id:'s1'}],renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'}],timeline} as unknown as FilmProject;
+   expect(timelineInsertIssue(project)).toMatch(/100000 clips/i);
+   expect(insertTimelineOutput(project,'o1')).toBe(false);
+   expect(project.timeline).toHaveLength(100_000);
+ });
+ it('keeps duplicate-shot labels and Director append operations within schema limits',()=>{
+   const title=alternateShotTitle('x'.repeat(2000));
+   expect(title).toHaveLength(2000);expect(title.endsWith(' · alt')).toBe(true);
+   expect(appendProjectText('abc','def',7,'Shot prompt')).toBe('abc\ndef');
+   expect(()=>appendProjectText('abc','def',6,'Shot prompt')).toThrow(/6-character project safety limit/i);
  });
  it('reorders canonical timeline clips by drag target',()=>{
    const project={timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},{id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},{id:'c',shotId:'s3',renderOutputId:'o3',track:0,order:2,trimInSec:0,volume:1}]} as unknown as FilmProject;
