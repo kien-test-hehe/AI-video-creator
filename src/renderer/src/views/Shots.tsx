@@ -44,9 +44,9 @@ export function Shots(){
   const propagateEnd=()=>{
     if(!selected||!nextShot){setError(!nextShot?'There is no next shot in this scene.':'Select a shot first.');return;}
     const source=continuityFrameForShot(project,selected);if(!source){setError('This shot has neither an observed final frame nor a planned end keyframe.');return;}
-    if(!source.actual&&!window.confirm(`${selected.title} has no observed generated final frame yet. Use its planned end keyframe as a provisional start reference for ${nextShot.title}?`))return;
+    if(source.source==='planned-end'&&!window.confirm(`${selected.title} has no observed generated final frame yet. Use its planned end keyframe as a provisional start reference for ${nextShot.title}?`))return;
     updateProject(p=>{const next=p.shots.find(s=>s.id===nextShot.id);if(next)next.startFrameAssetId=source.assetId;});
-    setNotice(source.actual
+    setNotice(source.source==='observed-final'
       ?`Chained ${selected.title} observed final frame → ${nextShot.title} start frame.`
       :`Chained ${selected.title} planned end keyframe → ${nextShot.title} as a provisional start reference.`);
   };
