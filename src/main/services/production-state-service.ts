@@ -100,7 +100,7 @@ export async function recordShotQc(projects:ProjectService,request:RecordShotQcR
         shotId:shot.id,
         title:`${request.layer[0].toUpperCase()+request.layer.slice(1)} QC needs review · ${shot.title}`,
         reason:issues.map(issue=>issue.message).filter(Boolean).join(' | ')||`${request.layer} QC returned an uncertain result.`,
-        recommendedAction:'Inspect the rendered take against its shot contract and references, then resolve or dismiss this review task.',
+        recommendedAction:'Inspect the rendered take against its shot contract and references, then record a PASS or FAIL verdict with a review note.',
         relatedRenderOutputIds:[output.id]
       });
       result.humanOverrideTaskId=task.id;
