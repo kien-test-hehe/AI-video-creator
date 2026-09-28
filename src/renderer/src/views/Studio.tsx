@@ -113,6 +113,12 @@ export function Studio(){
       edges.push({id:`story-${id}`,source:'story',target:id,kind:'primary'});
     }
 
+    for(const edge of project.shotDependencies){
+      if(project.shots.some(shot=>shot.id===edge.fromShotId)&&project.shots.some(shot=>shot.id===edge.toShotId)){
+        edges.push({id:`continuity-${edge.id}`,source:`shot:${edge.fromShotId}`,target:`shot:${edge.toShotId}`,kind:'continuity'});
+      }
+    }
+
     const profiles=project.settings.workflowProfiles;
     profiles.forEach((profile,index)=>{
       const id=`workflow:${profile.id}`,y=42+index*142;
@@ -401,7 +407,7 @@ export function Studio(){
       </main>
 
       {showInspector&&<aside className="studio-inspector">
-        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} probe={probe} preflightReport={preflightReport} preflightFresh={preflightFresh} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
+        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} probe={probe} readiness={readiness} preflightReport={preflightReport} preflightFresh={preflightFresh} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
       </aside>}
     </div>
 
@@ -447,12 +453,18 @@ function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerM
 
 function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioNode>;active:boolean}){
   const source=nodes.get(edge.source),target=nodes.get(edge.target);if(!source||!target)return null;
-  const sx=source.x+source.width,sy=source.y+source.height/2,tx=target.x,ty=target.y+target.height/2;
-  const bend=Math.max(54,(tx-sx)*.45);
-  return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`}/>;
+  let d:string;
+  if(edge.kind==='continuity'&&Math.abs(source.x-target.x)<120){
+    const sx=source.x+source.width/2,sy=source.y+source.height,tx=target.x+target.width/2,ty=target.y;
+    const bend=Math.max(34,Math.abs(ty-sy)*.45);d=`M ${sx} ${sy} C ${sx+48} ${sy+bend}, ${tx+48} ${ty-bend}, ${tx} ${ty}`;
+  }else{
+    const sx=source.x+source.width,sy=source.y+source.height/2,tx=target.x,ty=target.y+target.height/2;
+    const bend=Math.max(54,(tx-sx)*.45);d=`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`;
+  }
+  return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={d}/>;
 }
 
-function StudioInspector({node,asset,project,probe,preflightReport,preflightFresh,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;probe?:SystemProbe;preflightReport?:PreflightReport;preflightFresh:boolean;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
+function StudioInspector({node,asset,project,probe,readiness,preflightReport,preflightFresh,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;probe?:SystemProbe;readiness?:WorkstationReadiness;preflightReport?:PreflightReport;preflightFresh:boolean;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
   const{setProject,setNotice}=useAppStore();
   if(asset){
     const mutateAsset=(fn:(target:Asset)=>void)=>updateProject(next=>{const target=next.assets.find(item=>item.id===asset.id);if(target)fn(target);});
@@ -496,6 +508,8 @@ function StudioInspector({node,asset,project,probe,preflightReport,preflightFres
       ['WanGP',probe?.wangp.available?'ready':(probe?.wangp.error||'not ready')],
       ['ComfyUI',probe?.comfy.reachable?'online':'optional / offline'],
       ['FFmpeg',probe?.ffmpeg.available&&probe.ffmpeg.ffprobeAvailable?'ready':'check'],
+      ['Auto visual QC',readiness?.autoQcAvailable?'ready':'human fallback'],
+      ['Blender previz',probe?.blender?.available?(probe.blender.version||'ready'):'optional / not detected'],
       ['CapCut',probe?.capcut.installed?'installed':'not detected']
     ];
     return <InspectorFrame kicker="SYSTEM / PREFLIGHT" title={!preflightReport?'Not checked':!preflightFresh?'Stale — rerun preflight':preflightReport.ready?'Ready to render':'Needs attention'} action={()=>setView('dashboard')} actionLabel="Open System ↗">
@@ -574,12 +588,17 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
         <div><span>Continuity QC</span><Pill>{latestQc('continuity')?.status||'n/a'}</Pill></div>
         <div><span>Human tasks</span><Pill>{project.humanTasks.filter(task=>task.shotId===shot.id&&task.status==='open').length}</Pill></div>
       </div>
+      <div className="studio-dependency-list">
+        {[...project.shotDependencies].filter(edge=>edge.toShotId===shot.id||edge.fromShotId===shot.id).map(edge=>{const incoming=edge.toShotId===shot.id,other=project.shots.find(item=>item.id===(incoming?edge.fromShotId:edge.toShotId));return <div key={edge.id}><span>{incoming?'← IN':'OUT →'}</span><strong>{other?.title||'Missing shot'}</strong><small>{edge.relation} · {edge.strength} · {edge.propagate.join(', ')||'no propagated fields'}</small></div>;})}
+        {project.shotDependencies.every(edge=>edge.toShotId!==shot.id&&edge.fromShotId!==shot.id)&&<small className="muted">No explicit production dependency edges.</small>}
+      </div>
       {observedFinal?.frameAssetId&&<div className="studio-observed-frame">{(()=>{const asset=project.assets.find(item=>item.id===observedFinal.frameAssetId);return asset?<img src={projectMediaUrl(asset.projectPath)} alt="Observed final frame"/>:null;})()}<div><strong>Actual generated final state</strong><small>confidence {observedFinal.confidence!=null?Math.round(observedFinal.confidence*100)+'%':'—'} · {observedFinal.actionPhase||'action state not extracted'}</small></div></div>}
     </div>
     <div className="studio-previz-control">
       <span className="eyebrow">3D PREVIZ</span>
       <div className="form-grid two-col"><label>Requirement<select value={shot.previz?.requirement??'none'} onChange={event=>mutate(target=>{const requirement=event.target.value as 'none'|'optional'|'required';target.previz={...(target.previz??{status:'not-needed'}),requirement,reason:`Human override: previz requirement set to ${requirement} in Studio.`,updatedAt:new Date().toISOString()};if(requirement==='none')target.previz.status='not-needed';else if(target.previz.status==='not-needed')target.previz.status='pending';})}><option value="none">none</option><option value="optional">optional</option><option value="required">required</option></select></label><label>Status<select value={shot.previz?.status??'not-needed'} onChange={event=>mutate(target=>{target.previz={...(target.previz??{requirement:'optional'}),status:event.target.value as 'not-needed'|'pending'|'ready'|'failed'|'human-verify',updatedAt:new Date().toISOString()};})}><option value="not-needed">not-needed</option><option value="pending">pending</option><option value="ready">ready</option><option value="human-verify">human-verify</option><option value="failed">failed</option></select></label></div>
       {shot.previz?.reason&&<small>{shot.previz.reason}</small>}
+      {shot.previz?.manifestPath&&<button className="ghost" onClick={()=>void window.cineforge.system.reveal(shot.previz!.manifestPath!)}>Open previz manifest ↗</button>}
     </div>
     {takes.length>0&&<div className="studio-takes"><div className="studio-panel-head compact"><div><span className="eyebrow">TAKES</span><strong>{takes.length} rendered</strong></div></div>{takes.map(take=><div className="studio-take-row" key={take.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-render-output',take.id);}} title="Drag this take to the Timeline dock"><div><strong>{take.filename}</strong><small>{new Date(take.createdAt).toLocaleString()} · {take.technicalQc?(take.technicalQc.passed?(take.technicalQc.warnings?.length?`QC pass · ${take.technicalQc.warnings.length} warning(s)`:'QC pass'):'QC fail'):'QC unknown'}</small></div><div className="row">{shot.latestRenderId===take.id?<Pill>preferred</Pill>:<button className="ghost" onClick={()=>{const message=takeUseConfirmationMessage(take,'preferred');if(message&&!window.confirm(message))return;mutate(target=>{target.latestRenderId=take.id;target.status='rendered';});}}>Use</button>}<button className="mini" onClick={()=>void window.cineforge.system.reveal(take.path)}>↗</button></div></div>)}</div>}
     {continuityReview&&<div className="studio-continuity-result"><div className="studio-panel-head compact"><strong>Metadata continuity review</strong><button className="mini" onClick={()=>setContinuityReview(undefined)}>×</button></div>{continuityReview.issues.length?<ul>{continuityReview.issues.map((issue,index)=><li key={index}>{issue}</li>)}</ul>:<p>No concrete metadata continuity issue found. This check does not inspect rendered pixels.</p>}{continuityReview.promptAddendum&&<button className="ghost" onClick={()=>{try{const next=appendProjectText(shot.prompt,continuityReview.promptAddendum,200_000,'Shot prompt');mutate(target=>target.prompt=next);}catch(error){setError(error instanceof Error?error.message:String(error));}}}>Append prompt suggestion</button>}{continuityReview.suggestedContinuityNotes&&<button className="ghost" onClick={()=>{try{const next=appendProjectText(shot.continuityNotes,continuityReview.suggestedContinuityNotes,100_000,'Continuity notes');mutate(target=>target.continuityNotes=next);}catch(error){setError(error instanceof Error?error.message:String(error));}}}>Append continuity notes</button>}</div>}
