@@ -2,7 +2,6 @@ import { readJsonFileLimited } from './json-file';
 import type { WorkflowBinding, WorkflowBindingKey, WorkflowProfile } from '../../shared/types';
 import { assertSafeObjectKey } from '../../shared/safe-object';
 import { WORKFLOW_BINDING_LIMIT } from '../../shared/workflow-limits';
-import { WORKFLOW_BINDING_LIMIT } from '../../shared/workflow-limits';
 
 export type ApiWorkflow = Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
 
