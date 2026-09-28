@@ -14,7 +14,7 @@ import { takeUseConfirmationMessage } from '../../../shared/take-policy';
 type Point={x:number;y:number};
 type StudioNodeKind='story'|'assets'|'system'|'scene'|'shot'|'workflow'|'queue'|'timeline'|'capcut';
 interface StudioNode{id:string;kind:StudioNodeKind;x:number;y:number;width:number;height:number;title:string;subtitle:string;shotId?:string;sceneId?:string;profileId?:string;}
-interface StudioEdge{id:string;source:string;target:string;kind?:'primary'|'asset'|'warning';}
+interface StudioEdge{id:string;source:string;target:string;kind?:'primary'|'asset'|'warning'|'continuity';}
 interface ViewRect{left:number;top:number;width:number;height:number;}
 
 const MODELS:ModelFamily[]=['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom'];
