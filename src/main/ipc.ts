@@ -3,7 +3,7 @@ import { basename, join } from 'node:path';
 import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../shared/ipc';
-import type { AppMachineSettings, AssetKind, CreateHumanTaskRequest, FilmProject, KeyframeRequest, PromoteCanonicalTakeRequest, RecordObservedFinalStateRequest, RecordShotQcRequest, RenderBatchRequest, RenderRequest, ResolveHumanTaskRequest } from '../shared/types';
+import type { AppMachineSettings, AssetKind, AutomationRunRequest, CreateHumanTaskRequest, FilmProject, KeyframeRequest, PromoteCanonicalTakeRequest, RecordObservedFinalStateRequest, RecordShotQcRequest, RenderBatchRequest, RenderRequest, ResolveHumanTaskRequest } from '../shared/types';
 import { removedActiveRenderShotIds } from '../shared/project-guards';
 import { capcutHandoffInputKey, timelineExportInputKey } from '../shared/timeline-policy';
 import { WORKFLOW_PROFILE_LIMIT } from '../shared/workflow-limits';
@@ -28,6 +28,8 @@ import type { KeyframeLeaseStore } from './services/keyframe-lease';
 import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/wangp-catalog-service';
 import { MAX_WORKFLOW_JSON_BYTES, stringifyJsonLimited } from './services/json-file';
 import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, recordShotQc, resolveHumanTask } from './services/production-state-service';
+import { ProductionRuntimeService } from './services/production-runtime-service';
+import { assessWorkstationReadiness } from './services/workstation-readiness';
 
 type Handler = (...args: any[]) => any;
 
@@ -50,7 +52,7 @@ export async function shutdownForegroundOperations():Promise<void>{
   if(pending.length)await Promise.allSettled(pending);
 }
 
-export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,keyframeLeases:KeyframeLeaseStore,trustedRendererUrl:string): void {
+export function registerIpc(projects: ProjectService, queue: RenderQueueService, settings: AppSettingsService,keyframeLeases:KeyframeLeaseStore,automation:ProductionRuntimeService,trustedRendererUrl:string): void {
   let keyframeBusy = false;
   let directorBusy = false;
   let workflowValidationBusy = false;
@@ -63,7 +65,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   };
 
   const assertProjectStable=()=>{if(projectSwitchBusy)throw new Error('Wait for the current project open/create operation to finish.');};
-  const assertProjectSwitchAllowed=()=>{if(projectSwitchBusy||activeProjectFileOperations>0||queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish the current project file operation/switch or cancel active renders, local Director work, keyframe generation, workflow validation/provisioning, timeline export, or CapCut handoff before switching projects.');};
+  const assertProjectSwitchAllowed=()=>{if(projectSwitchBusy||activeProjectFileOperations>0||queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy||activeExportAbortController||activeHandoffPromise||automation.snapshot().running)throw new Error('Finish/stop autonomous production and the current project operation, or cancel active renders, Director work, keyframe generation, workflow maintenance, timeline export, or CapCut handoff before switching projects.');};
   const assertGpuGenerationAvailable=()=>{assertProjectStable();if(activeExportAbortController)throw new Error('Wait for the GPU-assisted timeline export to finish or cancel it before starting generation.');if(workflowValidationBusy)throw new Error('Wait for workflow validation/provisioning to finish before starting GPU generation.');if(directorBusy)throw new Error('Wait for the local Director request to finish before starting keyframe generation.');if(keyframeBusy)throw new Error('A keyframe generation is already using the local generation runtime.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before generating a keyframe.');};
   const assertDirectorAvailable=()=>{assertProjectStable();if(activeExportAbortController)throw new Error('Wait for the timeline export to finish or cancel it before using the local Director.');if(workflowValidationBusy)throw new Error('Wait for workflow validation/provisioning to finish before using the local Director.');if(directorBusy)throw new Error('A local Director request is already running.');if(keyframeBusy)throw new Error('Wait for keyframe generation to finish before using the local Director.');if(queue.isBusy())throw new Error('Finish or cancel the active render queue before using the local Director on this GPU workstation.');};
   const assertWorkflowMaintenanceAvailable=()=>{assertProjectStable();if(activeExportAbortController||queue.isBusy()||keyframeBusy||directorBusy)throw new Error('Finish or cancel active timeline export, render, keyframe, or Director work before validating or provisioning workflow profiles.');};
@@ -185,6 +187,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.workflowWanGpCatalog, () => listWanGpCatalog(settings.get()));
   handle(IPC.workflowProvisionWanGp, () => {assertWorkflowMaintenanceAvailable();return withWorkflowValidationLock(()=>provisionRecommendedWanGpProfiles(projects,settings));});
 
+  handle(IPC.systemReadiness,()=>assessWorkstationReadiness(projects.getCurrent()??undefined,settings.get()));
   handle(IPC.systemProbe, ()=>{
     const project=projects.getCurrent()??undefined,projectId=project?.id;
     if(activeSystemProbePromise){
@@ -255,8 +258,19 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   handle(IPC.productionRecordObservedFinal,(request:RecordObservedFinalStateRequest)=>{assertProductionStateMutationAllowed();return recordObservedFinalState(projects,request);});
   handle(IPC.productionRecordQc,(request:RecordShotQcRequest)=>{assertProductionStateMutationAllowed();return recordShotQc(projects,request);});
   handle(IPC.productionCreateHumanTask,(request:CreateHumanTaskRequest)=>{assertProjectStable();return createHumanTask(projects,request);});
-  handle(IPC.productionResolveHumanTask,(request:ResolveHumanTaskRequest)=>{assertProjectStable();return resolveHumanTask(projects,request);});
+  handle(IPC.productionResolveHumanTask,async(request:ResolveHumanTaskRequest)=>{assertProjectStable();const result=await resolveHumanTask(projects,request);automation.wake();return result;});
   handle(IPC.productionPromoteCanonical,(request:PromoteCanonicalTakeRequest)=>{assertProductionStateMutationAllowed();return promoteCanonicalTake(projects,request);});
+
+  const assertAutomationStartAllowed=()=>{
+    assertProjectStable();
+    if(keyframeBusy||directorBusy||workflowValidationBusy||activeExportAbortController||activeHandoffPromise)throw new Error('Finish keyframe, Director, workflow maintenance, export, or CapCut handoff work before starting autonomous production.');
+    if(queue.isBusy())throw new Error('Finish or cancel the existing render queue before handing GPU control to autonomous production.');
+  };
+  handle(IPC.automationStart,(request:AutomationRunRequest)=>{assertAutomationStartAllowed();return automation.start(request);});
+  handle(IPC.automationPause,()=>automation.pause());
+  handle(IPC.automationResume,()=>automation.resume());
+  handle(IPC.automationStop,()=>automation.stop());
+  handle(IPC.automationStatus,()=>automation.snapshot());
 
   handle(IPC.timelineExport,async()=>{
     assertProjectStable();
@@ -293,6 +307,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
   });
 
   queue.on('snapshot',snapshot=>{for(const window of BrowserWindow.getAllWindows())if(!window.isDestroyed())window.webContents.send(IPC.queueEvent,snapshot);});
+  automation.on('status',status=>{for(const window of BrowserWindow.getAllWindows())if(!window.isDestroyed())window.webContents.send(IPC.automationEvent,status);});
 }
 
 function requireProject(projects: ProjectService): FilmProject {
