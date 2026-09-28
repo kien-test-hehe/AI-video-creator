@@ -22,8 +22,10 @@ export function serializeProjectForStorage(project:FilmProject,maxBytes=MAX_PROJ
 export class ProjectService {
   private current: FilmProject | null = null;
   private gate: Promise<void> = Promise.resolve();
+  private openRecoveryNotice:string|undefined;
 
   getCurrent(): FilmProject | null { return this.current ? structuredClone(this.current) : null; }
+  consumeOpenRecoveryNotice():string|undefined{const notice=this.openRecoveryNotice;this.openRecoveryNotice=undefined;return notice;}
 
   async createWithDialog(name = 'Untitled Film'): Promise<FilmProject | null> {
     const result = await dialog.showOpenDialog({ title: 'Choose a folder for the new CineForge project', properties: ['openDirectory', 'createDirectory'] });
@@ -32,6 +34,7 @@ export class ProjectService {
   }
 
   async createAt(rootPath: string, name: string): Promise<FilmProject> {
+    this.openRecoveryNotice=undefined;
     if(typeof name!=='string')throw new Error('Project name must be a string.');
     if(name.length>240)throw new Error('Project name exceeds the 240-character project safety limit.');
     const resolvedRoot=resolve(rootPath),projectFile=join(resolvedRoot,PROJECT_FILE);
@@ -72,6 +75,7 @@ export class ProjectService {
   }
 
   async openAt(rootPath:string):Promise<FilmProject>{
+    this.openRecoveryNotice=undefined;
     const openedRoot = resolve(rootPath);
     const file = join(openedRoot, PROJECT_FILE);
     const backup = join(openedRoot, PROJECT_BACKUP_FILE);
@@ -102,7 +106,7 @@ export class ProjectService {
     await this.ensureFolders(project.rootPath);
     await this.validateStoragePaths(project);
     const committed=await this.persistUnlocked(project);
-    if(recoveredFromBackup)console.warn(`Recovered CineForge project from backup after the primary project file failed validation.${rejectedPrimaryPath?` Rejected primary preserved at ${rejectedPrimaryPath}.`:''}`,primaryFailure);
+    if(recoveredFromBackup){const reason=primaryFailure instanceof Error?primaryFailure.message:String(primaryFailure);this.openRecoveryNotice=`The primary project file failed validation, so CineForge opened the trusted backup instead.\n\nReason: ${reason.slice(0,4000)}${rejectedPrimaryPath?`\n\nRejected primary preserved at:\n${rejectedPrimaryPath}`:''}`;console.warn(this.openRecoveryNotice,primaryFailure);}
     if (loaded.migrationNotes.length) console.warn(loaded.migrationNotes.join('\n'));
     return committed;
   }
