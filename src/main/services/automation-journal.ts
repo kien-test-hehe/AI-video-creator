@@ -46,15 +46,18 @@ function sanitizeJournal(raw:any,project:FilmProject):AutomationRunJournal{
   if(!raw||typeof raw!=='object'||Array.isArray(raw)||raw.schemaVersion!==1)throw new Error('Unsupported or malformed automation run journal.');
   if(raw.projectId!==project.id||raw.projectRoot!==project.rootPath)throw new Error('Automation run journal does not belong to the open project.');
   const shotIds=new Set(project.shots.map(shot=>shot.id));
-  const targetShotIds=Array.isArray(raw.targetShotIds)?[...new Set(raw.targetShotIds.filter((id:unknown):id is string=>typeof id==='string'&&shotIds.has(id)))]:[];
+  const rawTargetShotIds:unknown[]=Array.isArray(raw.targetShotIds)?raw.targetShotIds:[];
+  const targetShotIds:string[]=[...new Set(rawTargetShotIds.filter((id):id is string=>typeof id==='string'&&shotIds.has(id)))];
   const status=raw.status;
   if(!status||typeof status!=='object'||typeof status.running!=='boolean'||typeof status.paused!=='boolean'||typeof status.phase!=='string'||typeof status.message!=='string')throw new Error('Automation run journal status is malformed.');
   const phases=new Set(['idle','preflight','planning','waiting-render','qc','retrying','waiting-human','building-timeline','paused','complete','error']);
   if(!phases.has(status.phase))throw new Error('Automation run journal contains an unknown phase.');
   const retryCounts:Record<string,number>={};
   if(status.retryCounts&&typeof status.retryCounts==='object'&&!Array.isArray(status.retryCounts)){for(const[id,value]of Object.entries(status.retryCounts)){const n=Number(value);if(shotIds.has(id)&&Number.isFinite(n)&&n>=0)retryCounts[id]=Math.min(5,Math.trunc(n));}}
-  const completedShotIds=Array.isArray(status.completedShotIds)?status.completedShotIds.filter((id:unknown):id is string=>typeof id==='string'&&shotIds.has(id)):[];
-  const blockedHumanTaskIds=Array.isArray(status.blockedHumanTaskIds)?status.blockedHumanTaskIds.filter((id:unknown):id is string=>typeof id==='string'&&project.humanTasks.some(task=>task.id===id)):[];
+  const rawCompletedShotIds:unknown[]=Array.isArray(status.completedShotIds)?status.completedShotIds:[];
+  const completedShotIds:string[]=rawCompletedShotIds.filter((id):id is string=>typeof id==='string'&&shotIds.has(id));
+  const rawBlockedTaskIds:unknown[]=Array.isArray(status.blockedHumanTaskIds)?status.blockedHumanTaskIds:[];
+  const blockedHumanTaskIds:string[]=rawBlockedTaskIds.filter((id):id is string=>typeof id==='string'&&project.humanTasks.some(task=>task.id===id));
   return{
     schemaVersion:1,projectId:project.id,projectRoot:project.rootPath,targetShotIds,
     maxAutoRetries:Math.max(0,Math.min(5,Math.trunc(Number(raw.maxAutoRetries)||0))),buildTimeline:raw.buildTimeline!==false,
