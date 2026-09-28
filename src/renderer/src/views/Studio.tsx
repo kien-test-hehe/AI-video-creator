@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
 import { chooseModelForShot } from '../../../shared/routing';
 import { continuityReviewInputKey } from '../../../shared/director-signature';
-import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe } from '../../../shared/types';
+import type { Asset, AssetKind, AutomationStatus, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe, WorkstationReadiness } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
@@ -35,6 +35,9 @@ export function Studio(){
   const[preflightBusy,setPreflightBusy]=useState(false);
   const[preflightReport,setPreflightReport]=useState<PreflightReport>();
   const[preflightRevision,setPreflightRevision]=useState<string>();
+  const[automation,setAutomation]=useState<AutomationStatus>();
+  const[readiness,setReadiness]=useState<WorkstationReadiness>();
+  const[automationBusy,setAutomationBusy]=useState(false);
   const[showLibrary,setShowLibrary]=useState(true);
   const[showInspector,setShowInspector]=useState(true);
   const[showDock,setShowDock]=useState(true);
@@ -57,6 +60,14 @@ export function Studio(){
     void window.cineforge.system.probe().then(next=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setProbe(next);}).catch(error=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setError(error instanceof Error?error.message:String(error));});
     return()=>{disposed=true;};
   },[probe,projectId,setError,setProbe]);
+  useEffect(()=>{
+    let disposed=false;
+    const syncStatus=(status:AutomationStatus)=>{if(!disposed)setAutomation(status);};
+    const unsubscribe=window.cineforge.automation.onStatus(syncStatus);
+    void window.cineforge.automation.status().then(syncStatus).catch(error=>{if(!disposed)setError(error instanceof Error?error.message:String(error));});
+    void window.cineforge.system.readiness().then(result=>{if(!disposed){setReadiness(result);setProbe(result.probe);}}).catch(error=>{if(!disposed)setError(error instanceof Error?error.message:String(error));});
+    return()=>{disposed=true;unsubscribe();};
+  },[projectId,setError,setProbe]);
 
   const {sortedShots,shotsByScene}=useMemo(()=>{
     if(!project)return{sortedShots:[] as Shot[],shotsByScene:new Map<string,Shot[]>()};
@@ -304,6 +315,20 @@ export function Studio(){
       setNotice(`${shot.title} added to the render queue.`);
     }catch(error){setError(error instanceof Error?error.message:String(error));}
   };
+  const startAutomation=async()=>{
+    if(!project)return;
+    try{
+      setAutomationBusy(true);await useAppStore.getState().persist();
+      const current=useAppStore.getState().project;if(!current)throw new Error('Project closed before autonomous production could start.');
+      const ready=await window.cineforge.system.readiness();setReadiness(ready);setProbe(ready.probe);
+      if(!ready.readyForProduction){setError('Workstation readiness has blocking items. Open System / readiness details before starting autonomous production.');return;}
+      const next=await window.cineforge.automation.start({projectRoot:current.rootPath,maxAutoRetries:2,buildTimeline:true});setAutomation(next);setNotice('Autonomous production started.');
+    }catch(error){setError(error instanceof Error?error.message:String(error));}
+    finally{setAutomationBusy(false);}
+  };
+  const pauseAutomation=async()=>{try{setAutomation(await window.cineforge.automation.pause());}catch(error){setError(error instanceof Error?error.message:String(error));}};
+  const resumeAutomation=async()=>{try{setAutomation(await window.cineforge.automation.resume());}catch(error){setError(error instanceof Error?error.message:String(error));}};
+  const stopAutomation=async()=>{try{setAutomation(await window.cineforge.automation.stop());setNotice('Autonomous production stopped after the current atomic operation.');}catch(error){setError(error instanceof Error?error.message:String(error));}};
 
   if(!project)return <section className="studio-empty"><Empty>Create or open a project to enter Studio.</Empty></section>;
 
@@ -325,7 +350,7 @@ export function Studio(){
         <Hud label="Comfy" value={probe?.comfy.reachable?'online':'optional'} tone={probe?.comfy.reachable?'good':'muted'}/>
         <Hud label="CapCut" value={project.settings.capcut.pro?'Pro':'Free'} tone="muted"/>
         <Hud label="Queue" value={String(queue.jobs.filter(job=>ACTIVE_JOB_STATUSES.has(job.status)).length)} tone={queue.runningJobId?'warn':'muted'}/>
-        <Hud label="Human" value={String(openHumanTasks.length)} tone={openHumanTasks.length?'warn':'good'}/>
+        <Hud label="Human" value={String(openHumanTasks.length)} tone={openHumanTasks.length?'warn':'good'}/><Hud label="Auto" value={automation?.phase||'idle'} tone={automation?.phase==='error'||automation?.phase==='waiting-human'?'warn':automation?.running?'good':'muted'}/>
       </div>
       <div className="studio-command-actions">
         <button className="ghost" onClick={()=>changeZoom(-.1)}>−</button><span className="studio-zoom">{Math.round(zoom*100)}%</span><button className="ghost" onClick={()=>changeZoom(.1)}>+</button>
@@ -336,10 +361,17 @@ export function Studio(){
         <button className={showInspector?'ghost active-toggle':'ghost'} onClick={()=>setShowInspector(value=>!value)}>Inspector</button>
         <button className={showDock?'ghost active-toggle':'ghost'} onClick={()=>setShowDock(value=>!value)}>Dock</button>
         <button className="ghost" disabled={preflightBusy||sortedShots.length===0} onClick={runPreflight}>{preflightBusy?'Checking…':`Preflight · ${preflightSummary}`}</button>
-        <button className="ghost" disabled={sortedShots.length===0||preflightBusy} onClick={renderAll}>Render all</button>
-        <button className="primary" title={!selectedRouteReady?'Select or validate a usable video workflow before rendering.':undefined} disabled={!selectedShot||focusedNode?.kind!=='shot'||focusedNode.shotId!==selectedShot.id||!selectedRouteReady} onClick={queueSelected}>Render selected</button>
+        <button className="ghost" disabled={sortedShots.length===0||preflightBusy||Boolean(automation?.running)} onClick={renderAll}>Render all</button>
+        {!automation?.running?<button className="primary auto-run" disabled={automationBusy||sortedShots.length===0} onClick={startAutomation}>{automationBusy?'Starting…':'AUTO RUN'}</button>:automation.paused?<button className="primary auto-run" onClick={resumeAutomation}>Resume auto</button>:<button className="ghost" onClick={pauseAutomation}>Pause auto</button>}
+        {automation?.running&&<button className="ghost danger" onClick={stopAutomation}>Stop auto</button>}
+        <button className="primary" title={!selectedRouteReady?'Select or validate a usable video workflow before rendering.':undefined} disabled={Boolean(automation?.running)||!selectedShot||focusedNode?.kind!=='shot'||focusedNode.shotId!==selectedShot.id||!selectedRouteReady} onClick={queueSelected}>Render selected</button>
       </div>
     </header>
+    <section className={`studio-automation-bar ${automation?.phase||'idle'}`}>
+      <div><span className="eyebrow">AUTONOMOUS PRODUCTION</span><strong>{automation?.message||'Idle · human-on-the-loop runtime ready'}</strong></div>
+      <div className="studio-auto-metrics"><span><b>{automation?.completedShotIds.length??0}</b> / {sortedShots.length} canonical</span><span>Current: <b>{automation?.currentShotId?project.shots.find(shot=>shot.id===automation.currentShotId):undefined?.title||'—'}</b></span><span>Retries: <b>{automation?.retryCounts?Object.values(automation.retryCounts).reduce((sum,value)=>sum+value,0):0}</b></span><span>Blockers: <b>{automation?.blockedHumanTaskIds.length??0}</b></span><span>Readiness: <b>{readiness?.readyForProduction?'ready':readiness?'check':'unknown'}</b></span></div>
+      {automation?.lastError&&<small>{automation.lastError}</small>}
+    </section>
 
     <div className={['studio-layout',!showLibrary?'without-library':'',!showInspector?'without-inspector':''].filter(Boolean).join(' ')}>
       {showLibrary&&<aside className="studio-library">
