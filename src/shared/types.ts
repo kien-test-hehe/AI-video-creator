@@ -23,6 +23,8 @@ export type HumanTaskType = 'create-asset' | 'approve-asset' | 'verify-keyframe'
 export type HumanTaskStatus = 'open' | 'resolved' | 'dismissed';
 export type PrevizRequirement = 'none' | 'optional' | 'required';
 export type PrevizStatus = 'not-needed' | 'pending' | 'ready' | 'failed' | 'human-verify';
+export type AutomationPhase = 'idle' | 'preflight' | 'planning' | 'waiting-render' | 'qc' | 'retrying' | 'waiting-human' | 'building-timeline' | 'paused' | 'complete' | 'error';
+export type ReadinessLevel = 'ready' | 'warning' | 'blocked';
 
 export interface AppMachineSettings {
   schemaVersion: 1;
@@ -324,6 +326,43 @@ export interface PromoteCanonicalTakeRequest {
   renderOutputId:UUID;
 }
 
+export interface AutomationRunRequest {
+  projectRoot:string;
+  shotIds?:UUID[];
+  maxAutoRetries?:number;
+  buildTimeline?:boolean;
+}
+export interface AutomationStatus {
+  running:boolean;
+  paused:boolean;
+  phase:AutomationPhase;
+  projectRoot?:string;
+  currentShotId?:UUID;
+  message:string;
+  startedAt?:ISODate;
+  updatedAt:ISODate;
+  completedShotIds:UUID[];
+  retryCounts:Record<UUID,number>;
+  blockedHumanTaskIds:UUID[];
+  lastError?:string;
+}
+export interface WorkstationReadinessItem {
+  id:string;
+  label:string;
+  level:ReadinessLevel;
+  detail:string;
+  action?:string;
+}
+export interface WorkstationReadiness {
+  checkedAt:ISODate;
+  readyForProduction:boolean;
+  autoQcAvailable:boolean;
+  blenderAvailable:boolean;
+  validatedVideoProfiles:number;
+  items:WorkstationReadinessItem[];
+  probe:SystemProbe;
+}
+
 export interface KeyframeRequest { projectRoot:string;shotId:UUID;role:'start'|'end';workflowProfileId:UUID; }
 export interface RenderRequest { projectRoot:string;shotId:UUID;forceWorkflowProfileId?:UUID; }
 export interface RenderBatchRequest { projectRoot:string;shotIds:UUID[];skipIfRendered?:boolean; }
@@ -348,6 +387,7 @@ export interface SystemProbe {
   comfy:{reachable:boolean;url:string;systemStats?:unknown;error?:string;};
   wangp:{configured:boolean;available:boolean;executionMode:WanGpExecutionMode;rootPath:string;entrypoint?:string;pythonPath?:string;runtimeVersion?:string;pythonVersion?:string;torchVersion?:string;torchCudaVersion?:string;cudaAvailable?:boolean;torchError?:string;error?:string;};
   docker?:{available:boolean;version?:string;gpuAccessible?:boolean;error?:string;};
+  blender?:{available:boolean;version?:string;path?:string;error?:string;};
   hardwarePlan:HardwarePlan;
   codexContextPath?:string;
 }
