@@ -2013,3 +2013,35 @@ describe('renderer autonomous edit lock',()=>{
     useAppStore.setState({automation:undefined});
   });
 });
+
+
+describe('directional continuity canonical gate',()=>{
+  it('lets an upstream shot canonicalize before its successor exists, while requiring incoming continuity on the successor',()=>{
+    const makeShot=(id:string,index:number):Shot=>({
+      id,sceneId:'scene',index,title:id,prompt:id,camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'t2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:index,negativePrompt:'',includeAudio:false}
+    });
+    const a=makeShot('a',1),b=makeShot('b',2);
+    const project={
+      schemaVersion:3,id:'directional-qc',name:'directional',rootPath:'/tmp/directional',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'directional',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['a','b']}],
+      assets:[],shots:[a,b],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],
+      shotDependencies:[{id:'edge-a-b',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}],
+      qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    for(const shot of [a,b]){
+      const output={id:`out-${shot.id}`,jobId:'legacy',shotId:shot.id,path:`/tmp/directional/${shot.id}.mp4`,filename:`${shot.id}.mp4`,mediaType:'video' as const,createdAt:'2026-01-01T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}};
+      project.renderOutputs.push(output);
+      output.productionInputKey=shotProductionInputKey(project,shot);
+      for(const layer of ['visual','semantic'] as const)project.qcResults.push({id:`${shot.id}-${layer}`,shotId:shot.id,renderOutputId:output.id,layer,status:'pass',issues:[],inputKey:shotQcInputKey(project,shot.id,output.id,layer),createdAt:'2026-01-01T00:00:01.000Z'});
+    }
+    expect(canonicalTakeReadiness(project,'a','out-a')).toMatchObject({ready:true});
+    const bBefore=canonicalTakeReadiness(project,'b','out-b');
+    expect(bBefore.ready).toBe(false);
+    expect(bBefore.blockers.join(' ')).toMatch(/continuity QC is missing/i);
+    project.qcResults.push({id:'b-continuity',shotId:'b',renderOutputId:'out-b',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,'b','out-b','continuity'),createdAt:'2026-01-01T00:00:02.000Z'});
+    expect(canonicalTakeReadiness(project,'b','out-b')).toMatchObject({ready:true});
+  });
+});
