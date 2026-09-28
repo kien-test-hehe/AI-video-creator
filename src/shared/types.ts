@@ -208,6 +208,11 @@ export interface WorkflowValidation {
   sourceSha256?: string;
   runtimeFingerprint?: string;
   lastSuccessfulRenderAt?: ISODate;
+  successfulRenderCount?: number;
+  lastRenderWallSec?: number;
+  lastRenderWidth?: number;
+  lastRenderHeight?: number;
+  lastRenderFrames?: number;
   lastError?: string;
 }
 
