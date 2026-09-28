@@ -13,6 +13,7 @@ import { sampleVideoFrames, type SampledVideoFrames } from './media-analysis';
 import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, selectStableFinalFrame } from './automatic-qc-service';
 import { createHumanTask, recordObservedFinalState, recordShotQc } from './production-state-service';
 import { ensurePrevizPlan } from './previz-service';
+import { AutomationJournal } from './automation-journal';
 
 const ACTIVE_RENDER=new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 
@@ -23,6 +24,8 @@ export class ProductionRuntimeService extends EventEmitter{
   private buildTimeline=true;
   private advancing=false;
   private advanceAgain=false;
+  private journal=new AutomationJournal();
+  private journalTail:Promise<void>=Promise.resolve();
 
   constructor(private projects:ProjectService,private queue:RenderQueueService,private settings:AppSettingsService){
     super();
@@ -30,6 +33,32 @@ export class ProductionRuntimeService extends EventEmitter{
   }
 
   snapshot():AutomationStatus{return structuredClone(this.status);}
+
+  async reconcileAfterProjectOpen():Promise<AutomationStatus>{
+    const project=this.projects.getCurrent();
+    if(!project){
+      this.targetShotIds=[];
+      this.status={running:false,paused:false,phase:'idle',message:'Automation is idle.',updatedAt:new Date().toISOString(),completedShotIds:[],retryCounts:{},blockedHumanTaskIds:[]};
+      this.emitStatus();return this.snapshot();
+    }
+    const saved=await this.journal.read(project);
+    if(!saved){
+      this.targetShotIds=[];
+      this.status={running:false,paused:false,phase:'idle',projectRoot:project.rootPath,message:'Automation is idle.',updatedAt:new Date().toISOString(),completedShotIds:[],retryCounts:{},blockedHumanTaskIds:[]};
+      this.emitStatus();return this.snapshot();
+    }
+    this.targetShotIds=saved.targetShotIds;
+    this.maxAutoRetries=saved.maxAutoRetries;
+    this.buildTimeline=saved.buildTimeline;
+    this.status={...saved.status,projectRoot:project.rootPath,updatedAt:new Date().toISOString()};
+    if(this.status.running){
+      this.status.phase=this.status.paused?'paused':'planning';
+      this.status.message=this.status.paused?'Recovered paused autonomous production run.':'Recovered autonomous production run; re-evaluating current project state.';
+    }
+    this.emitStatus();this.persistLater();
+    if(this.status.running&&!this.status.paused)this.wake();
+    return this.snapshot();
+  }
 
   async start(request:AutomationRunRequest):Promise<AutomationStatus>{
     if(this.status.running)throw new Error('Autonomous production is already running.');
@@ -268,7 +297,7 @@ export class ProductionRuntimeService extends EventEmitter{
     if(this.buildTimeline){
       this.setStatus({phase:'building-timeline',currentShotId:undefined,message:'Building canonical timeline.'});
       await this.projects.mutate(next=>{
-        const ordered=orderedShots(next).filter(shot=>this.targetShotIds.includes(shot.id));
+        const ordered=orderedShots(next);
         const selected=ordered.flatMap(shot=>{
           if(!shot.canonicalRenderId||!canonicalTakeReadiness(next,shot.id,shot.canonicalRenderId).ready)return[];
           return[{id:randomUUID(),shotId:shot.id,renderOutputId:shot.canonicalRenderId,track:0,order:0,trimInSec:0,volume:1,approval:'canonical' as const}];
@@ -282,8 +311,14 @@ export class ProductionRuntimeService extends EventEmitter{
   }
 
   private fail(message:string):void{this.status.running=false;this.status.paused=false;this.setStatus({phase:'error',message,lastError:message});}
-  private setStatus(patch:Partial<AutomationStatus>):void{this.status={...this.status,...patch,updatedAt:new Date().toISOString()};this.emitStatus();}
+  private setStatus(patch:Partial<AutomationStatus>):void{this.status={...this.status,...patch,updatedAt:new Date().toISOString()};this.emitStatus();this.persistLater();}
   private emitStatus():void{this.emit('status',this.snapshot());}
+  private persistLater():void{
+    const project=this.projects.getCurrent();
+    if(!project||this.status.projectRoot!==project.rootPath)return;
+    const snapshot=this.snapshot(),targetShotIds=[...this.targetShotIds],maxAutoRetries=this.maxAutoRetries,buildTimeline=this.buildTimeline;
+    this.journalTail=this.journalTail.then(()=>this.journal.write(project,{schemaVersion:1,projectId:project.id,projectRoot:project.rootPath,targetShotIds,maxAutoRetries,buildTimeline,status:snapshot})).catch(error=>{console.warn('Could not persist autonomous production journal:',error);});
+  }
 }
 
 function orderedShots(project:FilmProject):Shot[]{
