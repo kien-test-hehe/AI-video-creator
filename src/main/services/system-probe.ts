@@ -49,6 +49,41 @@ async function probeFfmpeg(machine:AppMachineSettings):Promise<SystemProbe['ffmp
   return{available,version,ffprobeAvailable,encoderAvailable};
 }
 
+async function probeBlender():Promise<SystemProbe['blender']>{
+  const candidates:string[]=[];
+  if(process.platform==='win32'){
+    try{
+      const{stdout}=await execFileAsync('where.exe',['blender.exe'],{timeout:5000});
+      candidates.push(...stdout.split(/\r?\n/).map(value=>value.trim()).filter(Boolean));
+    }catch{}
+    const programFiles=process.env.ProgramFiles;
+    if(programFiles){
+      try{
+        const root=join(programFiles,'Blender Foundation');
+        for(const entry of await readdir(root,{withFileTypes:true})){
+          if(entry.isDirectory())candidates.push(join(root,entry.name,'blender.exe'));
+        }
+      }catch{}
+    }
+  }else{
+    try{
+      const{stdout}=await execFileAsync('which',['blender'],{timeout:5000});
+      if(stdout.trim())candidates.push(stdout.trim());
+    }catch{}
+  }
+  for(const path of [...new Set(candidates)]){
+    try{
+      const{stdout,stderr}=await execFileAsync(path,['--version'],{timeout:8000,maxBuffer:2*1024*1024});
+      const first=`${stdout}\n${stderr}`.split(/\r?\n/).find(Boolean)?.trim();
+      return{available:true,path,version:first};
+    }catch{}
+  }
+  try{
+    const{stdout,stderr}=await execFileAsync('blender',['--version'],{timeout:8000,maxBuffer:2*1024*1024});
+    return{available:true,path:'blender',version:`${stdout}\n${stderr}`.split(/\r?\n/).find(Boolean)?.trim()};
+  }catch(error){return{available:false,error:error instanceof Error?error.message:String(error)};}
+}
+
 async function probeDocker(machine:AppMachineSettings):Promise<SystemProbe['docker']>{
   try{
     const{stdout}=await execFileAsync(machine.wangp.docker.command,['version','--format','{{.Server.Version}}'],{timeout:8000});
@@ -123,13 +158,13 @@ async function firstExisting(paths:string[]):Promise<string|undefined>{
 }
 
 export async function probeSystem(project:FilmProject|undefined,machine:AppMachineSettings):Promise<SystemProbe>{
-  const[cpu,gpu,ffmpeg,comfy,wangp,docker,disk,capcut]=await Promise.all([
+  const[cpu,gpu,ffmpeg,comfy,wangp,docker,disk,capcut,blender]=await Promise.all([
     probeCpu(),probeGpu(),probeFfmpeg(machine),new ComfyClient(machine.comfy.url,true).ping(),probeWanGp(machine),
-    machine.wangp.executionMode==='docker'?probeDocker(machine):Promise.resolve(undefined),probeDisk(project),probeCapCut(project)
+    machine.wangp.executionMode==='docker'?probeDocker(machine):Promise.resolve(undefined),probeDisk(project),probeCapCut(project),probeBlender()
   ]);
   const base={
     platform:{platform:platform(),release:release(),arch:arch(),hostname:hostname()},
-    cpu,gpu,memory:{totalMb:Math.round(totalmem()/1024/1024),freeMb:Math.round(freemem()/1024/1024)},disk,ffmpeg,capcut,comfy,wangp,docker
+    cpu,gpu,memory:{totalMb:Math.round(totalmem()/1024/1024),freeMb:Math.round(freemem()/1024/1024)},disk,ffmpeg,capcut,comfy,wangp,docker,blender
   };
   return{...base,hardwarePlan:deriveHardwarePlan(base)};
 }

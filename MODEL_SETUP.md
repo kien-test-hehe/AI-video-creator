@@ -1,10 +1,10 @@
 # Model and runtime setup
 
-CineForge 0.3 separates **portable project state** from **machine runtime configuration**.
+CineForge 0.4 separates **portable project state** from **machine runtime configuration**.
 
 ## Workstation setup
 
-On the primary Windows target, run `setup.cmd`. It prepares the pinned machine-local WanGP runtime, portable Node, FFmpeg/FFprobe and CineForge dependencies. Machine paths/endpoints still live under Electron's `userData` directory and are never trusted from a project file. Settings remains available for advanced native/Docker overrides, optional dedicated ComfyUI, and an optional loopback OpenAI-compatible Director.
+On the primary Windows target, run `setup.cmd`. It prepares the pinned machine-local WanGP runtime, portable Node, FFmpeg/FFprobe, CineForge dependencies, and by default Ollama + `qwen3-vl:4b` for local multimodal QC. Use `powershell -ExecutionPolicy Bypass -File scripts/setup-windows.ps1 -SkipVisionModel` only if you intentionally want visual/semantic/continuity QC to fall back to Human Review. Machine paths/endpoints still live under Electron's `userData` directory and are never trusted from a project file. Settings remains available for advanced native/Docker overrides, optional dedicated ComfyUI, and an optional loopback OpenAI-compatible Director.
 
 ## WanGP production profiles
 
@@ -29,3 +29,14 @@ Video output is inspected with FFprobe/FFmpeg for stream presence, expected dura
 ## CapCut
 
 Build the canonical CineForge cut first. The handoff validates every media path/trim, then writes a manifest and Codex task. CapCut AI credits remain off unless explicitly enabled.
+
+
+## Automatic QC runtime
+
+The default local QC endpoint is `http://127.0.0.1:11434/v1` with `qwen3-vl:4b`. CineForge sends only bounded local frame samples to loopback. After a shot QC batch, it requests immediate Ollama unload (`keep_alive: 0`) so the RTX 5060 Ti can reclaim VRAM for the next generation.
+
+A missing/unavailable vision model does not silently PASS anything. CineForge records an uncertain QC result and creates a Human Task. Low-confidence observed-final state likewise requires explicit review.
+
+## Previz
+
+Blender is optional. CineForge probes it and uses a previz advisor to decide none/optional/required. Required shots receive a generated manifest in `.cineforge/previz/`; a human supplies/approves the 3D camera/blocking reference. AUTO RUN waits at that Human Task and resumes after approval.

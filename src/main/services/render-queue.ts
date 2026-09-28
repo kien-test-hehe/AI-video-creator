@@ -72,7 +72,7 @@ export class RenderQueueService extends EventEmitter {
     if(this.hasActiveJobForShot(shot.id))throw new Error(`An active render already exists for ${shot.title}.`);
     const profile=routeWorkflow(project,shot,request.forceWorkflowProfileId);
     const machine=this.settings.get(),probe=await probeSystem(project,machine);
-    this.assertExecutionEnvironment(machine,profile,probe);
+    this.assertExecutionEnvironment(machine,profile,probe,shot);
     const job=await this.createJob(project,shot,profile,machine);
     await this.commitQueuedJobs([job]);return this.snapshot();
   }
@@ -100,7 +100,7 @@ export class RenderQueueService extends EventEmitter {
       }
       if(this.hasActiveJobForShot(shot.id))continue;
       const profile=routeWorkflow(project,shot);
-      this.assertExecutionEnvironment(machine,profile,probe);
+      this.assertExecutionEnvironment(machine,profile,probe,shot);
       jobs.push(await this.createJob(project,shot,profile,machine,await fingerprintFor(profile)));
     }
     if(jobs.length)await this.commitQueuedJobs(jobs);return this.snapshot();
@@ -115,7 +115,7 @@ export class RenderQueueService extends EventEmitter {
     if(!prior.spec)return this.enqueueInternal({projectRoot:this.requireProject().rootPath,shotId:prior.shotId,forceWorkflowProfileId:prior.workflowProfileId});
     if(prior.spec.shot.id!==prior.shotId)throw new Error('Render job immutable spec shot identity does not match the job shot. Refusing unsafe exact retry.');
     const project=this.requireProject(),machine=this.settings.get(),probe=await probeSystem(project,machine);
-    this.assertExecutionEnvironment(machine,prior.spec.workflowProfile,probe);
+    this.assertExecutionEnvironment(machine,prior.spec.workflowProfile,probe,prior.spec.shot);
     await this.verifyImmutableSpec(project,prior);
     const now=new Date().toISOString();
     const retry:RenderJob={id:randomUUID(),shotId:prior.shotId,createdAt:now,updatedAt:now,status:'queued',progress:0,message:`Retry of ${prior.id.slice(0,8)} · immutable snapshot`,modelFamily:prior.spec.shot.generation.modelFamily,workflowProfileId:prior.spec.workflowProfile.id,outputs:[],spec:structuredClone(prior.spec)};
@@ -536,9 +536,12 @@ export class RenderQueueService extends EventEmitter {
     return{id:randomUUID(),shotId:shot.id,createdAt:now,updatedAt:now,status:'queued',progress:0,message:'Waiting',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(profile),effectivePrompt:buildRenderPrompt(project,shot),productionInputKey:shotProductionInputKey(project,shot,profile),queuedProjectUpdatedAt:project.updatedAt,workflowSha256,assetFingerprints,runtimeFingerprint,modelFingerprint:profile.modelFingerprint}};
   }
 
-  private assertExecutionEnvironment(machine:AppMachineSettings,profile:WorkflowProfile,probe:SystemProbe):void{
+  private assertExecutionEnvironment(machine:AppMachineSettings,profile:WorkflowProfile,probe:SystemProbe,shot?:Shot):void{
     if(!probe.ffmpeg.available||!probe.ffmpeg.ffprobeAvailable)throw new Error('FFmpeg and FFprobe must be available before queueing because every video output is technically QC-checked.');
     if(probe.disk&&probe.disk.freeBytes<5*1024*1024*1024)throw new Error('Less than 5 GB free on the project volume. Free disk space before rendering.');
+    if(probe.memory&&probe.memory.freeMb<6*1024)throw new Error(`Only ${(probe.memory.freeMb/1024).toFixed(1)} GB system RAM is free. Pause heavy applications before local generation.`);
+    if(probe.gpu?.freeVramMb!=null&&probe.gpu.freeVramMb<4096)throw new Error(`Only ${(probe.gpu.freeVramMb/1024).toFixed(1)} GB GPU VRAM is free. Close GPU-heavy applications or wait for memory to be released before generation.`);
+    if(shot?.generation.quality==='hero'&&probe.gpu?.freeVramMb!=null&&probe.gpu.freeVramMb<6144)throw new Error(`Hero-quality generation requires at least 6 GB currently free VRAM under the CineForge safety policy; only ${(probe.gpu.freeVramMb/1024).toFixed(1)} GB is free.`);
     const runtime=profile.runtime??(profile.workflowFormat==='wangp-settings'?'wangp':'comfyui');
     if(runtime==='wangp'){
       if(!probe.wangp.available)throw new Error(`WanGP is unavailable: ${probe.wangp.error||'not configured'}`);
@@ -859,7 +862,18 @@ export class RenderQueueService extends EventEmitter {
         else if(qcFailed)shot.status='failed';
         else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}
       }
-      const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(!qcFailed&&canRefreshProfileValidationFromRender(profile,job.spec)){profile!.validation={...profile!.validation!,lastSuccessfulRenderAt:now};}
+      const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(!qcFailed&&canRefreshProfileValidationFromRender(profile,job.spec)){
+        const wallSec=Math.max(0,(Date.parse(now)-Date.parse(job.createdAt))/1000);
+        profile!.validation={
+          ...profile!.validation!,
+          lastSuccessfulRenderAt:now,
+          successfulRenderCount:(profile!.validation?.successfulRenderCount??0)+1,
+          lastRenderWallSec:Number.isFinite(wallSec)?wallSec:undefined,
+          lastRenderWidth:job.spec?.shot.generation.width,
+          lastRenderHeight:job.spec?.shot.generation.height,
+          lastRenderFrames:job.spec?.shot.generation.frames
+        };
+      }
     });
     // The backend is already terminal and the project summary is durable. Clear the machine
     // GPU lease before the final signed-journal refresh so a crash here cannot make an older
@@ -911,7 +925,12 @@ export class RenderQueueService extends EventEmitter {
 }
 
 function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
-function assetLine(asset:Asset|undefined,label:string):string{if(!asset)return'';return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}`;}
+function assetLine(asset:Asset|undefined,label:string):string{
+  if(!asset)return'';
+  const continuity=asset.continuity?JSON.stringify(asset.continuity):'';
+  const bible=continuity?(continuity.length>20_000?continuity.slice(0,20_000):continuity):'';
+  return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}${bible?`\nStructured continuity bible: ${bible}`:''}`;
+}
 function stateLine(project:FilmProject,stateId:string|undefined,label:string):string{
   if(!stateId)return'';
   const state=project.shotStates.find(item=>item.id===stateId&&item.status!=='stale');

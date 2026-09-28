@@ -13,6 +13,10 @@ The renderer now includes a unified Studio workspace with a searchable draggable
 
 FFprobe/FFmpeg technical QC, production-input fingerprints, stale-QC rejection, state/topology invalidation, canonical-take gating, NVENC/libx264 master normalization, cache cleanup, validated CapCut handoff, Electron packaging/fuses, and GitHub Actions CI are included.
 
+The autonomous runtime now processes shots sequentially through preflight, previz gating, render, layered QC, stable-final-frame selection, observed-final state extraction, continuity propagation, canonical selection, bounded retry, Human Review and canonical timeline rebuild. The run has pause/resume/stop ownership, a durable recovery journal, live RAM/VRAM/disk admission checks, and a Studio control surface that exposes current phase, shot, retries, blockers, actual state, QC and dependency edges.
+
+Windows setup can bootstrap Ollama + qwen3-vl:4b for local automatic visual/semantic/continuity QC. If local vision is unavailable or uncertain, the runtime fails safely into Human Review. The QC model is unloaded after each shot's QC batch to return VRAM to generation. Blender is detected and spatially complex shots receive an automatic previz requirement/manifest; creation of the actual 3D reference remains deliberately human-owned.
+
 ## Validation policy
 
 GitHub Actions is the source/build gate. AI routes are separately considered validated only after the target workstation has the intended driver/runtime/model and has completed a real render. CineForge records validation and successful-render metadata instead of claiming untested routes work.
@@ -20,6 +24,8 @@ GitHub Actions is the source/build gate. AI routes are separately considered val
 ASR, TTS, source separation, interpolation and specialized upscalers remain optional local tools orchestrated by Codex; they are not advertised as built-in typed CineForge adapters yet.
 
 
-## Not yet automated
+## Remaining optional / advanced adapters
 
-The v3 state/QC authority is implemented, but rendered visual/semantic/continuity QC workers, automatic stable-final-frame extraction, Blender previz execution, adaptive retry policy, benchmark-driven routing history, and full audio/post adapters remain roadmap work. Their schema/API placeholders must not be mistaken for completed autonomous execution.
+The core autonomous film loop is implemented. Human-created Blender geometry/previz remains intentional rather than synthetic automation. Specialized ASR, TTS, source separation, interpolation/upscale and deep NLE/audio-post adapters are optional roadmap integrations; the canonical film pipeline does not claim those tools are built in.
+
+Physical performance qualification still has to happen on the actual target workstation because GitHub CI has no RTX 5060 Ti. CineForge therefore reports live readiness and records successful local workflow renders rather than treating CI as GPU validation.

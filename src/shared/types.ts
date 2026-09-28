@@ -23,6 +23,8 @@ export type HumanTaskType = 'create-asset' | 'approve-asset' | 'verify-keyframe'
 export type HumanTaskStatus = 'open' | 'resolved' | 'dismissed';
 export type PrevizRequirement = 'none' | 'optional' | 'required';
 export type PrevizStatus = 'not-needed' | 'pending' | 'ready' | 'failed' | 'human-verify';
+export type AutomationPhase = 'idle' | 'preflight' | 'planning' | 'keyframes' | 'waiting-render' | 'qc' | 'retrying' | 'waiting-human' | 'building-timeline' | 'paused' | 'complete' | 'error';
+export type ReadinessLevel = 'ready' | 'warning' | 'blocked';
 
 export interface AppMachineSettings {
   schemaVersion: 1;
@@ -196,7 +198,16 @@ export interface CutRevision {
   createdAt: ISODate;
 }
 export interface Scene { id:UUID;index:number;heading:string;body:string;location?:string;timeOfDay?:string;shotIds:UUID[]; }
-export interface Asset { id:UUID;kind:AssetKind;name:string;sourcePath:string;projectPath:string;mimeType?:string;tags:string[];notes:string;createdAt:ISODate; }
+export interface AssetContinuityProfile {
+  identityAnchors:string[];
+  forbiddenChanges:string[];
+  appearance?:string;
+  geometry?:string;
+  state?:string;
+  lighting?:string;
+  spatialRules?:string;
+}
+export interface Asset { id:UUID;kind:AssetKind;name:string;sourcePath:string;projectPath:string;mimeType?:string;tags:string[];notes:string;continuity?:AssetContinuityProfile;createdAt:ISODate; }
 export interface ShotGenerationSettings { modelFamily:ModelFamily;mode:GenerationMode;quality:QualityIntent;width:number;height:number;frames:number;fps:number;steps?:number;cfg?:number;seed:number;negativePrompt:string;includeAudio:boolean;workflowProfileId?:UUID; }
 export interface Shot { id:UUID;sceneId:UUID;index:number;title:string;prompt:string;camera:string;action:string;dialogue:string;continuityNotes:string;characterAssetIds:UUID[];locationAssetId?:UUID;propAssetIds:UUID[];referenceAssetIds?:UUID[];startFrameAssetId?:UUID;endFrameAssetId?:UUID;referenceVideoAssetId?:UUID;audioAssetId?:UUID;status:ShotStatus;generation:ShotGenerationSettings;latestRenderId?:UUID;latestAttemptRenderId?:UUID;canonicalRenderId?:UUID;plannedStartStateId?:UUID;plannedEndStateId?:UUID;actualStartStateId?:UUID;observedFinalStateId?:UUID;previz?:PrevizSpec; }
 
@@ -206,6 +217,11 @@ export interface WorkflowValidation {
   sourceSha256?: string;
   runtimeFingerprint?: string;
   lastSuccessfulRenderAt?: ISODate;
+  successfulRenderCount?: number;
+  lastRenderWallSec?: number;
+  lastRenderWidth?: number;
+  lastRenderHeight?: number;
+  lastRenderFrames?: number;
   lastError?: string;
 }
 
@@ -324,6 +340,43 @@ export interface PromoteCanonicalTakeRequest {
   renderOutputId:UUID;
 }
 
+export interface AutomationRunRequest {
+  projectRoot:string;
+  shotIds?:UUID[];
+  maxAutoRetries?:number;
+  buildTimeline?:boolean;
+}
+export interface AutomationStatus {
+  running:boolean;
+  paused:boolean;
+  phase:AutomationPhase;
+  projectRoot?:string;
+  currentShotId?:UUID;
+  message:string;
+  startedAt?:ISODate;
+  updatedAt:ISODate;
+  completedShotIds:UUID[];
+  retryCounts:Record<UUID,number>;
+  blockedHumanTaskIds:UUID[];
+  lastError?:string;
+}
+export interface WorkstationReadinessItem {
+  id:string;
+  label:string;
+  level:ReadinessLevel;
+  detail:string;
+  action?:string;
+}
+export interface WorkstationReadiness {
+  checkedAt:ISODate;
+  readyForProduction:boolean;
+  autoQcAvailable:boolean;
+  blenderAvailable:boolean;
+  validatedVideoProfiles:number;
+  items:WorkstationReadinessItem[];
+  probe:SystemProbe;
+}
+
 export interface KeyframeRequest { projectRoot:string;shotId:UUID;role:'start'|'end';workflowProfileId:UUID; }
 export interface RenderRequest { projectRoot:string;shotId:UUID;forceWorkflowProfileId?:UUID; }
 export interface RenderBatchRequest { projectRoot:string;shotIds:UUID[];skipIfRendered?:boolean; }
@@ -348,6 +401,7 @@ export interface SystemProbe {
   comfy:{reachable:boolean;url:string;systemStats?:unknown;error?:string;};
   wangp:{configured:boolean;available:boolean;executionMode:WanGpExecutionMode;rootPath:string;entrypoint?:string;pythonPath?:string;runtimeVersion?:string;pythonVersion?:string;torchVersion?:string;torchCudaVersion?:string;cudaAvailable?:boolean;torchError?:string;error?:string;};
   docker?:{available:boolean;version?:string;gpuAccessible?:boolean;error?:string;};
+  blender?:{available:boolean;version?:string;path?:string;error?:string;};
   hardwarePlan:HardwarePlan;
   codexContextPath?:string;
 }

@@ -9,6 +9,7 @@ import { RenderQueueService } from './services/render-queue';
 import { lockDownWebContents, resolveTrustedRendererUrl } from './services/ipc-security';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from './services/keyframe-lease';
 import { RenderLeaseStore } from './services/render-lease';
+import { ProductionRuntimeService } from './services/production-runtime-service';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'cineforge-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
@@ -19,6 +20,7 @@ let queue: RenderQueueService;
 let machineSettings: AppSettingsService;
 let keyframeLeases:KeyframeLeaseStore;
 let renderLeases:RenderLeaseStore;
+let automation:ProductionRuntimeService;
 let mainWindow: BrowserWindow | null = null;
 let ipcRegistered = false;
 let trustedRendererUrl = '';
@@ -79,12 +81,14 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   renderLeases=new RenderLeaseStore(app.getPath('userData'),machineSettings.getJournalKey());
   projects = new ProjectService();
   queue = new RenderQueueService(projects, machineSettings,renderLeases);
+  automation = new ProductionRuntimeService(projects,queue,machineSettings,keyframeLeases);
   const activeRenderLease=await renderLeases.read();
   if(activeRenderLease){
     const recoveredProject=await projects.openAt(activeRenderLease.projectRoot);
     if(recoveredProject.id!==activeRenderLease.projectId)throw new Error('Active render recovery lease does not match the project stored at its recorded path.');
     if(!recoveredProject.renderJobs.some(job=>job.id===activeRenderLease.jobId))throw new Error(`Active render recovery lease references missing project job ${activeRenderLease.jobId}. Stop the prior backend work before clearing the lease.`);
     await queue.reconcileAfterProjectOpen();
+    await automation.reconcileAfterProjectOpen();
   }
 
   registerMediaProtocol();
@@ -92,7 +96,7 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler(() => false);
 
   if (!ipcRegistered) {
-    registerIpc(projects, queue, machineSettings,keyframeLeases,trustedRendererUrl);
+    registerIpc(projects, queue, machineSettings,keyframeLeases,automation,trustedRendererUrl);
     ipcRegistered = true;
   }
   createWindow();
@@ -110,6 +114,6 @@ if(ownsSingleInstanceLock)app.on('second-instance',()=>{
 app.on('before-quit',event=>{
   if(shutdownInProgress)return;
   shutdownInProgress=true;event.preventDefault();
-  void shutdownForegroundOperations().finally(()=>app.quit());
+  void Promise.allSettled([shutdownForegroundOperations(),automation?.flush()??Promise.resolve()]).finally(()=>app.quit());
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

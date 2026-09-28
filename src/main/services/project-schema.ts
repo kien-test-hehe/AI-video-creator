@@ -210,6 +210,11 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
       sourceSha256: sha(validationSource.sourceSha256),
       runtimeFingerprint: str(validationSource.runtimeFingerprint, '', 512) || undefined,
       lastSuccessfulRenderAt: maybeIso(validationSource.lastSuccessfulRenderAt),
+      successfulRenderCount: boundedOptionalNumber(validationSource.successfulRenderCount,0,1_000_000,'workflow successful render count'),
+      lastRenderWallSec: boundedOptionalNumber(validationSource.lastRenderWallSec,0,7*24*60*60,'workflow last render wall seconds'),
+      lastRenderWidth: boundedOptionalNumber(validationSource.lastRenderWidth,64,16_384,'workflow last render width'),
+      lastRenderHeight: boundedOptionalNumber(validationSource.lastRenderHeight,64,16_384,'workflow last render height'),
+      lastRenderFrames: boundedOptionalNumber(validationSource.lastRenderFrames,1,100_000,'workflow last render frames'),
       lastError: str(validationSource.lastError, '', 10_000) || undefined
     }
   };
@@ -264,8 +269,25 @@ function sanitizeAsset(value: unknown): Asset {
     mimeType: str(source.mimeType, '', 512) || undefined,
     tags: boundedArray(source.tags,'asset tags',128).map(v=>str(v,'',256)).filter(Boolean),
     notes: str(source.notes, '', 100_000),
+    continuity: sanitizeAssetContinuity(source.continuity),
     createdAt: iso(source.createdAt, new Date().toISOString())
   };
+}
+
+function sanitizeAssetContinuity(value:unknown):Asset['continuity']{
+  if(value==null)return undefined;
+  const source=asObject(value,'asset continuity profile');
+  const list=(raw:unknown,label:string)=>[...new Set(boundedArray(raw,label,64).map(item=>str(item,'',1000).trim()).filter(Boolean))];
+  const profile={
+    identityAnchors:list(source.identityAnchors,'asset identity anchors'),
+    forbiddenChanges:list(source.forbiddenChanges,'asset forbidden changes'),
+    appearance:str(source.appearance,'',20_000)||undefined,
+    geometry:str(source.geometry,'',20_000)||undefined,
+    state:str(source.state,'',20_000)||undefined,
+    lighting:str(source.lighting,'',20_000)||undefined,
+    spatialRules:str(source.spatialRules,'',20_000)||undefined
+  };
+  return profile.identityAnchors.length||profile.forbiddenChanges.length||profile.appearance||profile.geometry||profile.state||profile.lighting||profile.spatialRules?profile:undefined;
 }
 
 function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<string>, assetKinds: Map<string,AssetKind>): Shot {
@@ -669,3 +691,11 @@ function sourceLabel(value:unknown):string{
   return label;
 }
 function sha(value: unknown): string | undefined { if(value==null||value==='')return undefined;if(typeof value==='string'&&/^[a-f0-9]{64}$/i.test(value))return value.toLowerCase();throw new Error('Invalid SHA-256 project fingerprint.'); }
+
+
+function boundedOptionalNumber(value:unknown,min:number,max:number,label:string):number|undefined{
+  if(value==null||value==='')return undefined;
+  const number=Number(value);
+  if(!Number.isFinite(number)||number<min||number>max)throw new Error(`Invalid ${label}.`);
+  return number;
+}

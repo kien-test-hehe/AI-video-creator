@@ -8,7 +8,7 @@ import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
 import { directorText } from '../src/main/services/director-service';
 import { parseVolumeDetectPeak, technicalQcStructuralIssues } from '../src/main/services/technical-qc';
-import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, Shot, WorkflowProfile } from '../src/shared/types';
+import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { alternateShotTitle, appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
 import { ProjectService, serializeProjectForStorage } from '../src/main/services/project-service';
-import { promoteCanonicalTake, recordObservedFinalState, recordShotQc, resolveHumanTask } from '../src/main/services/production-state-service';
+import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, recordShotQc, resolveHumanTask } from '../src/main/services/production-state-service';
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe } from '../src/main/services/keyframe-service';
@@ -45,6 +45,8 @@ import { writeResponseBodyToFileLimited } from '../src/main/services/http-respon
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
 import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, latestShotQcResult, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
+import { advisePreviz } from '../src/main/services/previz-service';
+import { AutomationJournal } from '../src/main/services/automation-journal';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1388,22 +1390,26 @@ describe('production state core',()=>{
     expect(project.shots[1].actualStartStateId).toBeUndefined();
   });
 
-  it('keeps canonical take promotion fail-closed until current technical, visual, semantic and continuity QC all pass',()=>{
-    const project=loadPortableProject(rawTwoShotProject(),'/project').project,shot=project.shots.find(item=>item.id==='shot-a')!,output=project.renderOutputs.find(item=>item.id==='out-a')!;
+  it('keeps canonical take promotion fail-closed until current technical, visual, semantic and incoming continuity QC all pass',()=>{
+    const project=loadPortableProject(rawTwoShotProject(),'/project').project;
+    const shot=project.shots.find(item=>item.id==='shot-b')!;
+    shot.status='rendered';shot.latestRenderId='out-b';
+    const output:RenderOutput={id:'out-b',jobId:'orphaned',shotId:'shot-b',path:'/project/renders/out-b.mp4',filename:'out-b.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:02.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:02.000Z',passed:true,issues:[],warnings:[]}};
+    project.renderOutputs.push(output);
     output.productionInputKey=shotProductionInputKey(project,shot);
-    expect(canonicalTakeReadiness(project,'shot-a','out-a').ready).toBe(false);
+    expect(canonicalTakeReadiness(project,'shot-b','out-b').ready).toBe(false);
     const createdAt='2026-01-01T00:00:03.000Z';
     project.qcResults.push(
-      {id:'q-v',shotId:'shot-a',renderOutputId:'out-a',layer:'visual',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','visual'),createdAt},
-      {id:'q-s',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','semantic'),createdAt}
+      {id:'q-v',shotId:'shot-b',renderOutputId:'out-b',layer:'visual',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-b','out-b','visual'),createdAt},
+      {id:'q-s',shotId:'shot-b',renderOutputId:'out-b',layer:'semantic',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-b','out-b','semantic'),createdAt}
     );
-    expect(canonicalTakeReadiness(project,'shot-a','out-a')).toMatchObject({ready:false});
-    project.qcResults.push({id:'q-c',shotId:'shot-a',renderOutputId:'out-a',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','continuity'),createdAt});
-    expect(canonicalTakeReadiness(project,'shot-a','out-a')).toEqual({ready:true,blockers:[]});
-    project.qcResults.push({id:'q-s2',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'fail',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','semantic'),createdAt:'2026-01-01T00:00:04.000Z'});
-    expect(canonicalTakeReadiness(project,'shot-a','out-a').blockers.join(' ')).toMatch(/semantic QC is fail/i);
+    expect(canonicalTakeReadiness(project,'shot-b','out-b')).toMatchObject({ready:false});
+    project.qcResults.push({id:'q-c',shotId:'shot-b',renderOutputId:'out-b',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-b','out-b','continuity'),createdAt});
+    expect(canonicalTakeReadiness(project,'shot-b','out-b')).toEqual({ready:true,blockers:[]});
+    project.qcResults.push({id:'q-s2',shotId:'shot-b',renderOutputId:'out-b',layer:'semantic',status:'fail',issues:[],inputKey:shotQcInputKey(project,'shot-b','out-b','semantic'),createdAt:'2026-01-01T00:00:04.000Z'});
+    expect(canonicalTakeReadiness(project,'shot-b','out-b').blockers.join(' ')).toMatch(/semantic QC is fail/i);
     shot.prompt='changed after QC';
-    expect(canonicalTakeReadiness(project,'shot-a','out-a').blockers.join(' ')).toMatch(/stale shot.*inputs|stale for current/i);
+    expect(canonicalTakeReadiness(project,'shot-b','out-b').blockers.join(' ')).toMatch(/stale shot.*inputs|stale for current/i);
   });
 
   it('rejects broken schema-v3 state pointers instead of silently attaching state to the wrong shot',()=>{
@@ -1800,11 +1806,12 @@ describe('continuity QC topology scoping',()=>{
       id:'task-human',type:'verify-continuity',status:'open',shotId:'b',title:'Review',reason:'Needs review.',
       relatedAssetIds:[],relatedRenderOutputIds:['out-b'],createdAt:'2026-01-01T00:00:02.000Z'
     });
-    project.shots.find(shot=>shot.id==='c')!.index=1;
-    project.shots.find(shot=>shot.id==='a')!.index=2;
+    project.shots.find(shot=>shot.id==='a')!.index=1;
+    project.shots.find(shot=>shot.id==='c')!.index=2;
     project.shots.find(shot=>shot.id==='b')!.index=3;
-    project.scenes[0].shotIds=['c','a','b'];
+    project.scenes[0].shotIds=['a','c','b'];
     rebuildDefaultSequentialDependencies(project,['scene-qc'],'2026-01-01T00:00:03.000Z');
+    expect(project.shotDependencies.some(edge=>edge.toShotId==='b'&&edge.fromShotId==='c')).toBe(true);
     expect(project.humanTasks.find(task=>task.id==='task-human')).toMatchObject({status:'dismissed'});
   });
 
@@ -1913,5 +1920,133 @@ describe('QC ordering determinism',()=>{
       {id:'pass',shotId:'s',renderOutputId:'o',layer:'semantic',status:'pass',issues:[],inputKey:'k',createdAt:'2026-01-01T00:00:00.000Z'}
     ]} as unknown as FilmProject;
     expect(latestShotQcResult(project,'s','o','semantic','k')?.id).toBe('pass');
+  });
+});
+
+
+describe('automatic previz advisor',()=>{
+  const shot=(patch:Partial<Shot>={}):Shot=>({
+    id:'shot-previz',sceneId:'scene',index:1,title:'Previz shot',prompt:'A quiet medium shot',camera:'locked medium',action:'stands still',dialogue:'',continuityNotes:'',
+    characterAssetIds:['char-1'],propAssetIds:[],referenceAssetIds:[],status:'ready',
+    generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false},
+    ...patch
+  });
+  it('keeps simple coverage out of Blender while escalating spatially hard shots',()=>{
+    expect(advisePreviz(shot()).requirement).toBe('none');
+    const hard=advisePreviz(shot({
+      camera:'360 orbit tracking shot around three performers',
+      action:'three characters hand off a prop while walking through a doorway',
+      characterAssetIds:['a','b','c'],
+      propAssetIds:['p1','p2'],
+      continuityNotes:'Precise blocking and screen direction must match.'
+    }));
+    expect(hard.requirement).toBe('required');
+    expect(hard.score).toBeGreaterThanOrEqual(4);
+    expect(hard.reasons.length).toBeGreaterThan(1);
+  });
+});
+
+describe('previz human-task lifecycle',()=>{
+  it('marks required previz ready when the human explicitly approves its review task',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-previz-task-'));
+    const service=new ProjectService();
+    try{
+      await service.createAt(root,'Previz Task');
+      await service.mutate(project=>{
+        project.scenes.push({id:'scene',index:1,heading:'INT. SET',body:'',shotIds:['shot']});
+        project.shots.push({
+          id:'shot',sceneId:'scene',index:1,title:'Spatial shot',prompt:'orbit',camera:'orbit',action:'walk around table',dialogue:'',continuityNotes:'',
+          characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+          previz:{requirement:'required',status:'pending',reason:'Auto previz advisor',createdAt:'2026-01-01T00:00:00.000Z'},
+          generation:{modelFamily:'ltx-2.5-fast',mode:'t2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+        });
+      });
+      const created=await createHumanTask(service,{projectRoot:root,type:'verify-previz',shotId:'shot',title:'3D previz required',reason:'Spatial blocking needs review.'});
+      const task=created.humanTasks.find(item=>item.status==='open'&&item.type==='verify-previz')!;
+      const resolved=await resolveHumanTask(service,{projectRoot:root,taskId:task.id,status:'resolved',resolution:'Approved viewport blocking and camera path.'});
+      expect(resolved.humanTasks.find(item=>item.id===task.id)?.status).toBe('resolved');
+      expect(resolved.shots.find(item=>item.id==='shot')?.previz).toMatchObject({requirement:'required',status:'ready'});
+      expect(resolved.shots.find(item=>item.id==='shot')?.previz?.reason).toMatch(/Human override: previz approved/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+
+describe('autonomous production journal',()=>{
+  it('round-trips a recoverable run and filters stale ids against the open project',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-auto-journal-'));
+    const service=new ProjectService();
+    try{
+      await service.createAt(root,'Auto Journal');
+      await service.mutate(next=>{
+        next.scenes.push({id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['shot']});
+        next.shots.push({
+          id:'shot',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+          characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+          generation:{modelFamily:'ltx-2.5-fast',mode:'t2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+        });
+      });
+      const current=service.getCurrent()!;
+      const journal=new AutomationJournal();
+      await journal.write(current,{
+        schemaVersion:1,projectId:current.id,projectRoot:root,targetShotIds:['shot'],maxAutoRetries:2,buildTimeline:true,
+        status:{running:true,paused:false,phase:'waiting-render',projectRoot:root,currentShotId:'shot',message:'waiting',startedAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:01.000Z',completedShotIds:[],retryCounts:{shot:1},blockedHumanTaskIds:[]}
+      });
+      const restored=await journal.read(service.getCurrent()!);
+      expect(restored).toMatchObject({targetShotIds:['shot'],maxAutoRetries:2,buildTimeline:true});
+      expect(restored?.status).toMatchObject({running:true,currentShotId:'shot',retryCounts:{shot:1}});
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+describe('renderer autonomous edit lock',()=>{
+  it('blocks project edits while AUTO RUN owns production and permits them once paused',()=>{
+    const project={
+      schemaVersion:3,id:'lock-project',name:'Lock',rootPath:'/tmp/lock',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'Before',logline:'',script:'',notes:''},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    useAppStore.setState({project,projectDirty:false,automation:{running:true,paused:false,phase:'planning',message:'running',updatedAt:'2026-01-01T00:00:00.000Z',completedShotIds:[],retryCounts:{},blockedHumanTaskIds:[]}});
+    useAppStore.getState().updateProject(next=>{next.story.title='Blocked';});
+    expect(useAppStore.getState().project?.story.title).toBe('Before');
+    expect(useAppStore.getState().projectDirty).toBe(false);
+    useAppStore.setState(state=>({automation:{...state.automation!,paused:true,phase:'paused'}}));
+    useAppStore.getState().updateProject(next=>{next.story.title='Allowed';});
+    expect(useAppStore.getState().project?.story.title).toBe('Allowed');
+    expect(useAppStore.getState().projectDirty).toBe(true);
+    useAppStore.getState().setProject(null);
+    useAppStore.setState({automation:undefined});
+  });
+});
+
+
+describe('directional continuity canonical gate',()=>{
+  it('lets an upstream shot canonicalize before its successor exists, while requiring incoming continuity on the successor',()=>{
+    const makeShot=(id:string,index:number):Shot=>({
+      id,sceneId:'scene',index,title:id,prompt:id,camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'t2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:index,negativePrompt:'',includeAudio:false}
+    });
+    const a=makeShot('a',1),b=makeShot('b',2);
+    const project={
+      schemaVersion:3,id:'directional-qc',name:'directional',rootPath:'/tmp/directional',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'directional',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['a','b']}],
+      assets:[],shots:[a,b],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],
+      shotDependencies:[{id:'edge-a-b',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}],
+      qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    for(const shot of [a,b]){
+      const output:RenderOutput={id:`out-${shot.id}`,jobId:'legacy',shotId:shot.id,path:`/tmp/directional/${shot.id}.mp4`,filename:`${shot.id}.mp4`,mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}};
+      project.renderOutputs.push(output);
+      output.productionInputKey=shotProductionInputKey(project,shot);
+      for(const layer of ['visual','semantic'] as const)project.qcResults.push({id:`${shot.id}-${layer}`,shotId:shot.id,renderOutputId:output.id,layer,status:'pass',issues:[],inputKey:shotQcInputKey(project,shot.id,output.id,layer),createdAt:'2026-01-01T00:00:01.000Z'});
+    }
+    expect(canonicalTakeReadiness(project,'a','out-a')).toMatchObject({ready:true});
+    const bBefore=canonicalTakeReadiness(project,'b','out-b');
+    expect(bBefore.ready).toBe(false);
+    expect(bBefore.blockers.join(' ')).toMatch(/continuity QC is missing/i);
+    project.qcResults.push({id:'b-continuity',shotId:'b',renderOutputId:'out-b',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,'b','out-b','continuity'),createdAt:'2026-01-01T00:00:02.000Z'});
+    expect(canonicalTakeReadiness(project,'b','out-b')).toMatchObject({ready:true});
   });
 });

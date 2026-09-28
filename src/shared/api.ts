@@ -1,4 +1,4 @@
-import type { AppMachineSettings, AssetKind, ContinuityReview, CreateHumanTaskRequest, DirectorShotDraft, FilmProject, KeyframeRequest, ParsedScene, PreflightReport, PromoteCanonicalTakeRequest, QueueSnapshot, RecordObservedFinalStateRequest, RecordShotQcRequest, RenderBatchRequest, RenderRequest, ResolveHumanTaskRequest, SystemProbe, WanGpCatalogEntry, WorkflowProfile } from './types';
+import type { AppMachineSettings, AssetKind, AutomationRunRequest, AutomationStatus, ContinuityReview, CreateHumanTaskRequest, DirectorShotDraft, FilmProject, KeyframeRequest, ParsedScene, PreflightReport, PromoteCanonicalTakeRequest, QueueSnapshot, RecordObservedFinalStateRequest, RecordShotQcRequest, RenderBatchRequest, RenderRequest, ResolveHumanTaskRequest, SystemProbe, WanGpCatalogEntry, WorkflowProfile, WorkstationReadiness } from './types';
 
 export interface CapCutHandoffResult { directory: string; manifestPath: string; taskPath: string; prompt: string; }
 
@@ -28,6 +28,7 @@ export interface CineforgeApi {
     probe(): Promise<SystemProbe>;
     pingComfy(url?: string): Promise<SystemProbe['comfy']>;
     reveal(path: string): Promise<void>;
+    readiness(): Promise<WorkstationReadiness>;
   };
   render: {
     enqueue(request: RenderRequest): Promise<QueueSnapshot>;
@@ -50,6 +51,14 @@ export interface CineforgeApi {
     createHumanTask(request:CreateHumanTaskRequest):Promise<FilmProject>;
     resolveHumanTask(request:ResolveHumanTaskRequest):Promise<FilmProject>;
     promoteCanonicalTake(request:PromoteCanonicalTakeRequest):Promise<FilmProject>;
+  };
+  automation: {
+    start(request:AutomationRunRequest):Promise<AutomationStatus>;
+    pause():Promise<AutomationStatus>;
+    resume():Promise<AutomationStatus>;
+    stop():Promise<AutomationStatus>;
+    status():Promise<AutomationStatus>;
+    onStatus(handler:(status:AutomationStatus)=>void):()=>void;
   };
   capcut: { prepareHandoff(): Promise<CapCutHandoffResult>; };
 }

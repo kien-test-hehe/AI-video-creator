@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
 import { chooseModelForShot } from '../../../shared/routing';
 import { continuityReviewInputKey } from '../../../shared/director-signature';
-import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe } from '../../../shared/types';
+import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe, WorkstationReadiness } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
@@ -14,7 +14,7 @@ import { takeUseConfirmationMessage } from '../../../shared/take-policy';
 type Point={x:number;y:number};
 type StudioNodeKind='story'|'assets'|'system'|'scene'|'shot'|'workflow'|'queue'|'timeline'|'capcut';
 interface StudioNode{id:string;kind:StudioNodeKind;x:number;y:number;width:number;height:number;title:string;subtitle:string;shotId?:string;sceneId?:string;profileId?:string;}
-interface StudioEdge{id:string;source:string;target:string;kind?:'primary'|'asset'|'warning';}
+interface StudioEdge{id:string;source:string;target:string;kind?:'primary'|'asset'|'warning'|'continuity';}
 interface ViewRect{left:number;top:number;width:number;height:number;}
 
 const MODELS:ModelFamily[]=['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom'];
@@ -25,7 +25,7 @@ const ACTIVE_JOB_STATUSES=new Set(['queued','preparing','uploading','submitted',
 const MIN_ZOOM=.03,MAX_ZOOM=1.5;
 
 export function Studio(){
-  const{project,probe,queue,selectedShotId,selectShot,updateProject,setProject,setQueue,setView,setError,setNotice,setProbe}=useAppStore();
+  const{project,probe,queue,automation,selectedShotId,selectShot,updateProject,setProject,setQueue,setAutomation,setView,setError,setNotice,setProbe}=useAppStore();
   const projectId=project?.id;
   const[zoom,setZoom]=useState(.78);
   const[locked,setLocked]=useState(false);
@@ -35,6 +35,8 @@ export function Studio(){
   const[preflightBusy,setPreflightBusy]=useState(false);
   const[preflightReport,setPreflightReport]=useState<PreflightReport>();
   const[preflightRevision,setPreflightRevision]=useState<string>();
+  const[readiness,setReadiness]=useState<WorkstationReadiness>();
+  const[automationBusy,setAutomationBusy]=useState(false);
   const[showLibrary,setShowLibrary]=useState(true);
   const[showInspector,setShowInspector]=useState(true);
   const[showDock,setShowDock]=useState(true);
@@ -57,6 +59,11 @@ export function Studio(){
     void window.cineforge.system.probe().then(next=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setProbe(next);}).catch(error=>{if(!disposed&&useAppStore.getState().project?.id===requestedProjectId)setError(error instanceof Error?error.message:String(error));});
     return()=>{disposed=true;};
   },[probe,projectId,setError,setProbe]);
+  useEffect(()=>{
+    let disposed=false;
+    void window.cineforge.system.readiness().then(result=>{if(!disposed){setReadiness(result);setProbe(result.probe);}}).catch(error=>{if(!disposed)setError(error instanceof Error?error.message:String(error));});
+    return()=>{disposed=true;};
+  },[projectId,setError,setProbe]);
 
   const {sortedShots,shotsByScene}=useMemo(()=>{
     if(!project)return{sortedShots:[] as Shot[],shotsByScene:new Map<string,Shot[]>()};
@@ -104,6 +111,12 @@ export function Studio(){
       const id=`scene:${scene.id}`;
       nodes.push({id,kind:'scene',x:330,y:sceneY,width:245,height:122,title:`Scene ${scene.index} · ${scene.heading}`,subtitle:compact(scene.body,92),sceneId:scene.id});
       edges.push({id:`story-${id}`,source:'story',target:id,kind:'primary'});
+    }
+
+    for(const edge of project.shotDependencies){
+      if(project.shots.some(shot=>shot.id===edge.fromShotId)&&project.shots.some(shot=>shot.id===edge.toShotId)){
+        edges.push({id:`continuity-${edge.id}`,source:`shot:${edge.fromShotId}`,target:`shot:${edge.toShotId}`,kind:'continuity'});
+      }
     }
 
     const profiles=project.settings.workflowProfiles;
@@ -304,6 +317,20 @@ export function Studio(){
       setNotice(`${shot.title} added to the render queue.`);
     }catch(error){setError(error instanceof Error?error.message:String(error));}
   };
+  const startAutomation=async()=>{
+    if(!project)return;
+    try{
+      setAutomationBusy(true);await useAppStore.getState().persist();
+      const current=useAppStore.getState().project;if(!current)throw new Error('Project closed before autonomous production could start.');
+      const ready=await window.cineforge.system.readiness();setReadiness(ready);setProbe(ready.probe);
+      if(!ready.readyForProduction){setError('Workstation readiness has blocking items. Open System / readiness details before starting autonomous production.');return;}
+      const next=await window.cineforge.automation.start({projectRoot:current.rootPath,maxAutoRetries:2,buildTimeline:true});setAutomation(next);setNotice('Autonomous production started.');
+    }catch(error){setError(error instanceof Error?error.message:String(error));}
+    finally{setAutomationBusy(false);}
+  };
+  const pauseAutomation=async()=>{try{setAutomation(await window.cineforge.automation.pause());}catch(error){setError(error instanceof Error?error.message:String(error));}};
+  const resumeAutomation=async()=>{try{setAutomation(await window.cineforge.automation.resume());}catch(error){setError(error instanceof Error?error.message:String(error));}};
+  const stopAutomation=async()=>{try{setAutomation(await window.cineforge.automation.stop());setNotice('Autonomous production stopped after the current atomic operation.');}catch(error){setError(error instanceof Error?error.message:String(error));}};
 
   if(!project)return <section className="studio-empty"><Empty>Create or open a project to enter Studio.</Empty></section>;
 
@@ -325,7 +352,7 @@ export function Studio(){
         <Hud label="Comfy" value={probe?.comfy.reachable?'online':'optional'} tone={probe?.comfy.reachable?'good':'muted'}/>
         <Hud label="CapCut" value={project.settings.capcut.pro?'Pro':'Free'} tone="muted"/>
         <Hud label="Queue" value={String(queue.jobs.filter(job=>ACTIVE_JOB_STATUSES.has(job.status)).length)} tone={queue.runningJobId?'warn':'muted'}/>
-        <Hud label="Human" value={String(openHumanTasks.length)} tone={openHumanTasks.length?'warn':'good'}/>
+        <Hud label="Human" value={String(openHumanTasks.length)} tone={openHumanTasks.length?'warn':'good'}/><Hud label="Auto" value={automation?.phase||'idle'} tone={automation?.phase==='error'||automation?.phase==='waiting-human'?'warn':automation?.running?'good':'muted'}/>
       </div>
       <div className="studio-command-actions">
         <button className="ghost" onClick={()=>changeZoom(-.1)}>−</button><span className="studio-zoom">{Math.round(zoom*100)}%</span><button className="ghost" onClick={()=>changeZoom(.1)}>+</button>
@@ -336,10 +363,17 @@ export function Studio(){
         <button className={showInspector?'ghost active-toggle':'ghost'} onClick={()=>setShowInspector(value=>!value)}>Inspector</button>
         <button className={showDock?'ghost active-toggle':'ghost'} onClick={()=>setShowDock(value=>!value)}>Dock</button>
         <button className="ghost" disabled={preflightBusy||sortedShots.length===0} onClick={runPreflight}>{preflightBusy?'Checking…':`Preflight · ${preflightSummary}`}</button>
-        <button className="ghost" disabled={sortedShots.length===0||preflightBusy} onClick={renderAll}>Render all</button>
-        <button className="primary" title={!selectedRouteReady?'Select or validate a usable video workflow before rendering.':undefined} disabled={!selectedShot||focusedNode?.kind!=='shot'||focusedNode.shotId!==selectedShot.id||!selectedRouteReady} onClick={queueSelected}>Render selected</button>
+        <button className="ghost" disabled={sortedShots.length===0||preflightBusy||Boolean(automation?.running)} onClick={renderAll}>Render all</button>
+        {!automation?.running?<button className="primary auto-run" disabled={automationBusy||sortedShots.length===0} onClick={startAutomation}>{automationBusy?'Starting…':'AUTO RUN'}</button>:automation.paused?<button className="primary auto-run" onClick={resumeAutomation}>Resume auto</button>:<button className="ghost" onClick={pauseAutomation}>Pause auto</button>}
+        {automation?.running&&<button className="ghost danger" onClick={stopAutomation}>Stop auto</button>}
+        <button className="primary" title={!selectedRouteReady?'Select or validate a usable video workflow before rendering.':undefined} disabled={Boolean(automation?.running)||!selectedShot||focusedNode?.kind!=='shot'||focusedNode.shotId!==selectedShot.id||!selectedRouteReady} onClick={queueSelected}>Render selected</button>
       </div>
     </header>
+    <section className={`studio-automation-bar ${automation?.phase||'idle'}`}>
+      <div><span className="eyebrow">AUTONOMOUS PRODUCTION</span><strong>{automation?.message||'Idle · human-on-the-loop runtime ready'}</strong></div>
+      <div className="studio-auto-metrics"><span><b>{automation?.completedShotIds.length??0}</b> / {sortedShots.length} canonical</span><span>Current: <b>{(automation?.currentShotId?project.shots.find(shot=>shot.id===automation.currentShotId):undefined)?.title||'—'}</b></span><span>Retries: <b>{automation?.retryCounts?Object.values(automation.retryCounts).reduce((sum,value)=>sum+value,0):0}</b></span><span>Blockers: <b>{automation?.blockedHumanTaskIds.length??0}</b></span><span>Readiness: <b>{readiness?.readyForProduction?'ready':readiness?'check':'unknown'}</b></span></div>
+      {automation?.lastError&&<small>{automation.lastError}</small>}
+    </section>
 
     <div className={['studio-layout',!showLibrary?'without-library':'',!showInspector?'without-inspector':''].filter(Boolean).join(' ')}>
       {showLibrary&&<aside className="studio-library">
@@ -373,7 +407,7 @@ export function Studio(){
       </main>
 
       {showInspector&&<aside className="studio-inspector">
-        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} probe={probe} preflightReport={preflightReport} preflightFresh={preflightFresh} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
+        <StudioInspector node={focusedNode} asset={focusedAsset} project={project} probe={probe} readiness={readiness} preflightReport={preflightReport} preflightFresh={preflightFresh} shot={focusedNode?.shotId?project.shots.find(item=>item.id===focusedNode.shotId):undefined} latestPath={focusedNode?.shotId===selectedShot?.id?latest?.path:undefined} queue={queue} updateProject={updateProject} setView={setView} queueSelected={queueSelected} setError={setError}/>
       </aside>}
     </div>
 
@@ -408,7 +442,7 @@ function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerM
     <button className="studio-node-body" draggable={routeableProfile} title={profile?(routeableProfile?'Drag onto a shot to route it. Single-click inspects; double-click opens Settings.':'Inspect here. Validate and enable this workflow before drag-routing.'):shot?'Drop assets or validated workflows here. Single-click inspects; double-click opens the full workshop.':'Single-click inspects; double-click opens the detailed workspace.'} onDragStart={routeableProfile&&profile?event=>{event.stopPropagation();onStartWorkflowDrag(event,profile.id);}:undefined} onClick={()=>onActivate(node)} onDoubleClick={()=>{const view=openView[node.kind];if(view)onOpen(view);}}>
       {visual&&<img loading="lazy" className="studio-node-thumb" src={projectMediaUrl(visual.projectPath)} alt=""/>}
       <strong>{node.title}</strong><small>{node.subtitle}</small>
-      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{shot.canonicalRenderId?<Pill>canonical</Pill>:<Pill>QC pending</Pill>}{openTasks>0&&<Pill>{openTasks} human</Pill>}{!route?<Pill>no route</Pill>:routeReady?<Pill>validated route</Pill>:<Pill>route blocked</Pill>}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
+      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{shot.previz?.requirement==='required'&&shot.previz.status!=='ready'?<Pill>previz</Pill>:null}{shot.canonicalRenderId?<Pill>canonical</Pill>:<Pill>QC pending</Pill>}{openTasks>0&&<Pill>{openTasks} human</Pill>}{!route?<Pill>no route</Pill>:routeReady?<Pill>validated route</Pill>:<Pill>route blocked</Pill>}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
       {shot&&<div className="studio-ref-meter"><span>C{shot.characterAssetIds.length}</span><span>{shot.locationAssetId?'LOC':'NO LOC'}</span><span>REF{shot.referenceAssetIds?.length??0}</span><span>P{shot.propAssetIds.length}</span><span>{shot.startFrameAssetId?'START':'—'}</span><span>{shot.endFrameAssetId?'END':'—'}</span></div>}
       {profile&&<div className="studio-node-meta"><Pill>{profile.enabled?'enabled':'off'}</Pill><span>{profile.validation?.structuralStatus||'unvalidated'}</span>{routeableProfile&&<span>drag-route</span>}</div>}
       {node.kind==='queue'&&<div className="studio-node-meta"><span>{project.renderJobs.filter(job=>job.status==='done').length} completed</span><span>{project.renderOutputs.length} outputs</span></div>}
@@ -419,12 +453,18 @@ function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerM
 
 function GraphEdge({edge,nodes,active}:{edge:StudioEdge;nodes:Map<string,StudioNode>;active:boolean}){
   const source=nodes.get(edge.source),target=nodes.get(edge.target);if(!source||!target)return null;
-  const sx=source.x+source.width,sy=source.y+source.height/2,tx=target.x,ty=target.y+target.height/2;
-  const bend=Math.max(54,(tx-sx)*.45);
-  return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`}/>;
+  let d:string;
+  if(edge.kind==='continuity'&&Math.abs(source.x-target.x)<120){
+    const sx=source.x+source.width/2,sy=source.y+source.height,tx=target.x+target.width/2,ty=target.y;
+    const bend=Math.max(34,Math.abs(ty-sy)*.45);d=`M ${sx} ${sy} C ${sx+48} ${sy+bend}, ${tx+48} ${ty-bend}, ${tx} ${ty}`;
+  }else{
+    const sx=source.x+source.width,sy=source.y+source.height/2,tx=target.x,ty=target.y+target.height/2;
+    const bend=Math.max(54,(tx-sx)*.45);d=`M ${sx} ${sy} C ${sx+bend} ${sy}, ${tx-bend} ${ty}, ${tx} ${ty}`;
+  }
+  return <path className={['studio-edge',edge.kind||'primary',active?'active':''].join(' ')} d={d}/>;
 }
 
-function StudioInspector({node,asset,project,probe,preflightReport,preflightFresh,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;probe?:SystemProbe;preflightReport?:PreflightReport;preflightFresh:boolean;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
+function StudioInspector({node,asset,project,probe,readiness,preflightReport,preflightFresh,shot,latestPath,queue,updateProject,setView,queueSelected,setError}:{node?:StudioNode;asset?:Asset;project:FilmProject;probe?:SystemProbe;readiness?:WorkstationReadiness;preflightReport?:PreflightReport;preflightFresh:boolean;shot?:Shot;latestPath?:string;queue:QueueSnapshot;updateProject:(mutator:(project:FilmProject)=>void)=>void;setView:(view:ViewId)=>void;queueSelected:()=>Promise<void>;setError:(error?:string)=>void}){
   const{setProject,setNotice}=useAppStore();
   if(asset){
     const mutateAsset=(fn:(target:Asset)=>void)=>updateProject(next=>{const target=next.assets.find(item=>item.id===asset.id);if(target)fn(target);});
@@ -468,6 +508,8 @@ function StudioInspector({node,asset,project,probe,preflightReport,preflightFres
       ['WanGP',probe?.wangp.available?'ready':(probe?.wangp.error||'not ready')],
       ['ComfyUI',probe?.comfy.reachable?'online':'optional / offline'],
       ['FFmpeg',probe?.ffmpeg.available&&probe.ffmpeg.ffprobeAvailable?'ready':'check'],
+      ['Auto visual QC',readiness?.autoQcAvailable?'ready':'human fallback'],
+      ['Blender previz',probe?.blender?.available?(probe.blender.version||'ready'):'optional / not detected'],
       ['CapCut',probe?.capcut.installed?'installed':'not detected']
     ];
     return <InspectorFrame kicker="SYSTEM / PREFLIGHT" title={!preflightReport?'Not checked':!preflightFresh?'Stale — rerun preflight':preflightReport.ready?'Ready to render':'Needs attention'} action={()=>setView('dashboard')} actionLabel="Open System ↗">
@@ -504,6 +546,9 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
   const imageProfiles=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='image'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   const activeKeyframeProfileId=imageProfiles.some(profile=>profile.id===keyframeProfileId)?keyframeProfileId:(imageProfiles[0]?.id||'');
   const takes=[...project.renderOutputs].filter(output=>output.shotId===shot.id&&output.mediaType==='video').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  const actualStart=shot.actualStartStateId?project.shotStates.find(state=>state.id===shot.actualStartStateId):undefined;
+  const observedFinal=shot.observedFinalStateId?project.shotStates.find(state=>state.id===shot.observedFinalStateId):undefined;
+  const latestQc=(layer:'visual'|'semantic'|'continuity')=>project.qcResults.filter(result=>result.shotId===shot.id&&result.layer===layer).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||b.id.localeCompare(a.id))[0];
   const changeModel=(model:ModelFamily)=>mutate(target=>{const defaults=MODEL_DEFAULTS[model];target.generation={...target.generation,...defaults,modelFamily:model,seed:target.generation.seed,negativePrompt:target.generation.negativePrompt,quality:target.generation.quality,workflowProfileId:undefined};});
   const reviewContinuity=async()=>{try{setContinuityBusy(true);setBusy(true);await useAppStore.getState().persist();const before=useAppStore.getState().project,currentShot=before?.shots.find(item=>item.id===shot.id);if(!before||!currentShot)throw new Error('Shot not found.');const signature=continuityReviewInputKey(before,currentShot),review=await window.cineforge.director.reviewShot(shot.id);const after=useAppStore.getState().project,afterShot=after?.shots.find(item=>item.id===shot.id);if(!after||!afterShot||continuityReviewInputKey(after,afterShot)!==signature){setContinuityReview(undefined);setNotice('Continuity review was discarded because the shot context changed while reviewing.');return;}setContinuityReview(review);}catch(error){setError(error instanceof Error?error.message:String(error));}finally{setContinuityBusy(false);setBusy(false);}};
   const generateKeyframe=async(role:'start'|'end')=>{if(!activeKeyframeProfileId){setError('No enabled image workflow is available for keyframe generation.');return;}try{setKeyframeBusy(role);setBusy(true);await useAppStore.getState().runProjectMutation(async()=>{await useAppStore.getState().persist();const next=await window.cineforge.keyframe.generate({projectRoot:project.rootPath,shotId:shot.id,role,workflowProfileId:activeKeyframeProfileId});setProject(next);setNotice(`${role==='start'?'Start':'End'} keyframe generated for ${shot.title}.`);});}catch(error){setError(error instanceof Error?error.message:String(error));}finally{setKeyframeBusy(null);setBusy(false);}};
@@ -533,6 +578,28 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
     {latestPath&&<video className="studio-latest-video" src={projectMediaUrl(relativeOutput(project.rootPath,latestPath))} controls preload="metadata"/>}
     <div className="studio-inspector-actions"><button className="ghost" onClick={()=>changeModel(chooseModelForShot(shot,{validatedModels:project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&Boolean(profile.workflowPath)&&profile.validation?.structuralStatus==='valid').map(profile=>profile.modelFamily)}))}>Auto route</button><button className="ghost" disabled={continuityBusy} onClick={reviewContinuity}>{continuityBusy?'Reviewing metadata…':'Metadata continuity review'}</button></div>
     <div className={`studio-route-status ${routeReady?'ready':route?'warn':'bad'}`}><span>VIDEO ROUTE</span><strong>{route?.name||'No matching workflow'}</strong><small>{routeIssue||'profile validated · runtime/files rechecked on queue'}</small></div>
+    <div className="studio-production-state">
+      <div className="studio-panel-head compact"><div><span className="eyebrow">PRODUCTION STATE</span><strong>{shot.canonicalRenderId?'Canonical':'In progress'}</strong></div></div>
+      <div className="studio-state-grid">
+        <div><span>Actual start</span><Pill>{actualStart?.status||'missing'}</Pill></div>
+        <div><span>Observed final</span><Pill>{observedFinal?.status||'missing'}</Pill></div>
+        <div><span>Visual QC</span><Pill>{latestQc('visual')?.status||'missing'}</Pill></div>
+        <div><span>Semantic QC</span><Pill>{latestQc('semantic')?.status||'missing'}</Pill></div>
+        <div><span>Continuity QC</span><Pill>{latestQc('continuity')?.status||'n/a'}</Pill></div>
+        <div><span>Human tasks</span><Pill>{project.humanTasks.filter(task=>task.shotId===shot.id&&task.status==='open').length}</Pill></div>
+      </div>
+      <div className="studio-dependency-list">
+        {[...project.shotDependencies].filter(edge=>edge.toShotId===shot.id||edge.fromShotId===shot.id).map(edge=>{const incoming=edge.toShotId===shot.id,other=project.shots.find(item=>item.id===(incoming?edge.fromShotId:edge.toShotId));return <div key={edge.id}><span>{incoming?'← IN':'OUT →'}</span><strong>{other?.title||'Missing shot'}</strong><small>{edge.relation} · {edge.strength} · {edge.propagate.join(', ')||'no propagated fields'}</small></div>;})}
+        {project.shotDependencies.every(edge=>edge.toShotId!==shot.id&&edge.fromShotId!==shot.id)&&<small className="muted">No explicit production dependency edges.</small>}
+      </div>
+      {observedFinal?.frameAssetId&&<div className="studio-observed-frame">{(()=>{const asset=project.assets.find(item=>item.id===observedFinal.frameAssetId);return asset?<img src={projectMediaUrl(asset.projectPath)} alt="Observed final frame"/>:null;})()}<div><strong>Actual generated final state</strong><small>confidence {observedFinal.confidence!=null?Math.round(observedFinal.confidence*100)+'%':'—'} · {observedFinal.actionPhase||'action state not extracted'}</small></div></div>}
+    </div>
+    <div className="studio-previz-control">
+      <span className="eyebrow">3D PREVIZ</span>
+      <div className="form-grid two-col"><label>Requirement<select value={shot.previz?.requirement??'none'} onChange={event=>mutate(target=>{const requirement=event.target.value as 'none'|'optional'|'required';target.previz={...(target.previz??{status:'not-needed'}),requirement,reason:`Human override: previz requirement set to ${requirement} in Studio.`,updatedAt:new Date().toISOString()};if(requirement==='none')target.previz.status='not-needed';else if(target.previz.status==='not-needed')target.previz.status='pending';})}><option value="none">none</option><option value="optional">optional</option><option value="required">required</option></select></label><label>Status<select value={shot.previz?.status??'not-needed'} onChange={event=>mutate(target=>{target.previz={...(target.previz??{requirement:'optional'}),status:event.target.value as 'not-needed'|'pending'|'ready'|'failed'|'human-verify',updatedAt:new Date().toISOString()};})}><option value="not-needed">not-needed</option><option value="pending">pending</option><option value="ready">ready</option><option value="human-verify">human-verify</option><option value="failed">failed</option></select></label></div>
+      {shot.previz?.reason&&<small>{shot.previz.reason}</small>}
+      {shot.previz?.manifestPath&&<button className="ghost" onClick={()=>void window.cineforge.system.reveal(shot.previz!.manifestPath!)}>Open previz manifest ↗</button>}
+    </div>
     {takes.length>0&&<div className="studio-takes"><div className="studio-panel-head compact"><div><span className="eyebrow">TAKES</span><strong>{takes.length} rendered</strong></div></div>{takes.map(take=><div className="studio-take-row" key={take.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-cineforge-render-output',take.id);}} title="Drag this take to the Timeline dock"><div><strong>{take.filename}</strong><small>{new Date(take.createdAt).toLocaleString()} · {take.technicalQc?(take.technicalQc.passed?(take.technicalQc.warnings?.length?`QC pass · ${take.technicalQc.warnings.length} warning(s)`:'QC pass'):'QC fail'):'QC unknown'}</small></div><div className="row">{shot.latestRenderId===take.id?<Pill>preferred</Pill>:<button className="ghost" onClick={()=>{const message=takeUseConfirmationMessage(take,'preferred');if(message&&!window.confirm(message))return;mutate(target=>{target.latestRenderId=take.id;target.status='rendered';});}}>Use</button>}<button className="mini" onClick={()=>void window.cineforge.system.reveal(take.path)}>↗</button></div></div>)}</div>}
     {continuityReview&&<div className="studio-continuity-result"><div className="studio-panel-head compact"><strong>Metadata continuity review</strong><button className="mini" onClick={()=>setContinuityReview(undefined)}>×</button></div>{continuityReview.issues.length?<ul>{continuityReview.issues.map((issue,index)=><li key={index}>{issue}</li>)}</ul>:<p>No concrete metadata continuity issue found. This check does not inspect rendered pixels.</p>}{continuityReview.promptAddendum&&<button className="ghost" onClick={()=>{try{const next=appendProjectText(shot.prompt,continuityReview.promptAddendum,200_000,'Shot prompt');mutate(target=>target.prompt=next);}catch(error){setError(error instanceof Error?error.message:String(error));}}}>Append prompt suggestion</button>}{continuityReview.suggestedContinuityNotes&&<button className="ghost" onClick={()=>{try{const next=appendProjectText(shot.continuityNotes,continuityReview.suggestedContinuityNotes,100_000,'Continuity notes');mutate(target=>target.continuityNotes=next);}catch(error){setError(error instanceof Error?error.message:String(error));}}}>Append continuity notes</button>}</div>}
     <label>Title<input value={shot.title} onChange={event=>mutate(target=>target.title=event.target.value)}/></label>
