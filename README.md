@@ -12,17 +12,21 @@ For a fresh Windows workstation:
 git clone https://github.com/kien-test-hehe/AI-video-creator.git
 cd AI-video-creator
 setup.cmd
+verify.cmd
 start.cmd
 ```
 
 `setup.cmd` is idempotent and prepares a machine-local runtime under `.runtime/`. It also writes `%LOCALAPPDATA%\\CineForge\\bootstrap-machine-settings.v1.json`; a packaged/NSIS CineForge app imports those machine paths on first run when it has no saved machine settings yet. `start.cmd` launches the **built** Electron app (not Vite development mode):
 
-- portable Node.js 22.16;
+- portable Node.js 22.16 plus pinned npm 10.9.9;
 - FFmpeg + FFprobe when missing;
 - the pinned WanGP source/runtime and its automatic RTX-aware environment installer;
 - CineForge npm dependencies and source validation;
 - machine-local environment values for WanGP/Python/FFmpeg;
 - Ollama plus the local `qwen3-vl:4b` vision model for automatic visual/semantic/continuity QC unless setup is run with `-SkipVisionModel`.
+
+
+After setup, `verify.cmd` performs a fast machine gate for the NVIDIA driver/VRAM, pinned Node/npm, FFmpeg/FFprobe, pinned WanGP source, WanGP Python + PyTorch CUDA access, Ollama model presence, dependencies, build output, disk headroom and CapCut detection. Use `verify.cmd -Deep` to rerun TypeScript, lint, unit tests, core smoke and the WanGP bridge before the first real render. A warning is non-blocking; a FAIL returns a non-zero exit code.
 
 `start.cmd` also starts the local Ollama service when automatic QC is configured. The QC model is unloaded after each shot's QC batch so it does not sit on the RTX 5060 Ti's 16 GB VRAM while the next diffusion render starts.
 
