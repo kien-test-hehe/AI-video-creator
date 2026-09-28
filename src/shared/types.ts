@@ -23,7 +23,7 @@ export type HumanTaskType = 'create-asset' | 'approve-asset' | 'verify-keyframe'
 export type HumanTaskStatus = 'open' | 'resolved' | 'dismissed';
 export type PrevizRequirement = 'none' | 'optional' | 'required';
 export type PrevizStatus = 'not-needed' | 'pending' | 'ready' | 'failed' | 'human-verify';
-export type AutomationPhase = 'idle' | 'preflight' | 'planning' | 'waiting-render' | 'qc' | 'retrying' | 'waiting-human' | 'building-timeline' | 'paused' | 'complete' | 'error';
+export type AutomationPhase = 'idle' | 'preflight' | 'planning' | 'keyframes' | 'waiting-render' | 'qc' | 'retrying' | 'waiting-human' | 'building-timeline' | 'paused' | 'complete' | 'error';
 export type ReadinessLevel = 'ready' | 'warning' | 'blocked';
 
 export interface AppMachineSettings {
