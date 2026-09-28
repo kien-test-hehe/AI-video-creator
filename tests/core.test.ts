@@ -666,6 +666,7 @@ describe('machine settings recovery preservation and versioning',()=>{
     try{
       const service=new AppSettingsService(userdata);await service.load();
       const trusted=service.get();trusted.director.model='trusted';await service.save(trusted);
+      const newer=service.get();newer.director.temperature=0.4;await service.save(newer);
       await writeFile(join(userdata,'machine-settings.v1.json'),JSON.stringify({schemaVersion:2,director:{model:'future'}}),'utf8');
       const recovered=new AppSettingsService(userdata);await recovered.load();
       expect(recovered.get().director.model).toBe('trusted');
