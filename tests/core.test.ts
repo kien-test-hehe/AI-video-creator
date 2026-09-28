@@ -644,6 +644,19 @@ describe('machine settings persistence trust',()=>{
     }
   });
 });
+describe('WanGP Docker image argument safety',()=>{
+  it('rejects option-like Docker image values before they can reach docker run',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-docker-image-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,JSON.stringify({schemaVersion:1,wangp:{executionMode:'docker',docker:{image:'--privileged'}}}),'utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      await expect(new AppSettingsService(join(root,'userdata')).load()).rejects.toThrow(/docker image.*not a docker cli option/i);
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+});
 describe('machine settings bootstrap failure',()=>{
   it('fails closed when an explicit bootstrap file exists but is invalid',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-bootstrap-invalid-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
