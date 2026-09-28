@@ -574,7 +574,13 @@ function sanitizeTimelineClip(value: unknown, shotIds: Set<string>, outputs: Map
   const trimIn=clampNumber(source.trimInSec,0,1_000_000,0);
   const trimOut=source.trimOutSec==null?undefined:clampNumber(source.trimOutSec,0,1_000_000,undefined as any);
   if(trimOut!=null&&trimOut<=trimIn)throw new Error('Timeline trimOutSec must be greater than trimInSec.');
-  return { id,shotId,renderOutputId,track:clampInt(source.track,0,128,0),order:clampInt(source.order,0,1_000_000,0),trimInSec:trimIn,trimOutSec:trimOut,volume:clampNumber(source.volume,0,8,1) };
+  return {
+    id,shotId,renderOutputId,
+    track:clampInt(source.track,0,128,0),order:clampInt(source.order,0,1_000_000,0),
+    trimInSec:trimIn,trimOutSec:trimOut,volume:clampNumber(source.volume,0,8,1),
+    approval:enumOrDefault(source.approval,new Set(['legacy','canonical','human-override'] as const),'legacy','timeline take approval'),
+    approvalReason:str(source.approvalReason,'',10_000)||undefined
+  };
 }
 
 function sanitizeComfyMeta(value:unknown):Record<string,unknown>|undefined{
