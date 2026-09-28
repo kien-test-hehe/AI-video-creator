@@ -74,7 +74,7 @@ export function invalidateObservedFinalState(project:FilmProject,shotId:string,r
   while(changed){
     changed=false;
     for(const state of project.shotStates){
-      if(state.status==='stale'||!state.derivedFromStateId||!staleIds.has(state.derivedFromStateId))continue;
+      if(state.status==='stale'||staleIds.has(state.id)||!state.derivedFromStateId||!staleIds.has(state.derivedFromStateId))continue;
       staleIds.add(state.id);
       changed=true;
     }
