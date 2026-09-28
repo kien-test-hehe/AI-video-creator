@@ -236,11 +236,12 @@ export interface RenderRuntimeFingerprint {
   runtimeSha256?: string;
   environmentSha256: string;
 }
-export interface RenderOutput { id:UUID;jobId:UUID;shotId:UUID;path:string;filename:string;mediaType:'video'|'image'|'audio'|'unknown';createdAt:ISODate;comfyMeta?:Record<string,unknown>;technicalQc?:TechnicalQcResult; }
+export interface RenderOutput { id:UUID;jobId:UUID;shotId:UUID;path:string;filename:string;mediaType:'video'|'image'|'audio'|'unknown';createdAt:ISODate;productionInputKey?:string;comfyMeta?:Record<string,unknown>;technicalQc?:TechnicalQcResult; }
 export interface RenderJobSpec {
   shot:Shot;
   workflowProfile:WorkflowProfile;
   effectivePrompt:string;
+  productionInputKey?:string;
   queuedProjectUpdatedAt:ISODate;
   workflowSha256:string;
   assetFingerprints:AssetFingerprint[];
