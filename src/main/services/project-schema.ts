@@ -44,7 +44,7 @@ function migrateV1ToV2(source: Record<string, any>, notes: string[]): Record<str
   const old = asObject(source.settings ?? {}, 'settings');
   return {
     ...source,
-    schemaVersion: 3,
+    schemaVersion: 2,
     settings: {
       costPolicy: old.costPolicy,
       capcut: {
@@ -92,7 +92,6 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
   const stateById=new Map(shotStates.map(state=>[state.id,state] as const));
   const shotDependencies = boundedArray(source.shotDependencies,'shot dependencies',200_000).map(value=>sanitizeShotDependency(value,shotIds));
   const qcResults = boundedArray(source.qcResults,'shot QC results',300_000).map(value=>sanitizeShotQcResult(value,shotIds,outputById));
-  const qcIds=new Set(qcResults.map(result=>result.id));
   const humanTasks = boundedArray(source.humanTasks,'human tasks',100_000).map(value=>sanitizeHumanTask(value,shotIds,assetIds,outputById));
   const humanTaskIds=new Set(humanTasks.map(task=>task.id));
   const cutRevisions = boundedArray(source.cutRevisions,'cut revisions',10_000).map(value=>sanitizeCutRevision(value,new Set(timeline.map(clip=>clip.id))));
@@ -149,7 +148,7 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
   }
   for(const job of renderJobs)job.outputs=outputsByJobShot.get(`${job.id}\u0000${job.shotId}`)??[];
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id,
     name: str(source.name, 'Untitled Film', 240),
     createdAt: iso(source.createdAt, now),
