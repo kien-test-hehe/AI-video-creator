@@ -351,6 +351,17 @@ describe('project schema canonicalization',()=>{
     expect(loaded.renderOutputs[0].jobId).toBe('orphaned');
     expect(loaded.renderJobs[0].outputs).toEqual([]);
   });
+  it('rejects missing or wrong-kind shot asset references while preserving legacy reference-in-prop migration',()=>{
+    const missing:any=baseProject();missing.shots[0].characterAssetIds=['missing-asset'];
+    expect(()=>loadPortableProject(missing,'/project')).toThrow(/character assets reference unknown asset/i);
+
+    const wrong:any=baseProject();wrong.assets=[{id:'prop',kind:'prop',name:'Prop',sourcePath:'prop.png',projectPath:'assets/prop/prop.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];wrong.shots[0].characterAssetIds=['prop'];
+    expect(()=>loadPortableProject(wrong,'/project')).toThrow(/character assets reference incompatible asset kind prop/i);
+
+    const legacy:any=baseProject();legacy.assets=[{id:'ref',kind:'reference',name:'Ref',sourcePath:'ref.png',projectPath:'assets/reference/ref.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];legacy.shots[0].propAssetIds=['ref'];delete legacy.shots[0].referenceAssetIds;
+    const loaded=loadPortableProject(legacy,'/project').project.shots[0];
+    expect(loaded.propAssetIds).toEqual([]);expect(loaded.referenceAssetIds).toEqual(['ref']);
+  });
   it('rejects render jobs whose immutable spec targets a different shot id',()=>{
     const raw:any=baseProject(),specShot=structuredClone(raw.shots[0]);specShot.id='shot-2';
     raw.renderJobs=[{
