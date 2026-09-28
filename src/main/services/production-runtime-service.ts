@@ -13,6 +13,7 @@ import { sampleVideoFrames, type SampledVideoFrames } from './media-analysis';
 import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, selectStableFinalFrame } from './automatic-qc-service';
 import { createHumanTask, recordObservedFinalState, recordShotQc } from './production-state-service';
 import { ensurePrevizPlan } from './previz-service';
+import { releaseLocalVisionModel } from './local-vision-service';
 import { AutomationJournal } from './automation-journal';
 
 const ACTIVE_RENDER=new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
@@ -194,6 +195,7 @@ export class ProductionRuntimeService extends EventEmitter{
   }
 
   private async processTake(shotId:string,outputId:string):Promise<void>{
+    try{
     let project=this.projects.getCurrent();if(!project)throw new Error('Project closed during QC.');
     let shot=project.shots.find(item=>item.id===shotId),output=project.renderOutputs.find(item=>item.id===outputId);
     if(!shot||!output)throw new Error('Shot/output disappeared during QC.');
@@ -217,6 +219,7 @@ export class ProductionRuntimeService extends EventEmitter{
     }
 
     if(project.shotDependencies.some(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0))await this.ensureQcLayer(shotId,outputId,'continuity',frames);
+    }finally{await releaseLocalVisionModel(this.settings.get());}
   }
 
   private async ensureQcLayer(shotId:string,outputId:string,layer:Exclude<QcLayer,'technical'>,frames:SampledVideoFrames):Promise<void>{
