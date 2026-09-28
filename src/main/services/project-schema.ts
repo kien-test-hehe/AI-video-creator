@@ -516,6 +516,7 @@ function sanitizeRenderOutput(value: unknown, shotIds: Set<string>): RenderOutpu
     path, filename:str(source.filename,'output',2048),
     mediaType:enumOrDefault(source.mediaType,new Set(['video','image','audio','unknown'] as const),'unknown','render output media type'),
     createdAt:iso(source.createdAt,new Date().toISOString()),
+    productionInputKey:str(source.productionInputKey,'',512)||undefined,
     comfyMeta:sanitizeComfyMeta(source.comfyMeta),
     technicalQc:sanitizeTechnicalQc(source.technicalQc)
   };
@@ -537,6 +538,7 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
       shot:specShot,
       workflowProfile,
       effectivePrompt:str(rawSpec.effectivePrompt,'',300_000),
+      productionInputKey:str(rawSpec.productionInputKey,'',512)||undefined,
       queuedProjectUpdatedAt:iso(rawSpec.queuedProjectUpdatedAt,new Date().toISOString()),
       workflowSha256:sha(rawSpec.workflowSha256)??'0'.repeat(64),
       assetFingerprints:boundedArray(rawSpec.assetFingerprints,'render job asset fingerprints',32).map(item=>{
