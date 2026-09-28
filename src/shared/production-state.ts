@@ -1,7 +1,7 @@
 import type {
-  ContinuityField, FilmProject, QcLayer, RenderOutput, Shot, ShotDependency, ShotState
+  ContinuityField, FilmProject, QcLayer, RenderOutput, Shot, ShotDependency, ShotState, WorkflowProfile
 } from './types';
-import { shotProjectRenderInputKey } from './shot-signature';
+import { shotProjectRenderInputKey, shotProjectRenderInputKeyForProfile } from './shot-signature';
 
 export const DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
   'character','wardrobe','prop','location','lighting','action','camera','dialogue'
@@ -262,10 +262,22 @@ export function renderOutputProductionInputKey(project:FilmProject,output:Render
   return project.renderJobs?.find(job=>job.id===output.jobId)?.spec?.productionInputKey;
 }
 
+export function currentProductionInputKeyForOutput(project:FilmProject,shot:Shot,output:RenderOutput):string|undefined{
+  const job=project.renderJobs?.find(item=>item.id===output.jobId);
+  const specProfile=job?.spec?.workflowProfile;
+  if(specProfile){
+    const currentProfile=project.settings.workflowProfiles.find(profile=>profile.id===specProfile.id);
+    if(!currentProfile)return undefined;
+    return shotProductionInputKey(project,shot,currentProfile);
+  }
+  return shotProductionInputKey(project,shot);
+}
+
 export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string,layer:Exclude<QcLayer,'technical'>):string{
   const shot=project.shots.find(item=>item.id===shotId);
   const output=project.renderOutputs.find(item=>item.id===outputId&&item.shotId===shotId);
   const productionInputKey=output?renderOutputProductionInputKey(project,output):undefined;
+  const currentProductionInputKey=shot&&output?currentProductionInputKeyForOutput(project,shot,output):undefined;
   const incident=layer==='continuity'
     ? project.shotDependencies
       .filter(edge=>edge.fromShotId===shotId||edge.toShotId===shotId)
@@ -284,7 +296,7 @@ export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string
     : [];
   return productionFingerprint('qc-input',JSON.stringify({
     layer,shotId,outputId,productionInputKey,
-    currentShotInput:shot?shotProductionInputKey(project,shot):undefined,
+    currentShotInput:currentProductionInputKey,
     incident
   }));
 }
@@ -297,7 +309,7 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
   if(!output)return{ready:false,blockers:['Render output is missing, belongs to another shot, or is not video.']};
 
   const recordedInputKey=renderOutputProductionInputKey(project,output);
-  const currentInputKey=shotProductionInputKey(project,shot);
+  const currentInputKey=currentProductionInputKeyForOutput(project,shot,output);
   if(!recordedInputKey)blockers.push('Render output predates production-input provenance and cannot be promoted safely.');
   else if(recordedInputKey!==currentInputKey)blockers.push('Render output was generated from stale shot, reference, workflow, or propagated-state inputs.');
 
