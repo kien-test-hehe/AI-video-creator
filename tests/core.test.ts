@@ -1789,3 +1789,31 @@ describe('continuity QC topology scoping',()=>{
     expect(shotQcInputKey(project,'b','out-b','continuity')).toBe(before);
   });
 });
+
+
+describe('continuity state fingerprint completeness',()=>{
+  it('changes continuity QC provenance when state confidence changes even if stored fingerprint is stale',()=>{
+    const shotA={
+      id:'a',sceneId:'scene',index:1,title:'A',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false},
+      observedFinalStateId:'state-a'
+    } as Shot;
+    const shotB={...structuredClone(shotA),id:'b',index:2,observedFinalStateId:undefined,actualStartStateId:'state-b'} as Shot;
+    const project={
+      schemaVersion:3,id:'p',name:'p',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'p',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['a','b']}],
+      assets:[],shots:[shotA,shotB],renderJobs:[],renderOutputs:[{id:'out-b',jobId:'x',shotId:'b',path:'/tmp/p/renders/b.mp4',filename:'b.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'}],
+      timeline:[],shotStates:[
+        {id:'state-a',shotId:'a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',confidence:.95,fingerprint:'legacy-stale',createdAt:'2026-01-01T00:00:00.000Z'},
+        {id:'state-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',derivedFromStateId:'state-a',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',confidence:.95,fingerprint:'legacy-stale',createdAt:'2026-01-01T00:00:00.000Z'}
+      ],
+      shotDependencies:[{id:'edge',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}],
+      qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    const before=shotQcInputKey(project,'b','out-b','continuity');
+    project.shotStates.find(state=>state.id==='state-a')!.confidence=.4;
+    expect(shotQcInputKey(project,'b','out-b','continuity')).not.toBe(before);
+  });
+});
