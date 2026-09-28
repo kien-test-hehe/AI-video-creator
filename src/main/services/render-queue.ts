@@ -648,9 +648,9 @@ export class RenderQueueService extends EventEmitter {
   private isCurrentJobSpec(project:FilmProject,job:RenderJob,shot:Shot):boolean{
     if(!job.spec)return false;
     let currentWorkflowKey:string|undefined,currentPrompt:string|undefined;
-    try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(project,shot));}catch{currentWorkflowKey=undefined;}
+    try{currentWorkflowKey=workflowExecutionKey(routeWorkflow(project,shot,job.spec.workflowProfile.id));}catch{currentWorkflowKey=undefined;}
     try{currentPrompt=buildRenderPrompt(project,shot);}catch{return false;}
-    if(job.spec.productionInputKey&&job.spec.productionInputKey!==shotProductionInputKey(project,shot))return false;
+    if(job.spec.productionInputKey&&job.spec.productionInputKey!==shotProductionInputKey(project,shot,routeWorkflow(project,shot,job.spec.workflowProfile.id)))return false;
     return shotRenderInputKey(shot)===shotRenderInputKey(job.spec.shot)&&currentPrompt===job.spec.effectivePrompt&&currentWorkflowKey===workflowExecutionKey(job.spec.workflowProfile);
   }
 
