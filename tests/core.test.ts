@@ -27,6 +27,8 @@ import { AppSettingsService } from '../src/main/services/app-settings-service';
 import { ProjectService } from '../src/main/services/project-service';
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
+import { generateKeyframe } from '../src/main/services/keyframe-service';
+import { upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
@@ -228,6 +230,40 @@ describe('internal shot creation bounds',()=>{
       await expect(service.addShot('scene-long')).rejects.toThrow(/shot prompt safety limit/i);
       expect(service.getCurrent()?.shots).toHaveLength(0);
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('internal project collection capacity',()=>{
+  it('rejects asset import and manual shot creation at canonical capacity before mutating state',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-producer-capacity-'));
+    try{
+      const service=new ProjectService(),created=await service.createAt(root,'Film');
+      const assets:any[]=[];assets.length=100_000;
+      (service as any).current={...structuredClone(created),assets};
+      await expect(service.importAsset('image')).rejects.toThrow(/100000-asset project safety limit/i);
+
+      const shots:any[]=[];shots.length=100_000;
+      (service as any).current={...structuredClone(created),scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:[]}],shots};
+      await expect(service.addShot('scene')).rejects.toThrow(/100000-shot project safety limit/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('rejects keyframe generation at asset capacity before touching the GPU runtime',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-keyframe-capacity-'));
+    try{
+      const service=new ProjectService(),created=await service.createAt(root,'Film'),assets:any[]=[];assets.length=100_000;
+      (service as any).current={...structuredClone(created),assets};
+      await expect(generateKeyframe(service,{} as AppMachineSettings,{projectRoot:root,shotId:'missing',role:'start'} as any,{} as any)).rejects.toThrow(/100000-asset project safety limit/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('rejects a new managed workflow profile at capacity but still permits replacement by id',()=>{
+    const profiles:any[]=[];profiles.length=512;
+    const project={settings:{workflowProfiles:profiles}} as unknown as FilmProject;
+    const profile={id:'new-profile',runtime:'wangp',purpose:'video',name:'Managed',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/w.json',workflowFormat:'wangp-settings',bindings:[],enabled:false} as WorkflowProfile;
+    expect(()=>upsertManagedProfile(project,profile)).toThrow(/512-profile project safety limit/i);
+    profiles[0]={...profile,id:'existing'};
+    expect(()=>upsertManagedProfile(project,{...profile,id:'existing'})).not.toThrow();
+    expect(profiles[0].id).toBe('existing');
   });
 });
 describe('project schema canonicalization',()=>{
