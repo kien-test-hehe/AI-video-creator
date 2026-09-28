@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
 import { chooseModelForShot } from '../../../shared/routing';
 import { continuityReviewInputKey } from '../../../shared/director-signature';
-import type { Asset, AssetKind, AutomationStatus, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe, WorkstationReadiness } from '../../../shared/types';
+import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe, WorkstationReadiness } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
@@ -25,7 +25,7 @@ const ACTIVE_JOB_STATUSES=new Set(['queued','preparing','uploading','submitted',
 const MIN_ZOOM=.03,MAX_ZOOM=1.5;
 
 export function Studio(){
-  const{project,probe,queue,selectedShotId,selectShot,updateProject,setProject,setQueue,setView,setError,setNotice,setProbe}=useAppStore();
+  const{project,probe,queue,automation,selectedShotId,selectShot,updateProject,setProject,setQueue,setAutomation,setView,setError,setNotice,setProbe}=useAppStore();
   const projectId=project?.id;
   const[zoom,setZoom]=useState(.78);
   const[locked,setLocked]=useState(false);
@@ -35,7 +35,6 @@ export function Studio(){
   const[preflightBusy,setPreflightBusy]=useState(false);
   const[preflightReport,setPreflightReport]=useState<PreflightReport>();
   const[preflightRevision,setPreflightRevision]=useState<string>();
-  const[automation,setAutomation]=useState<AutomationStatus>();
   const[readiness,setReadiness]=useState<WorkstationReadiness>();
   const[automationBusy,setAutomationBusy]=useState(false);
   const[showLibrary,setShowLibrary]=useState(true);
@@ -62,11 +61,8 @@ export function Studio(){
   },[probe,projectId,setError,setProbe]);
   useEffect(()=>{
     let disposed=false;
-    const syncStatus=(status:AutomationStatus)=>{if(!disposed)setAutomation(status);};
-    const unsubscribe=window.cineforge.automation.onStatus(syncStatus);
-    void window.cineforge.automation.status().then(syncStatus).catch(error=>{if(!disposed)setError(error instanceof Error?error.message:String(error));});
     void window.cineforge.system.readiness().then(result=>{if(!disposed){setReadiness(result);setProbe(result.probe);}}).catch(error=>{if(!disposed)setError(error instanceof Error?error.message:String(error));});
-    return()=>{disposed=true;unsubscribe();};
+    return()=>{disposed=true;};
   },[projectId,setError,setProbe]);
 
   const {sortedShots,shotsByScene}=useMemo(()=>{
