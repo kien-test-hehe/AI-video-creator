@@ -1390,22 +1390,26 @@ describe('production state core',()=>{
     expect(project.shots[1].actualStartStateId).toBeUndefined();
   });
 
-  it('keeps canonical take promotion fail-closed until current technical, visual, semantic and continuity QC all pass',()=>{
-    const project=loadPortableProject(rawTwoShotProject(),'/project').project,shot=project.shots.find(item=>item.id==='shot-a')!,output=project.renderOutputs.find(item=>item.id==='out-a')!;
+  it('keeps canonical take promotion fail-closed until current technical, visual, semantic and incoming continuity QC all pass',()=>{
+    const project=loadPortableProject(rawTwoShotProject(),'/project').project;
+    const shot=project.shots.find(item=>item.id==='shot-b')!;
+    shot.status='rendered';shot.latestRenderId='out-b';
+    const output:RenderOutput={id:'out-b',jobId:'orphaned',shotId:'shot-b',path:'/project/renders/out-b.mp4',filename:'out-b.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:02.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:02.000Z',passed:true,issues:[],warnings:[]}};
+    project.renderOutputs.push(output);
     output.productionInputKey=shotProductionInputKey(project,shot);
-    expect(canonicalTakeReadiness(project,'shot-a','out-a').ready).toBe(false);
+    expect(canonicalTakeReadiness(project,'shot-b','out-b').ready).toBe(false);
     const createdAt='2026-01-01T00:00:03.000Z';
     project.qcResults.push(
-      {id:'q-v',shotId:'shot-a',renderOutputId:'out-a',layer:'visual',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','visual'),createdAt},
-      {id:'q-s',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','semantic'),createdAt}
+      {id:'q-v',shotId:'shot-b',renderOutputId:'out-b',layer:'visual',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-b','out-b','visual'),createdAt},
+      {id:'q-s',shotId:'shot-b',renderOutputId:'out-b',layer:'semantic',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-b','out-b','semantic'),createdAt}
     );
-    expect(canonicalTakeReadiness(project,'shot-a','out-a')).toMatchObject({ready:false});
-    project.qcResults.push({id:'q-c',shotId:'shot-a',renderOutputId:'out-a',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','continuity'),createdAt});
-    expect(canonicalTakeReadiness(project,'shot-a','out-a')).toEqual({ready:true,blockers:[]});
-    project.qcResults.push({id:'q-s2',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'fail',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','semantic'),createdAt:'2026-01-01T00:00:04.000Z'});
-    expect(canonicalTakeReadiness(project,'shot-a','out-a').blockers.join(' ')).toMatch(/semantic QC is fail/i);
+    expect(canonicalTakeReadiness(project,'shot-b','out-b')).toMatchObject({ready:false});
+    project.qcResults.push({id:'q-c',shotId:'shot-b',renderOutputId:'out-b',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-b','out-b','continuity'),createdAt});
+    expect(canonicalTakeReadiness(project,'shot-b','out-b')).toEqual({ready:true,blockers:[]});
+    project.qcResults.push({id:'q-s2',shotId:'shot-b',renderOutputId:'out-b',layer:'semantic',status:'fail',issues:[],inputKey:shotQcInputKey(project,'shot-b','out-b','semantic'),createdAt:'2026-01-01T00:00:04.000Z'});
+    expect(canonicalTakeReadiness(project,'shot-b','out-b').blockers.join(' ')).toMatch(/semantic QC is fail/i);
     shot.prompt='changed after QC';
-    expect(canonicalTakeReadiness(project,'shot-a','out-a').blockers.join(' ')).toMatch(/stale shot.*inputs|stale for current/i);
+    expect(canonicalTakeReadiness(project,'shot-b','out-b').blockers.join(' ')).toMatch(/stale shot.*inputs|stale for current/i);
   });
 
   it('rejects broken schema-v3 state pointers instead of silently attaching state to the wrong shot',()=>{
@@ -1802,11 +1806,12 @@ describe('continuity QC topology scoping',()=>{
       id:'task-human',type:'verify-continuity',status:'open',shotId:'b',title:'Review',reason:'Needs review.',
       relatedAssetIds:[],relatedRenderOutputIds:['out-b'],createdAt:'2026-01-01T00:00:02.000Z'
     });
-    project.shots.find(shot=>shot.id==='c')!.index=1;
-    project.shots.find(shot=>shot.id==='a')!.index=2;
+    project.shots.find(shot=>shot.id==='a')!.index=1;
+    project.shots.find(shot=>shot.id==='c')!.index=2;
     project.shots.find(shot=>shot.id==='b')!.index=3;
-    project.scenes[0].shotIds=['c','a','b'];
+    project.scenes[0].shotIds=['a','c','b'];
     rebuildDefaultSequentialDependencies(project,['scene-qc'],'2026-01-01T00:00:03.000Z');
+    expect(project.shotDependencies.some(edge=>edge.toShotId==='b'&&edge.fromShotId==='c')).toBe(true);
     expect(project.humanTasks.find(task=>task.id==='task-human')).toMatchObject({status:'dismissed'});
   });
 
