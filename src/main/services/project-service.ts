@@ -5,10 +5,10 @@ import { dialog } from 'electron';
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
 import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
-import { loadPortableProject } from './project-schema';
+import { loadPortableProject, ProjectCompatibilityError, ProjectSafetyLimitError } from './project-schema';
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
-import { readJsonFileLimited } from './json-file';
+import { FileSafetyLimitError, readJsonFileLimited } from './json-file';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -74,6 +74,7 @@ export class ProjectService {
       raw=await readJsonFileLimited(file,'CineForge project file',50*1024*1024);
       loaded=loadPortableProject(raw,openedRoot);
     }catch(primaryError){
+      if(primaryError instanceof ProjectCompatibilityError||primaryError instanceof ProjectSafetyLimitError||primaryError instanceof FileSafetyLimitError)throw primaryError;
       primaryFailure=primaryError;
       try{
         raw=await readJsonFileLimited(backup,'CineForge backup project file',50*1024*1024);
