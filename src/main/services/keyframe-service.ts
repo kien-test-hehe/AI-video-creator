@@ -17,10 +17,22 @@ import { planShotReferences } from './reference-plan';
 import { keyframeProjectInputKey } from '../../shared/shot-signature';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease, type KeyframeLease } from './keyframe-lease';
+import { invalidateObservedFinalState } from '../../shared/production-state';
 
-function keyframePrompt(shot:Shot,role:'start'|'end'):string{
+function keyframePrompt(project:FilmProject,shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
-  return[shot.prompt,temporal,shot.camera&&`Camera: ${shot.camera}`,shot.action&&`Action context: ${shot.action}`,shot.continuityNotes&&`Continuity: ${shot.continuityNotes}`,'Single cinematic still frame. No split screen, no storyboard grid.'].filter(Boolean).join('\n');
+  const stateId=role==='start'?(shot.actualStartStateId??shot.plannedStartStateId):shot.plannedEndStateId;
+  const state=stateId?project.shotStates.find(item=>item.id===stateId&&item.status!=='stale'):undefined;
+  const stateContext=state?JSON.stringify({
+    characters:state.characters,props:state.props,environment:state.environment,camera:state.camera,
+    actionPhase:state.actionPhase,dialogueState:state.dialogueState,confidence:state.confidence
+  }):'';
+  return[
+    shot.prompt,temporal,shot.camera&&`Camera: ${shot.camera}`,shot.action&&`Action context: ${shot.action}`,
+    stateContext&&`${role==='start'?'Required opening continuity state':'Required target end state'}: ${stateContext.slice(0,30_000)}`,
+    shot.continuityNotes&&`Continuity: ${shot.continuityNotes}`,
+    'Single cinematic still frame. No split screen, no storyboard grid.'
+  ].filter(Boolean).join('\n');
 }
 
 function chooseProfile(project:FilmProject,id:string):WorkflowProfile{
@@ -72,7 +84,7 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   if(currentRuntime.environmentSha256!==profile.validation.runtimeFingerprint)throw new Error('Local AI runtime changed after keyframe profile validation. Revalidate it before generating keyframes.');
 
   const assetFingerprints=new Map<string,KeyframeAssetFingerprint>();
-  const values:WorkflowValues={prompt:keyframePrompt(shot,request.role),negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:1,fps:1,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed+(request.role==='end'?1:0),filenamePrefix:`cineforge/keyframes/${shot.id}/${request.role}`};
+  const values:WorkflowValues={prompt:keyframePrompt(project,shot,request.role),negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:1,fps:1,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed+(request.role==='end'?1:0),filenamePrefix:`cineforge/keyframes/${shot.id}/${request.role}`};
   const assetPath=async(id:string)=>{
     const asset=project.assets.find(item=>item.id===id);if(!asset)throw new Error(`Referenced asset not found: ${id}`);
     const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
@@ -132,6 +144,8 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
       p.assets.push(asset);
       if(request.role==='start')targetShot.startFrameAssetId=asset.id;else targetShot.endFrameAssetId=asset.id;
       targetShot.latestRenderId=undefined;
+      targetShot.canonicalRenderId=undefined;
+      invalidateObservedFinalState(p,targetShot.id,`${request.role==='start'?'Start':'End'} keyframe changed; prior rendered continuity state is stale.`);
       if(['draft','rendered','failed'].includes(targetShot.status))targetShot.status='ready';
     });
   }catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
