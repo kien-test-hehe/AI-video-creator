@@ -55,7 +55,7 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
       validatedAt: now,
       sourceSha256,
       runtimeFingerprint: fingerprint.environmentSha256,
-      lastError: errors.length ? errors.join('\n') : undefined,
+      lastError: errors.length ? errors.join('\n').slice(0,10_000) : undefined,
       lastSuccessfulRenderAt: target.validation?.lastSuccessfulRenderAt
     };
     for(const shot of p.shots){
