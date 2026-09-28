@@ -318,6 +318,7 @@ export function reconcileHumanQcTasks(project:FilmProject,shotIds?:Iterable<stri
   const scope=shotIds?new Set(shotIds):undefined;
   const qcByTask=new Map(project.qcResults.filter(result=>result.humanOverrideTaskId).map(result=>[result.humanOverrideTaskId!,result] as const));
   const dismissed:string[]=[];
+  const affectedShotIds=new Set<string>();
   const now=new Date().toISOString();
   for(const task of project.humanTasks){
     if(task.status!=='open')continue;
@@ -331,7 +332,9 @@ export function reconcileHumanQcTasks(project:FilmProject,shotIds?:Iterable<stri
     task.resolvedAt=now;
     task.resolution='Automatically dismissed because the render/QC/state inputs changed and this review task became stale.';
     dismissed.push(task.id);
+    affectedShotIds.add(linked.shotId);
   }
+  for(const shotId of affectedShotIds)refreshCanonicalRender(project,shotId);
   return dismissed;
 }
 
