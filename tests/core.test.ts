@@ -153,6 +153,12 @@ describe('renderer save runtime authority',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
+describe('main-process asset kind validation',()=>{
+  it('rejects runtime IPC values outside the AssetKind union before opening a file dialog',async()=>{
+    const service=new ProjectService();
+    await expect(service.importAsset('../escape' as any)).rejects.toThrow(/invalid asset kind/i);
+  });
+});
 describe('project schema canonicalization',()=>{
   const baseProject=()=>({
     schemaVersion:2,id:'project-1',name:'Film',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
