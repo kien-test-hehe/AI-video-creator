@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
 import { ProjectService, serializeProjectForStorage } from '../src/main/services/project-service';
+import { promoteCanonicalTake, recordObservedFinalState, recordShotQc, resolveHumanTask } from '../src/main/services/production-state-service';
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe } from '../src/main/services/keyframe-service';
@@ -1389,6 +1390,64 @@ describe('production state core',()=>{
       expect(saved.shots.find(shot=>shot.id==='b')?.actualStartStateId).toBeUndefined();
       expect(saved.shotStates.find(state=>state.id==='state-a')?.status).toBe('stale');
       expect(saved.shotStates.find(state=>state.id==='state-b')?.status).toBe('stale');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+
+describe('production state main-process authority',()=>{
+  async function setupProject(){
+    const root=await mkdtemp(join(tmpdir(),'cineforge-production-authority-'));
+    const service=new ProjectService();await service.createAt(root,'Authority Film');
+    await service.mutate(project=>{
+      project.scenes.push({id:'scene-auth',index:1,heading:'INT. LAB',body:'',shotIds:['shot-auth']});
+      project.shots.push({
+        id:'shot-auth',sceneId:'scene-auth',index:1,title:'Authority Shot',prompt:'subject turns toward camera',camera:'medium',action:'turns',dialogue:'',continuityNotes:'',
+        characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',previz:{requirement:'none',status:'not-needed'},
+        generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:7,negativePrompt:'',includeAudio:false},
+        latestRenderId:'out-auth',latestAttemptRenderId:'out-auth'
+      });
+      project.renderOutputs.push({
+        id:'out-auth',jobId:'orphaned',shotId:'shot-auth',path:join(root,'renders','out-auth.mp4'),filename:'out-auth.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',
+        technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}
+      });
+    });
+    return{root,service};
+  }
+
+  it('refuses canonical promotion until required QC passes and creates a durable human task for uncertain QC',async()=>{
+    const{root,service}=await setupProject();
+    try{
+      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[]});
+      await expect(promoteCanonicalTake(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth'})).rejects.toThrow(/semantic QC is missing/i);
+
+      const uncertain=await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'human-verify',issues:[{code:'ACTION_UNCERTAIN',severity:'major',message:'Turn completion is ambiguous.'}]});
+      const task=uncertain.humanTasks.find(item=>item.status==='open');
+      expect(task).toMatchObject({type:'manual-qc',shotId:'shot-auth'});
+      expect(uncertain.qcResults.find(item=>item.layer==='semantic'&&item.status==='human-verify')?.humanOverrideTaskId).toBe(task?.id);
+      await expect(promoteCanonicalTake(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth'})).rejects.toThrow(/semantic QC is human-verify/i);
+
+      await resolveHumanTask(service,{projectRoot:root,taskId:task!.id,status:'resolved',resolution:'Reviewed; request a fresh semantic verdict.'});
+      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'pass',issues:[]});
+      expect(service.getCurrent()?.shots.find(item=>item.id==='shot-auth')?.canonicalRenderId).toBe('out-auth');
+      await expect(promoteCanonicalTake(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth'})).resolves.toMatchObject({schemaVersion:3});
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('records an observed final state only from a technical-QC-passing same-shot video',async()=>{
+    const{root,service}=await setupProject();
+    try{
+      const next=await recordObservedFinalState(service,{
+        projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',
+        characters:[],props:[],environment:{timeOfDay:'NIGHT',lighting:'warm practicals'},camera:{shotSize:'medium',screenDirection:'left-to-right'},
+        actionPhase:'turn complete',dialogueState:'silent',confidence:.91
+      });
+      const shot=next.shots.find(item=>item.id==='shot-auth')!,state=next.shotStates.find(item=>item.id===shot.observedFinalStateId)!;
+      expect(state).toMatchObject({role:'observed-final',source:'generated',status:'current',sourceRenderOutputId:'out-auth',actionPhase:'turn complete',confidence:.91});
+      await service.mutate(project=>{project.renderOutputs.find(item=>item.id==='out-auth')!.technicalQc!.passed=false;});
+      await expect(recordObservedFinalState(service,{
+        projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:''
+      })).rejects.toThrow(/passes technical QC/i);
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
