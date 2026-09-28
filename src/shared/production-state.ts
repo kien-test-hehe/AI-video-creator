@@ -293,7 +293,7 @@ export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string
   const currentProductionInputKey=shot&&output?currentProductionInputKeyForOutput(project,shot,output):undefined;
   const incident=layer==='continuity'
     ? project.shotDependencies
-      .filter(edge=>(edge.fromShotId===shotId||edge.toShotId===shotId)&&edge.propagate.length>0&&edge.relation!=='parallel')
+      .filter(edge=>edge.toShotId===shotId&&edge.propagate.length>0&&edge.relation!=='parallel')
       .sort((a,b)=>a.id.localeCompare(b.id))
       .map(edge=>{
         const from=project.shots.find(item=>item.id===edge.fromShotId);
@@ -380,7 +380,7 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
     else if(matching.issues.some(issue=>issue.severity==='major'||issue.severity==='blocker'))blockers.push(`${layer} QC PASS contains major or blocker issues.`);
   }
 
-  const hasContinuityDependency=project.shotDependencies.some(edge=>(edge.fromShotId===shotId||edge.toShotId===shotId)&&edge.propagate.length>0&&edge.relation!=='parallel');
+  const hasContinuityDependency=project.shotDependencies.some(edge=>edge.toShotId===shotId&&edge.propagate.length>0&&edge.relation!=='parallel');
   if(hasContinuityDependency){
     const layer='continuity' as const,expected=shotQcInputKey(project,shotId,outputId,layer);
     const results=project.qcResults.filter(result=>result.shotId===shotId&&result.renderOutputId===outputId&&result.layer===layer);
