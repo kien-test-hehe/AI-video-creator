@@ -211,7 +211,7 @@ describe('project backup recovery preservation',()=>{
 });
 describe('project serialized-size round trip',()=>{
   it('rejects a project payload before write when it exceeds the loader byte limit',()=>{
-    const project={schemaVersion:2,id:'p',name:'Film',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',story:{title:'Film',logline:'',script:'',notes:'💥'.repeat(100)},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}} as FilmProject;
+    const project={schemaVersion:3,id:'p',name:'Film',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',story:{title:'Film',logline:'',script:'',notes:'💥'.repeat(100)},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}} as FilmProject;
     expect(()=>serializeProjectForStorage(project,256)).toThrow(/storage safety limit/i);
     expect(serializeProjectForStorage(project,4096)).toContain('"Film"');
   });
@@ -787,7 +787,7 @@ describe('signed journal recovery policy',()=>{
 });
 describe('foreground artifact input signatures',()=>{
   const project=():FilmProject=>({
-    schemaVersion:2,id:'p',name:'Film',rootPath:'/project',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    schemaVersion:3,id:'p',name:'Film',rootPath:'/project',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
     story:{title:'Film',logline:'',script:'',notes:''},
     scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['shot']}],
     assets:[{id:'asset',kind:'reference',name:'Ref',sourcePath:'ref.png',projectPath:'assets/ref.png',tags:['a'],notes:'note',createdAt:'2026-01-01T00:00:00.000Z'}],
@@ -795,6 +795,7 @@ describe('foreground artifact input signatures',()=>{
     renderJobs:[],
     renderOutputs:[{id:'out',jobId:'orphaned',shotId:'shot',path:'/project/renders/out.mp4',filename:'out.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}}],
     timeline:[{id:'clip',shotId:'shot',renderOutputId:'out',track:0,order:0,trimInSec:0,volume:1}],
+    shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
     settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
   });
   it('changes export signature only when export-relevant canonical inputs change',()=>{
