@@ -134,6 +134,17 @@ describe('renderer save runtime authority',()=>{
       expect(saved.shots[0].status).toBe('ready');
     }finally{await rm(root,{recursive:true,force:true});}
   });
+  it('rejects oversized renderer edits without truncating or replacing the current project',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-renderer-oversize-'));
+    try{
+      const service=new ProjectService(),created=await service.createAt(root,'Film');
+      const rendererProject=structuredClone(created);rendererProject.story.title='x'.repeat(501);
+      await expect(service.saveFromRenderer(rendererProject)).rejects.toThrow(/500-character safety limit/i);
+      expect(service.getCurrent()?.story.title).toBe('Film');
+      const disk=JSON.parse(await readFile(join(root,'cineforge.project.json'),'utf8'));
+      expect(disk.story.title).toBe('Film');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
   it('does not let a newly renderer-created shot forge render runtime state',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-renderer-save-authority-'));
     try{
