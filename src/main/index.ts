@@ -88,6 +88,7 @@ if(ownsSingleInstanceLock)app.whenReady().then(async () => {
     if(recoveredProject.id!==activeRenderLease.projectId)throw new Error('Active render recovery lease does not match the project stored at its recorded path.');
     if(!recoveredProject.renderJobs.some(job=>job.id===activeRenderLease.jobId))throw new Error(`Active render recovery lease references missing project job ${activeRenderLease.jobId}. Stop the prior backend work before clearing the lease.`);
     await queue.reconcileAfterProjectOpen();
+    await automation.reconcileAfterProjectOpen();
   }
 
   registerMediaProtocol();
