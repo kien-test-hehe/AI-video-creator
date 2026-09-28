@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AppMachineSettings, AutomationRunRequest, AutomationStatus, FilmProject, QcLayer, RenderOutput, Shot } from '../../shared/types';
+import type { AutomationRunRequest, AutomationStatus, FilmProject, QcLayer, RenderOutput, Shot } from '../../shared/types';
 import { canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
@@ -86,7 +86,7 @@ export class ProductionRuntimeService extends EventEmitter{
         const project=this.projects.getCurrent();
         if(!project||project.rootPath!==this.status.projectRoot){this.fail('The open project changed while automation was running.');break;}
         const shot=this.nextIncompleteShot(project);
-        if(!shot){await this.finish(project);break;}
+        if(!shot){await this.finish();break;}
         this.setStatus({currentShotId:shot.id,blockedHumanTaskIds:[]});
 
         const blockers=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id);
@@ -238,7 +238,7 @@ export class ProductionRuntimeService extends EventEmitter{
     await createHumanTask(this.projects,{projectRoot:project.rootPath,type,shotId:shot.id,title,reason,recommendedAction});
   }
 
-  private async finish(project:FilmProject):Promise<void>{
+  private async finish():Promise<void>{
     if(this.buildTimeline){
       this.setStatus({phase:'building-timeline',currentShotId:undefined,message:'Building canonical timeline.'});
       await this.projects.mutate(next=>{
