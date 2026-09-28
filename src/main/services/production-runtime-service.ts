@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AutomationRunRequest, AutomationStatus, FilmProject, QcLayer, RenderOutput, Shot } from '../../shared/types';
+import type { AutomationRunRequest, AutomationStatus, FilmProject, HumanTaskType, QcLayer, RenderOutput, Shot } from '../../shared/types';
 import { canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
@@ -124,14 +124,15 @@ export class ProductionRuntimeService extends EventEmitter{
         if(!project||project.rootPath!==this.status.projectRoot){this.fail('The open project changed while automation was running.');break;}
         let shot=this.nextIncompleteShot(project);
         if(!shot){await this.finish();break;}
-        this.setStatus({currentShotId:shot.id,blockedHumanTaskIds:[]});
-        await this.ensureShotPreviz(shot.id);
+        const currentShotId=shot.id;
+        this.setStatus({currentShotId,blockedHumanTaskIds:[]});
+        await this.ensureShotPreviz(currentShotId);
         project=this.projects.getCurrent();
         if(!project){this.fail('Project closed while preparing previz.');break;}
-        shot=project.shots.find(item=>item.id===shot!.id);
+        shot=project.shots.find(item=>item.id===currentShotId);
         if(!shot){this.fail('Current shot disappeared while preparing previz.');break;}
 
-        const blockers=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id);
+        const blockers=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId);
         if(blockers.length){
           this.setStatus({phase:'waiting-human',message:`Human review required for ${shot.title}.`,blockedHumanTaskIds:blockers.map(task=>task.id)});
           break;
@@ -139,12 +140,12 @@ export class ProductionRuntimeService extends EventEmitter{
         if(shot.previz?.requirement==='required'&&shot.previz.status!=='ready'){
           await this.ensureHumanTask(shot,'verify-previz','3D previz required',`Shot “${shot.title}” is marked as requiring previz before generation.`,'Create or approve the Blender previz, attach its reference/preview, then mark previz ready.');
           const fresh=this.projects.getCurrent();
-          const ids=fresh?.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id).map(task=>task.id)??[];
+          const ids=fresh?.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId).map(task=>task.id)??[];
           this.setStatus({phase:'waiting-human',message:`Previz is required for ${shot.title}.`,blockedHumanTaskIds:ids});break;
         }
 
         const queueSnapshot=this.queue.snapshot();
-        if(queueSnapshot.jobs.some(job=>job.shotId===shot.id&&ACTIVE_RENDER.has(job.status))){
+        if(queueSnapshot.jobs.some(job=>job.shotId===currentShotId&&ACTIVE_RENDER.has(job.status))){
           this.setStatus({phase:'waiting-render',message:`Waiting for ${shot.title} render to finish.`});break;
         }
 
@@ -153,29 +154,29 @@ export class ProductionRuntimeService extends EventEmitter{
           this.setStatus({phase:'qc',message:`Extracting actual state and QC for ${shot.title}.`});
           await this.processTake(shot.id,currentOutput.id);
           const fresh=this.projects.getCurrent();if(!fresh)break;
-          const freshShot=fresh.shots.find(item=>item.id===shot.id);
-          if(freshShot?.canonicalRenderId&&canonicalTakeReadiness(fresh,shot.id,freshShot.canonicalRenderId).ready){
-            if(!this.status.completedShotIds.includes(shot.id))this.status.completedShotIds.push(shot.id);
+          const freshShot=fresh.shots.find(item=>item.id===currentShotId);
+          if(freshShot?.canonicalRenderId&&canonicalTakeReadiness(fresh,currentShotId,freshShot.canonicalRenderId).ready){
+            if(!this.status.completedShotIds.includes(currentShotId))this.status.completedShotIds.push(currentShotId);
             this.setStatus({phase:'planning',message:`${shot.title} approved. Advancing to the next shot.`});
             this.advanceAgain=true;continue;
           }
-          const human=fresh.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id);
+          const human=fresh.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId);
           if(human.length){this.setStatus({phase:'waiting-human',message:`QC for ${shot.title} needs human review.`,blockedHumanTaskIds:human.map(task=>task.id)});break;}
-          const failed=latestCurrentFailure(fresh,shot.id,currentOutput.id);
+          const failed=latestCurrentFailure(fresh,currentShotId,currentOutput.id);
           if(failed){
             if(await this.retryShot(freshShot??shot,failed)){break;}
-            await this.ensureHumanTask(freshShot??shot,'manual-qc','Automatic retries exhausted',`Shot “${shot.title}” still fails ${failed.layer} QC after ${this.status.retryCounts[shot.id]??0} automatic retries.`, 'Review the failed take, adjust references/prompt/previz if needed, then render again.');
-            const after=this.projects.getCurrent();this.setStatus({phase:'waiting-human',message:`Automatic retries exhausted for ${shot.title}.`,blockedHumanTaskIds:after?.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id).map(task=>task.id)??[]});break;
+            await this.ensureHumanTask(freshShot??shot,'manual-qc','Automatic retries exhausted',`Shot “${shot.title}” still fails ${failed.layer} QC after ${this.status.retryCounts[currentShotId]??0} automatic retries.`, 'Review the failed take, adjust references/prompt/previz if needed, then render again.');
+            const after=this.projects.getCurrent();this.setStatus({phase:'waiting-human',message:`Automatic retries exhausted for ${shot.title}.`,blockedHumanTaskIds:after?.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId).map(task=>task.id)??[]});break;
           }
           this.setStatus({phase:'waiting-human',message:`${shot.title} is not canonical-ready and needs review.`});break;
         }
 
-        await this.ensureShotGenerationInputs(shot.id);
+        await this.ensureShotGenerationInputs(currentShotId);
         project=this.projects.getCurrent();
         if(!project){this.fail('Project closed while preparing shot generation inputs.');break;}
-        shot=project.shots.find(item=>item.id===shot!.id);
+        shot=project.shots.find(item=>item.id===currentShotId);
         if(!shot){this.fail('Current shot disappeared while preparing shot generation inputs.');break;}
-        const preparationBlockers=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id);
+        const preparationBlockers=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId);
         if(preparationBlockers.length){
           this.setStatus({phase:'waiting-human',message:`Generation inputs for ${shot.title} need human action.`,blockedHumanTaskIds:preparationBlockers.map(task=>task.id)});break;
         }
@@ -187,7 +188,7 @@ export class ProductionRuntimeService extends EventEmitter{
           this.setStatus({phase:'waiting-human',message:`Prepared inputs for ${shot.title} do not match its video workflow.`,blockedHumanTaskIds:fresh?.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot!.id).map(task=>task.id)??[]});break;
         }
 
-        const failedJob=[...project.renderJobs].filter(job=>job.shotId===shot.id&&['failed','orphaned'].includes(job.status)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0];
+        const failedJob=[...project.renderJobs].filter(job=>job.shotId===currentShotId&&['failed','orphaned'].includes(job.status)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0];
         if(failedJob){
           const count=this.status.retryCounts[shot.id]??0;
           if(count<this.maxAutoRetries){
@@ -381,7 +382,7 @@ export class ProductionRuntimeService extends EventEmitter{
       if(taskTitle==='Reference video required')return Boolean(shot.referenceVideoAssetId);
       return false;
     };
-    const closable=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id&&['verify-keyframe','route-unsupported'].includes(task.type)&&satisfied(task.title));
+    const closable=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId&&['verify-keyframe','route-unsupported'].includes(task.type)&&satisfied(task.title));
     if(!closable.length)return;
     await this.projects.mutate(next=>{for(const task of next.humanTasks){if(!closable.some(item=>item.id===task.id))continue;task.status='resolved';task.resolvedAt=now;task.resolution='Automatically resolved because the required generation input is now attached.';}});
   }
@@ -402,9 +403,9 @@ export class ProductionRuntimeService extends EventEmitter{
     });
   }
 
-  private async ensureHumanTask(shot:Shot,type:'verify-previz'|'manual-qc',title:string,reason:string,recommendedAction:string,relatedRenderOutputIds:string[]=[]):Promise<void>{
+  private async ensureHumanTask(shot:Shot,type:HumanTaskType,title:string,reason:string,recommendedAction:string,relatedRenderOutputIds:string[]=[]):Promise<void>{
     const project=this.projects.getCurrent();if(!project)return;
-    if(project.humanTasks.some(task=>task.status==='open'&&task.shotId===shot.id&&task.type===type&&task.title===title&&relatedRenderOutputIds.every(id=>task.relatedRenderOutputIds.includes(id))))return;
+    if(project.humanTasks.some(task=>task.status==='open'&&task.shotId===currentShotId&&task.type===type&&task.title===title&&relatedRenderOutputIds.every(id=>task.relatedRenderOutputIds.includes(id))))return;
     await createHumanTask(this.projects,{projectRoot:project.rootPath,type,shotId:shot.id,title,reason,recommendedAction,relatedRenderOutputIds});
   }
 
