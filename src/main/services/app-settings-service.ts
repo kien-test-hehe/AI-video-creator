@@ -126,7 +126,8 @@ export class AppSettingsService {
 }
 
 function sanitizeMachineSettings(raw:any):AppMachineSettings{
-  const defaults=structuredClone(DEFAULT_APP_MACHINE_SETTINGS),source=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{};
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('Machine settings must be a JSON object.');
+  const defaults=structuredClone(DEFAULT_APP_MACHINE_SETTINGS),source=raw;
   if(source.schemaVersion!=null&&source.schemaVersion!==1)throw new UnsupportedMachineSettingsSchemaError(`Unsupported machine settings schema: ${String(source.schemaVersion)}`);
   const out:AppMachineSettings={
     schemaVersion:1,endpointPolicy:'loopback-only',
