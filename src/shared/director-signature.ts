@@ -27,7 +27,7 @@ export function continuityPredecessorShots(project:FilmProject,shot:Shot):Shot[]
     const source=project.shots.find(item=>item.id===edge.fromShotId);
     if(source&&!seen.has(source.id)){seen.add(source.id);resolved.push(source);}
   }
-  if(resolved.length)return resolved;
+  if(resolved.length||project.shotDependencies.length>0)return resolved;
   const siblings=project.shots.filter(item=>item.sceneId===shot.sceneId).sort((a,b)=>a.index-b.index);
   const index=siblings.findIndex(item=>item.id===shot.id),prior=index>0?siblings[index-1]:undefined;
   return prior?[prior]:[];
