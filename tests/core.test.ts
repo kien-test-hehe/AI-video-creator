@@ -869,6 +869,17 @@ describe('WanGP Docker mount argument safety',()=>{
     }
   });
 });
+describe('machine execution-mode integrity',()=>{
+  it('rejects an explicit invalid WanGP execution mode instead of falling back to native',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-machine-mode-'));
+    try{
+      const service=new AppSettingsService(root),before=await service.load(),next:any=structuredClone(before);
+      next.wangp.executionMode='container-ish';
+      await expect(service.save(next)).rejects.toThrow(/invalid wangp execution mode/i);
+      expect(service.get().wangp.executionMode).toBe(before.wangp.executionMode);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('machine settings string bounds',()=>{
   it('rejects oversized values before save so persisted settings remain reloadable',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-machine-string-bound-'));
