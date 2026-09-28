@@ -253,8 +253,8 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
   return created;
 }
 
-export function shotProductionInputKey(project:FilmProject,shot:Shot):string{
-  return productionFingerprint('render-input',shotProjectRenderInputKey(project,shot));
+export function shotProductionInputKey(project:FilmProject,shot:Shot,profile?:WorkflowProfile):string{
+  return productionFingerprint('render-input',profile?shotProjectRenderInputKeyForProfile(project,shot,profile):shotProjectRenderInputKey(project,shot));
 }
 
 export function renderOutputProductionInputKey(project:FilmProject,output:RenderOutput):string|undefined{
