@@ -214,6 +214,10 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
   return created;
 }
 
+export function shotProductionInputKey(project:FilmProject,shot:Shot):string{
+  return productionStableId('render-input',shotProjectRenderInputKey(project,shot));
+}
+
 export function renderOutputProductionInputKey(project:FilmProject,output:RenderOutput):string|undefined{
   if(output.productionInputKey)return output.productionInputKey;
   return project.renderJobs.find(job=>job.id===output.jobId)?.spec?.productionInputKey;
@@ -241,7 +245,7 @@ export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string
     : [];
   return productionStableId('qc-input',JSON.stringify({
     layer,shotId,outputId,productionInputKey,
-    currentShotInput:shot?shotProjectRenderInputKey(project,shot):undefined,
+    currentShotInput:shot?shotProductionInputKey(project,shot):undefined,
     incident
   }));
 }
@@ -254,7 +258,7 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
   if(!output)return{ready:false,blockers:['Render output is missing, belongs to another shot, or is not video.']};
 
   const recordedInputKey=renderOutputProductionInputKey(project,output);
-  const currentInputKey=shotProjectRenderInputKey(project,shot);
+  const currentInputKey=shotProductionInputKey(project,shot);
   if(!recordedInputKey)blockers.push('Render output predates production-input provenance and cannot be promoted safely.');
   else if(recordedInputKey!==currentInputKey)blockers.push('Render output was generated from stale shot, reference, workflow, or propagated-state inputs.');
 
