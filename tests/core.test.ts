@@ -321,6 +321,16 @@ describe('project schema canonicalization',()=>{
     raw.renderOutputs[0].technicalQc.width=1920;raw.renderOutputs[0].technicalQc.audioPeakDb=101;
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/optional number.*-300\.\.100/i);
   });
+  it('rejects explicit invalid timestamps and oversized metadata instead of rewriting them',()=>{
+    const badTime:any=baseProject();badTime.updatedAt='not-a-date';
+    expect(()=>loadPortableProject(badTime,'/project')).toThrow(/invalid project timestamp/i);
+
+    const badMeta:any=baseProject();badMeta.renderOutputs[0].comfyMeta={filename:'x'.repeat(4097)};
+    expect(()=>loadPortableProject(badMeta,'/project')).toThrow(/comfy metadata filename.*4096-character/i);
+
+    const badSource:any=baseProject();badSource.assets=[{id:'asset',kind:'reference',name:'A',sourcePath:'x'.repeat(2049),projectPath:'assets/reference/a.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];
+    expect(()=>loadPortableProject(badSource,'/project')).toThrow(/asset source label.*2048-character/i);
+  });
   it('rejects render outputs that do not have a durable path',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/render output path is required/i);
