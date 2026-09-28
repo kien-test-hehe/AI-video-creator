@@ -933,6 +933,27 @@ describe('Windows bootstrap source integrity guards',()=>{
     expect(run).toMatch(/status --porcelain --untracked-files=normal/i);
     expect(run).toMatch(/\$workingTreeDirty/);
   });
+  it('pins the portable npm version and preserves bootstrap launcher failures',async()=>{
+    const setup=await readFile(join(process.cwd(),'scripts','setup-windows.ps1'),'utf8');
+    const setupCmd=await readFile(join(process.cwd(),'setup.cmd'),'utf8');
+    const startCmd=await readFile(join(process.cwd(),'start.cmd'),'utf8');
+    const verifyCmd=await readFile(join(process.cwd(),'verify.cmd'),'utf8');
+    expect(setup).toContain("$NpmVersion = '10.9.9'");
+    expect(setup).toMatch(/npm@\$NpmVersion/i);
+    expect(setupCmd).toMatch(/set "CINEFORGE_EXIT=%ERRORLEVEL%"/i);
+    expect(setupCmd).toMatch(/exit \/b %CINEFORGE_EXIT%/i);
+    expect(startCmd).toMatch(/exit \/b %ERRORLEVEL%/i);
+    expect(verifyCmd).toMatch(/exit \/b %ERRORLEVEL%/i);
+  });
+  it('ships a workstation verifier for GPU, pinned WanGP, CUDA, dependencies and deep validation',async()=>{
+    const verify=await readFile(join(process.cwd(),'scripts','verify-windows.ps1'),'utf8');
+    expect(verify).toMatch(/nvidia-smi\.exe/i);
+    expect(verify).toMatch(/WanGP source matches pinned commit/i);
+    expect(verify).toMatch(/torch\.cuda\.is_available/i);
+    expect(verify).toMatch(/CineForge npm dependencies are installed/i);
+    expect(verify).toMatch(/Running deep source validation/i);
+    expect(verify).toMatch(/Verification PASSED/i);
+  });
 });
 describe('machine settings persistence trust',()=>{
   it('uses strict booleans and backs up trusted memory instead of tampered disk bytes',async()=>{
