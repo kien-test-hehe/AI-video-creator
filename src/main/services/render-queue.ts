@@ -862,7 +862,18 @@ export class RenderQueueService extends EventEmitter {
         else if(qcFailed)shot.status='failed';
         else{shot.status='rendered';shot.latestRenderId=(passing??videos[0]??outputs[0])?.id;}
       }
-      const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(!qcFailed&&canRefreshProfileValidationFromRender(profile,job.spec)){profile!.validation={...profile!.validation!,lastSuccessfulRenderAt:now};}
+      const profile=p.settings.workflowProfiles.find(item=>item.id===job.spec?.workflowProfile.id);if(!qcFailed&&canRefreshProfileValidationFromRender(profile,job.spec)){
+        const wallSec=Math.max(0,(Date.parse(now)-Date.parse(job.createdAt))/1000);
+        profile!.validation={
+          ...profile!.validation!,
+          lastSuccessfulRenderAt:now,
+          successfulRenderCount:(profile!.validation?.successfulRenderCount??0)+1,
+          lastRenderWallSec:Number.isFinite(wallSec)?wallSec:undefined,
+          lastRenderWidth:job.spec?.shot.generation.width,
+          lastRenderHeight:job.spec?.shot.generation.height,
+          lastRenderFrames:job.spec?.shot.generation.frames
+        };
+      }
     });
     // The backend is already terminal and the project summary is durable. Clear the machine
     // GPU lease before the final signed-journal refresh so a crash here cannot make an older
