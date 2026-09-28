@@ -208,6 +208,17 @@ describe('main-process asset kind validation',()=>{
     await expect(service.importAsset('../escape' as any)).rejects.toThrow(/invalid asset kind/i);
   });
 });
+describe('internal shot creation bounds',()=>{
+  it('refuses a scene body that cannot fit the canonical shot prompt',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-shot-prompt-bound-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Film');
+      await service.mutate(project=>{project.scenes.push({id:'scene-long',index:1,heading:'INT. LONG',body:'x'.repeat(200_001),shotIds:[]});});
+      await expect(service.addShot('scene-long')).rejects.toThrow(/shot prompt safety limit/i);
+      expect(service.getCurrent()?.shots).toHaveLength(0);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('project schema canonicalization',()=>{
   const baseProject=()=>({
     schemaVersion:2,id:'project-1',name:'Film',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
@@ -963,6 +974,11 @@ describe('Comfy file record validation',()=>{
     expect(()=>validateComfyFileRef({subfolder:'x'},'upload')).toThrow(/filename/i);
     expect(()=>validateComfyFileRef({filename:'x.png',subfolder:4},'upload')).toThrow(/subfolder/i);
     expect(validateComfyFileRef({filename:'x.png',subfolder:'cineforge',type:'input'},'upload')).toEqual({filename:'x.png',subfolder:'cineforge',type:'input'});
+  });
+  it('rejects output metadata that cannot fit the canonical project schema',()=>{
+    expect(()=>validateComfyFileRef({filename:'x'.repeat(2049)},'output')).toThrow(/2048-character project safety limit/i);
+    expect(()=>validateComfyFileRef({filename:'ok.png',subfolder:'x'.repeat(4097)},'output')).toThrow(/4096-character project safety limit/i);
+    expect(()=>validateComfyFileRef({filename:'ok.png',type:'x'.repeat(4097)},'output')).toThrow(/4096-character project safety limit/i);
   });
 });
 describe('Comfy queue identity',()=>{
