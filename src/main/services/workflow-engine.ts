@@ -246,10 +246,28 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
   const warnings: string[] = [];
   let requiresApiExport = false;
   const result=Object.create(null) as ApiWorkflow;
-  const activeNodes = new Map<string, UiWorkflowNode>();
-  for (const node of ui.nodes || []) {
-    if (node.mode != null && node.mode !== 0) continue;
-    activeNodes.set(String(node.id), node);
+  const activeNodes = new Map<string, UiWorkflowNode>(),seenNodeIds=new Set<string>();
+  for (const rawNode of ui.nodes || []) {
+    if(!rawNode||typeof rawNode!=='object'||Array.isArray(rawNode)){requiresApiExport=true;warnings.push('Workflow contains a malformed node record. Export Save (API Format).');continue;}
+    const node=rawNode as UiWorkflowNode,rawId=node.id;
+    const nodeId=(typeof rawId==='string'||typeof rawId==='number')?String(rawId):'';
+    if(!nodeId){requiresApiExport=true;warnings.push('Workflow contains a node with a missing/invalid id. Export Save (API Format).');continue;}
+    if(seenNodeIds.has(nodeId)){requiresApiExport=true;warnings.push(`Workflow contains duplicate node id ${nodeId}. Automatic conversion is unsafe; export Save (API Format).`);continue;}
+    seenNodeIds.add(nodeId);
+    if(typeof node.type!=='string'||!node.type.trim()){requiresApiExport=true;warnings.push(`Node ${nodeId} has a missing/invalid type. Export Save (API Format).`);continue;}
+    if(node.mode!=null&&(!Number.isInteger(node.mode)||node.mode<0)){requiresApiExport=true;warnings.push(`Node ${nodeId} has an invalid mode. Export Save (API Format).`);continue;}
+    if(node.inputs!=null&&!Array.isArray(node.inputs)){requiresApiExport=true;warnings.push(`Node ${nodeId} has malformed inputs. Export Save (API Format).`);continue;}
+    if(node.outputs!=null&&!Array.isArray(node.outputs)){requiresApiExport=true;warnings.push(`Node ${nodeId} has malformed outputs. Export Save (API Format).`);continue;}
+    if(node.widgets_values!=null&&!Array.isArray(node.widgets_values)){requiresApiExport=true;warnings.push(`Node ${nodeId} has malformed widget values. Export Save (API Format).`);continue;}
+    if(node.mode != null && node.mode !== 0) continue;
+    const inputNames=new Set<string>();let invalidInput=false;
+    for(const input of node.inputs??[]){
+      if(!input||typeof input!=='object'||Array.isArray(input)||typeof input.name!=='string'||!input.name){requiresApiExport=true;warnings.push(`Node ${nodeId} contains a malformed input record. Export Save (API Format).`);invalidInput=true;break;}
+      if(inputNames.has(input.name)){requiresApiExport=true;warnings.push(`Node ${nodeId} contains duplicate input name ${input.name}. Export Save (API Format).`);invalidInput=true;break;}
+      inputNames.add(input.name);
+    }
+    if(invalidInput)continue;
+    activeNodes.set(nodeId, node);
   }
   const links = new Map<string, NonNullable<ReturnType<typeof normalizeLink>>>();
   for (const raw of ui.links || []) {
@@ -259,6 +277,7 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
     links.set(normalized.id, normalized);
   }
 
+  const consumedLinkIds=new Set<string>();
   for (const [nodeId, node] of activeNodes) {
     const schema=Object.prototype.hasOwnProperty.call(objectInfo,node.type)?objectInfo[node.type]:undefined;
     if (!schema) {
@@ -279,6 +298,8 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
       if (input.link == null) continue;
       const link = links.get(String(input.link));
       if(!link){requiresApiExport=true;warnings.push(`Node ${nodeId}.${input.name} references missing or malformed link ${String(input.link)}. Export Save (API Format).`);continue;}
+      if(consumedLinkIds.has(link.id)){requiresApiExport=true;warnings.push(`Link ${link.id} is referenced by more than one target input. Export Save (API Format).`);continue;}
+      consumedLinkIds.add(link.id);
       if(link.targetId!==nodeId){requiresApiExport=true;warnings.push(`Link ${link.id} targets node ${link.targetId} but is referenced by node ${nodeId}.${input.name}. Export Save (API Format).`);continue;}
       if (!activeNodes.has(link.originId)) {
         requiresApiExport=true;
