@@ -173,11 +173,11 @@ export class ProjectService {
         }
         shot.latestAttemptRenderId=currentShot.latestAttemptRenderId;
         shot.canonicalRenderId=currentShot.canonicalRenderId;
-        const stateIds=new Set(incoming.shotStates.map(state=>state.id));
-        shot.plannedStartStateId=currentShot.plannedStartStateId&&stateIds.has(currentShot.plannedStartStateId)?currentShot.plannedStartStateId:undefined;
-        shot.plannedEndStateId=currentShot.plannedEndStateId&&stateIds.has(currentShot.plannedEndStateId)?currentShot.plannedEndStateId:undefined;
+        const retainedState=(id:string|undefined)=>id?incoming.shotStates.find(state=>state.id===id&&state.status!=='stale'):undefined;
+        shot.plannedStartStateId=retainedState(currentShot.plannedStartStateId)?.id;
+        shot.plannedEndStateId=retainedState(currentShot.plannedEndStateId)?.id;
         const manualStartFrameChanged=shot.startFrameAssetId!==currentShot.startFrameAssetId;
-        const retainedActualId=currentShot.actualStartStateId&&stateIds.has(currentShot.actualStartStateId)?currentShot.actualStartStateId:undefined;
+        const retainedActualId=retainedState(currentShot.actualStartStateId)?.id;
         if(manualStartFrameChanged){
           const prior=retainedActualId?incoming.shotStates.find(state=>state.id===retainedActualId):undefined;
           if(prior)invalidateStateCascade(incoming,[prior.id],'Start frame was manually changed; prior propagated start state is stale.');
@@ -193,7 +193,7 @@ export class ProjectService {
             incoming.shotStates.push(humanState);shot.actualStartStateId=humanState.id;
           }else shot.actualStartStateId=undefined;
         }else shot.actualStartStateId=retainedActualId;
-        shot.observedFinalStateId=currentShot.observedFinalStateId&&stateIds.has(currentShot.observedFinalStateId)?currentShot.observedFinalStateId:undefined;
+        shot.observedFinalStateId=retainedState(currentShot.observedFinalStateId)?.id;
       }
       rebuildDefaultSequentialDependencies(incoming,undefined,new Date().toISOString());
       const changedRenderInputShotIds:string[]=[];
