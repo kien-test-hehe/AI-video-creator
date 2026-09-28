@@ -1,4 +1,4 @@
-import type { AppMachineSettings, AssetKind, ContinuityReview, DirectorShotDraft, FilmProject, KeyframeRequest, ParsedScene, PreflightReport, QueueSnapshot, RenderBatchRequest, RenderRequest, SystemProbe, WanGpCatalogEntry, WorkflowProfile } from './types';
+import type { AppMachineSettings, AssetKind, ContinuityReview, CreateHumanTaskRequest, DirectorShotDraft, FilmProject, KeyframeRequest, ParsedScene, PreflightReport, PromoteCanonicalTakeRequest, QueueSnapshot, RecordObservedFinalStateRequest, RecordShotQcRequest, RenderBatchRequest, RenderRequest, ResolveHumanTaskRequest, SystemProbe, WanGpCatalogEntry, WorkflowProfile } from './types';
 
 export interface CapCutHandoffResult { directory: string; manifestPath: string; taskPath: string; prompt: string; }
 
@@ -44,5 +44,12 @@ export interface CineforgeApi {
     reviewShot(shotId: string): Promise<ContinuityReview>;
   };
   keyframe: { generate(request: KeyframeRequest): Promise<FilmProject>; cancel(): Promise<boolean>; };
+  production: {
+    recordObservedFinalState(request:RecordObservedFinalStateRequest):Promise<FilmProject>;
+    recordQc(request:RecordShotQcRequest):Promise<FilmProject>;
+    createHumanTask(request:CreateHumanTaskRequest):Promise<FilmProject>;
+    resolveHumanTask(request:ResolveHumanTaskRequest):Promise<FilmProject>;
+    promoteCanonicalTake(request:PromoteCanonicalTakeRequest):Promise<FilmProject>;
+  };
   capcut: { prepareHandoff(): Promise<CapCutHandoffResult>; };
 }
