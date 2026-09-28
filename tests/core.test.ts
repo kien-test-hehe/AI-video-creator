@@ -8,7 +8,7 @@ import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
 import { directorText } from '../src/main/services/director-service';
 import { parseVolumeDetectPeak, technicalQcStructuralIssues } from '../src/main/services/technical-qc';
-import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, Shot, WorkflowProfile } from '../src/shared/types';
+import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { alternateShotTitle, appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
@@ -2032,7 +2032,7 @@ describe('directional continuity canonical gate',()=>{
       settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
     } as FilmProject;
     for(const shot of [a,b]){
-      const output={id:`out-${shot.id}`,jobId:'legacy',shotId:shot.id,path:`/tmp/directional/${shot.id}.mp4`,filename:`${shot.id}.mp4`,mediaType:'video' as const,createdAt:'2026-01-01T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}};
+      const output:RenderOutput={id:`out-${shot.id}`,jobId:'legacy',shotId:shot.id,path:`/tmp/directional/${shot.id}.mp4`,filename:`${shot.id}.mp4`,mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}};
       project.renderOutputs.push(output);
       output.productionInputKey=shotProductionInputKey(project,shot);
       for(const layer of ['visual','semantic'] as const)project.qcResults.push({id:`${shot.id}-${layer}`,shotId:shot.id,renderOutputId:output.id,layer,status:'pass',issues:[],inputKey:shotQcInputKey(project,shot.id,output.id,layer),createdAt:'2026-01-01T00:00:01.000Z'});
