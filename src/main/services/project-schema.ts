@@ -397,15 +397,13 @@ function asObject(value: unknown, label: string): Record<string, any> {
 function array(value: unknown): any[] { return Array.isArray(value) ? value : []; }
 function boundedArray(value:unknown,label:string,max:number):any[]{const items=array(value);if(items.length>max)throw new Error(`${label} exceed the safety limit of ${max} items.`);return items;}
 function str(value: unknown, fallback: string, max: number): string { if(value==null)return fallback;if(typeof value!=='string')throw new Error(`Project string must be a string, got ${typeof value}.`);if(value.length>max)throw new Error(`Project string exceeds the ${max}-character safety limit.`);return value; }
-function booleanOrDefault(value:unknown,fallback:boolean,label:string):boolean{
+function booleanOrDefault(value:unknown,fallback:boolean,_label:string):boolean{
   if(value==null||value==='')return fallback;
-  if(typeof value==='boolean')return value;
-  throw new Error(`Invalid ${label}: expected boolean.`);
+  return typeof value==='boolean'?value:false;
 }
-function optionalBoolean(value:unknown,label:string):boolean|undefined{
+function optionalBoolean(value:unknown,_label:string):boolean|undefined{
   if(value==null||value==='')return undefined;
-  if(typeof value==='boolean')return value;
-  throw new Error(`Invalid ${label}: expected boolean.`);
+  return typeof value==='boolean'?value:undefined;
 }
 function enumOrDefault<T extends string>(value:unknown,allowed:ReadonlySet<T>,fallback:T,label:string):T{
   if(value==null||value==='')return fallback;
