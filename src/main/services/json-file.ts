@@ -3,6 +3,14 @@ import { stat } from 'node:fs/promises';
 
 export const MAX_WORKFLOW_JSON_BYTES=64*1024*1024;
 
+export function stringifyJsonLimited(value:unknown,label:string,maxBytes:number):string{
+  const payload=JSON.stringify(value,null,2);
+  if(typeof payload!=='string')throw new Error(`${label} could not be serialized as JSON.`);
+  const bytes=Buffer.byteLength(payload,'utf8');
+  if(bytes>maxBytes)throw new Error(`${label} would exceed the ${maxBytes}-byte storage safety limit (${bytes} bytes).`);
+  return payload;
+}
+
 export async function readFileBufferLimited(
   path:string,
   label='file',
