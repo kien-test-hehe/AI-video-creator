@@ -20,8 +20,11 @@ export function validateComfyFileRef(value:unknown,label='ComfyUI file'):ComfyFi
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${label} returned an invalid file record.`);
   const candidate=value as Record<string,unknown>;
   if(typeof candidate.filename!=='string'||!candidate.filename.trim())throw new Error(`${label} returned no usable filename.`);
+  if(candidate.filename.length>2048)throw new Error(`${label} filename exceeds the 2048-character project safety limit.`);
   if(candidate.subfolder!=null&&typeof candidate.subfolder!=='string')throw new Error(`${label} returned an invalid subfolder.`);
+  if(typeof candidate.subfolder==='string'&&candidate.subfolder.length>4096)throw new Error(`${label} subfolder exceeds the 4096-character project safety limit.`);
   if(candidate.type!=null&&typeof candidate.type!=='string')throw new Error(`${label} returned an invalid file type.`);
+  if(typeof candidate.type==='string'&&candidate.type.length>4096)throw new Error(`${label} file type exceeds the 4096-character project safety limit.`);
   return{filename:candidate.filename,...(candidate.subfolder!=null?{subfolder:candidate.subfolder as string}:{}),...(candidate.type!=null?{type:candidate.type as string}:{})};
 }
 
