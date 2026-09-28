@@ -329,6 +329,19 @@ describe('project schema canonicalization',()=>{
     const badProfile:any=baseProject();badProfile.settings={workflowProfiles:[{id:'wf',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/project/workflows/wf.json',workflowFormat:'mystery',bindings:[],enabled:false}]};
     expect(()=>loadPortableProject(badProfile,'/project')).toThrow(/invalid workflow format/i);
   });
+  it('rejects explicit invalid project scalar types instead of silently defaulting them',()=>{
+    const badNumber:any=baseProject();badNumber.shots[0].generation.fps='not-a-number';
+    expect(()=>loadPortableProject(badNumber,'/project')).toThrow(/project integer is invalid/i);
+
+    const badBoolean:any=baseProject();badBoolean.shots[0].generation.includeAudio='yes';
+    expect(()=>loadPortableProject(badBoolean,'/project')).toThrow(/invalid shot includeAudio flag/i);
+
+    const badString:any=baseProject();badString.story.title=123;
+    expect(()=>loadPortableProject(badString,'/project')).toThrow(/project string must be a string/i);
+
+    const badQc:any=baseProject();badQc.renderOutputs[0].technicalQc={checkedAt:'2026-01-02T00:00:00.000Z',passed:'true',issues:[],warnings:[]};
+    expect(()=>loadPortableProject(badQc,'/project')).toThrow(/invalid technical QC passed flag/i);
+  });
   it('canonicalizes parseable timestamps before lexical latest/recovery ordering',()=>{
     const raw=baseProject();raw.renderOutputs[0].createdAt='2026-01-01T09:00:00-05:00';
     const loaded=loadPortableProject(raw,'/project').project;
