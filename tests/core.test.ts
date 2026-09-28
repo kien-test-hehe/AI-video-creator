@@ -1468,6 +1468,18 @@ describe('production state main-process authority',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 
+  it('automatically dismisses a pending human QC review when its shot provenance becomes stale',async()=>{
+    const{root,service}=await setupProject();
+    try{
+      const uncertain=await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'human-verify',issues:[{code:'FACE_UNCERTAIN',severity:'major',message:'Face match needs review.'}]});
+      const task=uncertain.humanTasks.find(item=>item.status==='open')!;
+      const edited=structuredClone(uncertain);edited.shots.find(item=>item.id==='shot-auth')!.prompt='changed after review request';
+      const saved=await service.saveFromRenderer(edited);
+      expect(saved.humanTasks.find(item=>item.id===task.id)).toMatchObject({status:'dismissed'});
+      expect(saved.humanTasks.find(item=>item.id===task.id)?.resolution).toMatch(/became stale/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
   it('records an observed final state only from a current render with technical, visual and semantic QC pass',async()=>{
     const{root,service}=await setupProject();
     try{
