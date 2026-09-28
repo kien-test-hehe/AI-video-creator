@@ -164,7 +164,7 @@ export function rebuildDefaultSequentialDependencies(project:FilmProject,sceneId
     return !isDefaultSequentialDependency(edge);
   });
   const defaults=defaultSequentialDependencies(project.shots.filter(shot=>scope.has(shot.sceneId)),createdAt)
-    .filter(edge=>!preserved.some(existing=>existing.fromShotId===edge.fromShotId&&existing.toShotId===edge.toShotId&&existing.relation==='continuity'));
+    .filter(edge=>!preserved.some(existing=>existing.fromShotId===edge.fromShotId&&existing.toShotId===edge.toShotId));
   project.shotDependencies=[...preserved,...defaults];
 
   for(const shot of project.shots){
