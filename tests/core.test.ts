@@ -15,7 +15,7 @@ import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
-import { continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
+import { continuityPredecessorShots, continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
@@ -1177,6 +1177,18 @@ describe('WanGP compile media modes',()=>{
    }finally{await rm(root,{recursive:true,force:true});}
  });
 });
+describe('Director continuity dependency context',()=>{
+  it('uses explicit incoming continuity dependencies instead of accidental index adjacency',()=>{
+    const base=(id:string,index:number):Shot=>({id,sceneId:'scene',index,title:id,prompt:id,camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:index,negativePrompt:'',includeAudio:false}});
+    const a=base('a',1),b=base('b',2),c=base('c',3);
+    const project={id:'p',story:{title:'',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['a','b','c']}],shots:[a,b,c],assets:[],shotDependencies:[{id:'custom',fromShotId:'a',toShotId:'c',relation:'continuity',strength:'hard',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}],settings:{workflowProfiles:[]}} as unknown as FilmProject;
+    expect(continuityPredecessorShots(project,c).map(item=>item.id)).toEqual(['a']);
+    const first=continuityReviewInputKey(project,c);
+    project.shotDependencies[0].propagate=['character','camera'];
+    expect(continuityReviewInputKey(project,c)).not.toBe(first);
+  });
+});
+
 describe('AI Director validated route selection',()=>{
   it('returns the actual validated workflow mode for a model family',()=>{
     const project={settings:{workflowProfiles:[
