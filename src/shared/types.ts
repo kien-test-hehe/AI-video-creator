@@ -297,7 +297,7 @@ export interface RecordShotQcRequest {
   layer:Exclude<QcLayer,'technical'>;
   status:QcStatus;
   issues:QcIssue[];
-  inputKey?:string;
+  inputKey:string;
 }
 
 export interface CreateHumanTaskRequest {
