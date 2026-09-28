@@ -6,7 +6,7 @@ import type {
 } from '../../shared/types';
 import {
   canonicalTakeReadiness, invalidateObservedFinalState, propagateObservedFinalState,
-  refreshCanonicalRender, shotStateContentKey
+  refreshCanonicalRender, renderOutputProductionInputKey, shotProductionInputKey, shotQcInputKey, shotStateFingerprint
 } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 
@@ -25,6 +25,13 @@ export async function recordObservedFinalState(projects:ProjectService,request:R
     const output=project.renderOutputs.find(item=>item.id===request.renderOutputId&&item.shotId===shot.id&&item.mediaType==='video');
     if(!output)throw new Error('Observed final state must reference a video output from the same shot.');
     if(!output.technicalQc?.passed)throw new Error('Observed final state cannot become current until the source video passes technical QC.');
+    const recordedInputKey=renderOutputProductionInputKey(project,output),currentInputKey=shotProductionInputKey(project,shot);
+    if(!recordedInputKey||recordedInputKey!==currentInputKey)throw new Error('Observed final state cannot be recorded from a stale or provenance-unknown render output.');
+    for(const layer of ['visual','semantic'] as const){
+      const expected=shotQcInputKey(project,shot.id,output.id,layer);
+      const result=project.qcResults.filter(item=>item.shotId===shot.id&&item.renderOutputId===output.id&&item.layer===layer&&item.inputKey===expected).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+      if(!result||result.status!=='pass')throw new Error(`Observed final state requires current ${layer} QC PASS before it can propagate continuity.`);
+    }
 
     const frameAssetId=request.frameAssetId?requireAsset(project,request.frameAssetId,new Set(['image','reference','keyframe']),'observed-final frame').id:undefined;
     const characters=normalizeCharacters(project,request.characters);
@@ -57,7 +64,7 @@ export async function recordObservedFinalState(projects:ProjectService,request:R
       dialogueState:requireString(request.dialogueState??'',20_000,'dialogue state'),
       confidence,createdAt:new Date().toISOString()
     };
-    state.fingerprint=shotStateContentKey(state).slice(0,4096);
+    state.fingerprint=shotStateFingerprint(state);
     project.shotStates.push(state);
     shot.observedFinalStateId=state.id;
     propagateObservedFinalState(project,shot.id,state.createdAt);
@@ -75,9 +82,11 @@ export async function recordShotQc(projects:ProjectService,request:RecordShotQcR
     if(!['visual','semantic','continuity'].includes(request.layer))throw new Error('Only visual, semantic, or continuity QC can be recorded through the production-state API.');
     if(!['pass','fail','unknown','human-verify'].includes(request.status))throw new Error('Invalid QC status.');
     const issues=normalizeIssues(request.issues);
+    const inputKey=shotQcInputKey(project,shot.id,output.id,request.layer);
+    if(request.inputKey&&request.inputKey!==inputKey)throw new Error('QC input key is stale or does not match the current shot/output/state graph.');
     const result:ShotQcResult={
       id:randomUUID(),shotId:shot.id,renderOutputId:output.id,layer:request.layer,status:request.status,
-      issues,inputKey:optionalText(request.inputKey,20_000,'QC input key'),createdAt:new Date().toISOString()
+      issues,inputKey,createdAt:new Date().toISOString()
     };
     project.qcResults.push(result);
     if(request.status==='human-verify'){
