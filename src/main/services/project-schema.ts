@@ -210,6 +210,11 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
       sourceSha256: sha(validationSource.sourceSha256),
       runtimeFingerprint: str(validationSource.runtimeFingerprint, '', 512) || undefined,
       lastSuccessfulRenderAt: maybeIso(validationSource.lastSuccessfulRenderAt),
+      successfulRenderCount: boundedOptionalNumber(validationSource.successfulRenderCount,0,1_000_000,'workflow successful render count'),
+      lastRenderWallSec: boundedOptionalNumber(validationSource.lastRenderWallSec,0,7*24*60*60,'workflow last render wall seconds'),
+      lastRenderWidth: boundedOptionalNumber(validationSource.lastRenderWidth,64,16_384,'workflow last render width'),
+      lastRenderHeight: boundedOptionalNumber(validationSource.lastRenderHeight,64,16_384,'workflow last render height'),
+      lastRenderFrames: boundedOptionalNumber(validationSource.lastRenderFrames,1,100_000,'workflow last render frames'),
       lastError: str(validationSource.lastError, '', 10_000) || undefined
     }
   };
@@ -669,3 +674,11 @@ function sourceLabel(value:unknown):string{
   return label;
 }
 function sha(value: unknown): string | undefined { if(value==null||value==='')return undefined;if(typeof value==='string'&&/^[a-f0-9]{64}$/i.test(value))return value.toLowerCase();throw new Error('Invalid SHA-256 project fingerprint.'); }
+
+
+function boundedOptionalNumber(value:unknown,min:number,max:number,label:string):number|undefined{
+  if(value==null||value==='')return undefined;
+  const number=Number(value);
+  if(!Number.isFinite(number)||number<min||number>max)throw new Error(`Invalid ${label}.`);
+  return number;
+}
