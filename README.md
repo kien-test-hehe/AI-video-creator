@@ -1,4 +1,4 @@
-# CineForge Local 0.3
+# CineForge Local 0.4
 
 **Codex orchestrates. Local AI renders. CapCut finishes.**
 
@@ -21,7 +21,10 @@ start.cmd
 - FFmpeg + FFprobe when missing;
 - the pinned WanGP source/runtime and its automatic RTX-aware environment installer;
 - CineForge npm dependencies and source validation;
-- machine-local environment values for WanGP/Python/FFmpeg.
+- machine-local environment values for WanGP/Python/FFmpeg;
+- Ollama plus the local `qwen3-vl:4b` vision model for automatic visual/semantic/continuity QC unless setup is run with `-SkipVisionModel`.
+
+`start.cmd` also starts the local Ollama service when automatic QC is configured. The QC model is unloaded after each shot's QC batch so it does not sit on the RTX 5060 Ti's 16 GB VRAM while the next diffusion render starts.
 
 NVIDIA display/compute drivers are intentionally **not** silently upgraded by the script; if `nvidia-smi` is missing, setup stops with a clear prerequisite error. CapCut is detected but is not forcibly installed or upgraded.
 
@@ -43,7 +46,12 @@ Studio keeps the production state visible at once:
 - bottom Queue dock with every job plus cancel/retry controls and shot focus;
 - bottom Timeline dock with every canonical clip, drag-to-reorder and rendered-take → timeline insertion;
 - System / Preflight node plus GPU/VRAM/WanGP/ComfyUI/CapCut/Queue HUD;
-- one-click Preflight, Render selected and Render all.
+- one-click Preflight, Render selected and Render all;
+- **AUTO RUN** production control with pause/resume/stop, current shot, retry count, human blockers and canonical progress;
+- per-shot production-state inspector for actual-start / observed-final state, visual / semantic / continuity QC, open Human Tasks and actual generated final frame;
+- continuity dependency edges directly on the Studio graph, plus incoming/outgoing propagated fields in the shot inspector;
+- automatic previz advisor with explicit human override, Blender detection and a generated previz manifest for shots whose camera/blocking/geometry make 3D reference worthwhile;
+- Dashboard workstation-readiness checklist that explains exactly what blocks production and what is only a warning.
 
 Generic visual references are stored separately from props/wardrobe. The project schema enforces asset-kind roles and migrates older projects where generic references were previously carried in the prop slot. Schema v3 also stores structured shot states, continuity dependencies, layered QC history, human-review tasks and canonical-take provenance.
 
@@ -138,6 +146,45 @@ ComfyUI is a lab/fallback runtime. Production routes require:
 
 Connected unknown/subgraph UI nodes are never silently flattened.
 
+## Autonomous production
+
+AUTO RUN is a main-process state machine, not a renderer-side macro. For each target shot it:
+
+```text
+preflight
+→ previz decision / human gate when required
+→ render
+→ technical QC
+→ sampled visual QC
+→ semantic QC
+→ incoming continuity QC
+→ stable near-end frame selection
+→ structured observed-final state extraction
+→ state propagation
+→ canonical take gate
+→ bounded retry or Human Review
+→ next shot
+→ canonical timeline
+```
+
+Visual/semantic/continuity checks use the configured loopback multimodal model. If local vision is unavailable or uncertain, CineForge records `human-verify` and creates a Human Task rather than inventing a PASS. Human QC decisions require PASS/FAIL plus a review note. Low-confidence extracted final state also requires human approval before it may become continuity truth.
+
+AUTO RUN owns production while active. Manual edits/generation/export are blocked until it is paused, preventing two GPU workflows from fighting over a 16 GB card. State is journaled under `.cineforge/`, so restart recovery re-evaluates the current project instead of forgetting the run.
+
+Render admission also checks live free RAM/VRAM and project disk space. Workstation Readiness exposes GPU, RAM, FFmpeg, WanGP/ComfyUI, workflow qualification, local visual QC, Blender and CapCut status before AUTO RUN starts.
+
+## Automatic visual / semantic / continuity QC
+
+CineForge samples chronological frames from each technically valid video. A local multimodal evaluator checks visual integrity and shot intent. Continuity QC compares the actual upstream observed-final frame with the next rendered first frame for the dependency fields that matter. The final-state extractor selects a stable near-end frame instead of blindly trusting the literal last video frame.
+
+The default Windows bootstrap uses Ollama + `qwen3-vl:4b`. This is local and optional; `-SkipVisionModel` leaves the same pipeline available with explicit Human Review gates.
+
+## Blender previz
+
+CineForge does not pretend to invent correct 3D geometry from nothing. The previz advisor scores camera path, multi-character blocking, object interaction, vehicles and spatial constraints. Simple shots stay 2D; spatially difficult shots can be marked optional/required. For required previz, CineForge writes a bounded manifest under `.cineforge/previz/` with the shot contract and references and raises a Human Task. If Blender is installed, Dashboard/System reports it; a human can create/approve the camera/blocking reference and then resume AUTO RUN.
+
+This keeps Blender in the intended human-on-the-loop role while CineForge owns detection, state, gating and orchestration.
+
 ## Technical QC
 
 Generated video is inspected before it can become the preferred take:
@@ -227,7 +274,7 @@ Code signing credentials are intentionally not stored in this repository.
 8. Linux Electron packaging;
 9. Windows PowerShell bootstrap parsing + NSIS installer packaging.
 
-A model route is **not** considered hardware-validated merely because source CI is green. The exact runtime/model must also complete a real render on the target GPU.
+A model route is **not** considered hardware-validated merely because source CI is green. The exact runtime/model must also complete a real render on the target GPU. Dashboard shows structurally-valid-but-not-yet-successful routes as qualification warnings; successful local renders update the recorded workstation/profile evidence.
 
 ## Repository map
 
