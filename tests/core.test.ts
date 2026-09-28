@@ -43,7 +43,7 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
-import { canonicalTakeReadiness, invalidateObservedFinalState, propagateObservedFinalState } from '../src/shared/production-state';
+import { canonicalTakeReadiness, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -851,21 +851,20 @@ describe('canonical timeline integrity',()=>{
     expect(duplicateTimelineOrderKey([{track:0,order:0},{track:0,order:0}])).toBe('0:0');
   });
   it('requires canonical provenance or an explicit human override before timeline media is exportable',()=>{
-    const project={
-      shots:[{id:'s1',canonicalRenderId:'o1'}],
-      renderOutputs:[{...output('o1','s1'),technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}}],
-      shotDependencies:[],
-      qcResults:[
-        {id:'qv',shotId:'s1',renderOutputId:'o1',layer:'visual',status:'pass',issues:[],createdAt:'2026-01-01T00:00:01.000Z'},
-        {id:'qs',shotId:'s1',renderOutputId:'o1',layer:'semantic',status:'pass',issues:[],createdAt:'2026-01-01T00:00:01.000Z'}
-      ]
-    } as unknown as FilmProject;
+    const shot:Shot={id:'s1',sceneId:'scene',index:1,title:'Shot',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false},canonicalRenderId:'o1'};
+    const project={shots:[shot],scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['s1']}],assets:[],renderJobs:[],renderOutputs:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],timeline:[],settings:{workflowProfiles:[],costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4'}} as unknown as FilmProject;
+    const video={...output('o1','s1'),technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}};project.renderOutputs.push(video);
+    video.productionInputKey=shotProductionInputKey(project,shot);
+    project.qcResults.push(
+      {id:'qv',shotId:'s1',renderOutputId:'o1',layer:'visual',status:'pass',issues:[],inputKey:shotQcInputKey(project,'s1','o1','visual'),createdAt:'2026-01-01T00:00:01.000Z'},
+      {id:'qs',shotId:'s1',renderOutputId:'o1',layer:'semantic',status:'pass',issues:[],inputKey:shotQcInputKey(project,'s1','o1','semantic'),createdAt:'2026-01-01T00:00:01.000Z'}
+    );
     const canonical={id:'c',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1,approval:'canonical'} as const;
     expect(timelineClipUseIssue(project,canonical)).toBeUndefined();
     expect(timelineClipUseIssue(project,{...canonical,approval:'legacy'})).toMatch(/legacy take approval/i);
     expect(timelineClipUseIssue(project,{...canonical,approval:'human-override',approvalReason:undefined})).toMatch(/without a recorded reason/i);
     expect(timelineClipUseIssue(project,{...canonical,approval:'human-override',approvalReason:'Human accepted continuity mismatch.'})).toBeUndefined();
-    project.qcResults.push({id:'qs2',shotId:'s1',renderOutputId:'o1',layer:'semantic',status:'fail',issues:[],createdAt:'2026-01-01T00:00:02.000Z'} as any);
+    project.qcResults.push({id:'qs2',shotId:'s1',renderOutputId:'o1',layer:'semantic',status:'fail',issues:[],inputKey:shotQcInputKey(project,'s1','o1','semantic'),createdAt:'2026-01-01T00:00:02.000Z'} as any);
     expect(timelineClipUseIssue(project,canonical)).toMatch(/no longer canonical-ready.*semantic QC is fail/i);
   });
 });
@@ -1352,19 +1351,22 @@ describe('production state core',()=>{
     expect(project.shots[1].actualStartStateId).toBeUndefined();
   });
 
-  it('keeps canonical take promotion fail-closed until technical, visual, semantic and continuity QC all pass',()=>{
-    const project=loadPortableProject(rawTwoShotProject(),'/project').project;
+  it('keeps canonical take promotion fail-closed until current technical, visual, semantic and continuity QC all pass',()=>{
+    const project=loadPortableProject(rawTwoShotProject(),'/project').project,shot=project.shots.find(item=>item.id==='shot-a')!,output=project.renderOutputs.find(item=>item.id==='out-a')!;
+    output.productionInputKey=shotProductionInputKey(project,shot);
     expect(canonicalTakeReadiness(project,'shot-a','out-a').ready).toBe(false);
     const createdAt='2026-01-01T00:00:03.000Z';
     project.qcResults.push(
-      {id:'q-v',shotId:'shot-a',renderOutputId:'out-a',layer:'visual',status:'pass',issues:[],createdAt},
-      {id:'q-s',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'pass',issues:[],createdAt}
+      {id:'q-v',shotId:'shot-a',renderOutputId:'out-a',layer:'visual',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','visual'),createdAt},
+      {id:'q-s',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','semantic'),createdAt}
     );
     expect(canonicalTakeReadiness(project,'shot-a','out-a')).toMatchObject({ready:false});
-    project.qcResults.push({id:'q-c',shotId:'shot-a',renderOutputId:'out-a',layer:'continuity',status:'pass',issues:[],createdAt});
+    project.qcResults.push({id:'q-c',shotId:'shot-a',renderOutputId:'out-a',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','continuity'),createdAt});
     expect(canonicalTakeReadiness(project,'shot-a','out-a')).toEqual({ready:true,blockers:[]});
-    project.qcResults.push({id:'q-s2',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'fail',issues:[],createdAt:'2026-01-01T00:00:04.000Z'});
+    project.qcResults.push({id:'q-s2',shotId:'shot-a',renderOutputId:'out-a',layer:'semantic',status:'fail',issues:[],inputKey:shotQcInputKey(project,'shot-a','out-a','semantic'),createdAt:'2026-01-01T00:00:04.000Z'});
     expect(canonicalTakeReadiness(project,'shot-a','out-a').blockers.join(' ')).toMatch(/semantic QC is fail/i);
+    shot.prompt='changed after QC';
+    expect(canonicalTakeReadiness(project,'shot-a','out-a').blockers.join(' ')).toMatch(/stale shot.*inputs|stale for current/i);
   });
 
   it('rejects broken schema-v3 state pointers instead of silently attaching state to the wrong shot',()=>{
@@ -1414,8 +1416,10 @@ describe('production state main-process authority',()=>{
         generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:7,negativePrompt:'',includeAudio:false},
         latestRenderId:'out-auth',latestAttemptRenderId:'out-auth'
       });
+      const shot=project.shots.find(item=>item.id==='shot-auth')!;
       project.renderOutputs.push({
         id:'out-auth',jobId:'orphaned',shotId:'shot-auth',path:join(root,'renders','out-auth.mp4'),filename:'out-auth.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',
+        productionInputKey:shotProductionInputKey(project,shot),
         technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:true,issues:[],warnings:[]}
       });
     });
@@ -1441,9 +1445,11 @@ describe('production state main-process authority',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 
-  it('records an observed final state only from a technical-QC-passing same-shot video',async()=>{
+  it('records an observed final state only from a current render with technical, visual and semantic QC pass',async()=>{
     const{root,service}=await setupProject();
     try{
+      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[]});
+      await recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'semantic',status:'pass',issues:[]});
       const next=await recordObservedFinalState(service,{
         projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',
         characters:[],props:[],environment:{timeOfDay:'NIGHT',lighting:'warm practicals'},camera:{shotSize:'medium',screenDirection:'left-to-right'},
