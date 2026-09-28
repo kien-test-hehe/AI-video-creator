@@ -161,7 +161,12 @@ function Ensure-WanGP([string]$BootstrapPython) {
         $registry = Get-Content $envRegistryPath -Raw | ConvertFrom-Json
         $registered = $registry.envs.env_venv.path
         if ($registered) {
-          $resolvedRegistered = [System.IO.Path]::GetFullPath((Join-Path $WanRoot $registered))
+          $registeredText = [string]$registered
+          $resolvedRegistered = if ([System.IO.Path]::IsPathRooted($registeredText)) {
+            [System.IO.Path]::GetFullPath($registeredText)
+          } else {
+            [System.IO.Path]::GetFullPath((Join-Path $WanRoot $registeredText))
+          }
           $expectedRegistered = [System.IO.Path]::GetFullPath((Join-Path $WanRoot 'env_venv'))
           if ($resolvedRegistered -ne $expectedRegistered) {
             throw "WanGP envs.json maps env_venv outside its managed runtime directory: $registered"
