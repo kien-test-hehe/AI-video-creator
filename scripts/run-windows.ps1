@@ -14,6 +14,36 @@ if (-not (Test-Path $EnvFile) -or -not (Test-Path (Join-Path $NodeRoot 'npm.cmd'
 }
 
 . $EnvFile
+
+if ($env:CINEFORGE_DIRECTOR_MODEL) {
+  $ollama = Get-Command ollama.exe -ErrorAction SilentlyContinue
+  if (-not $ollama) {
+    $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+    if (Test-Path $candidate) { $ollama = Get-Item $candidate }
+  }
+  if ($ollama) {
+    $apiReady = $false
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 | Out-Null
+      $apiReady = $true
+    } catch {}
+    if (-not $apiReady) {
+      Start-Process -FilePath $ollama.Source -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+      for ($i=0; $i -lt 20; $i++) {
+        Start-Sleep -Milliseconds 500
+        try {
+          Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 | Out-Null
+          $apiReady = $true
+          break
+        } catch {}
+      }
+    }
+    if (-not $apiReady) { Write-Warning 'Local QC model is configured but Ollama did not become reachable. CineForge will fall back to Human Review.' }
+  } else {
+    Write-Warning 'Local QC model is configured but ollama.exe is missing. Rerun setup.cmd; CineForge will otherwise fall back to Human Review.'
+  }
+}
+
 $wingetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
 if (Test-Path $wingetLinks) { $env:PATH = "$NodeRoot;$wingetLinks;$env:PATH" } else { $env:PATH = "$NodeRoot;$env:PATH" }
 
