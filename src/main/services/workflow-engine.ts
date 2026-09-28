@@ -2,6 +2,7 @@ import { readJsonFileLimited } from './json-file';
 import type { WorkflowBinding, WorkflowBindingKey, WorkflowProfile } from '../../shared/types';
 import { assertSafeObjectKey } from '../../shared/safe-object';
 import { WORKFLOW_BINDING_LIMIT } from '../../shared/workflow-limits';
+import { WORKFLOW_BINDING_LIMIT } from '../../shared/workflow-limits';
 
 export type ApiWorkflow = Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
 
@@ -145,6 +146,7 @@ export function suggestBindings(workflow: ApiWorkflow): WorkflowBinding[] {
         if (!hints.some(h => lower === h || lower.includes(h))) continue;
         if (key === 'prompt' && (/negative/.test(titleLower) || /negative/.test(lower))) continue;
         if (key === 'negativePrompt' && !/negative/.test(titleLower) && !/negative/.test(lower) && lower === 'text') continue;
+        if(suggestions.length>=WORKFLOW_BINDING_LIMIT)throw new Error(`Suggested workflow bindings exceed the ${WORKFLOW_BINDING_LIMIT}-binding project safety limit. Simplify the workflow or configure bindings manually.`);
         if(suggestions.length>=WORKFLOW_BINDING_LIMIT)throw new Error(`Suggested workflow bindings exceed the ${WORKFLOW_BINDING_LIMIT}-binding project safety limit. Simplify the workflow or configure bindings manually.`);
         suggestions.push({
           key,
