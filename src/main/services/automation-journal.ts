@@ -32,8 +32,13 @@ export class AutomationJournal{
     const path=await assertSafeWritePath(dir,join(dir,FILE),'automation run journal');
     const temp=await assertSafeWritePath(dir,join(dir,`.${FILE}.${randomUUID()}.tmp`),'automation run journal temp');
     await mkdir(dir,{recursive:true});
-    await writeFile(temp,stringifyJsonLimited(journal,'automation run journal',2*1024*1024),{encoding:'utf8',flag:'wx',mode:0o600});
-    try{await rename(temp,path);}finally{await rm(temp,{force:true}).catch(()=>undefined);}
+    const payload=stringifyJsonLimited(journal,'automation run journal',2*1024*1024);
+    await writeFile(temp,payload,{encoding:'utf8',flag:'wx',mode:0o600});
+    try{await rename(temp,path);}
+    catch(error:any){
+      if(!['EEXIST','EPERM','EACCES'].includes(error?.code))throw error;
+      await writeFile(path,payload,{encoding:'utf8',mode:0o600});
+    }finally{await rm(temp,{force:true}).catch(()=>undefined);}
   }
 }
 
@@ -44,6 +49,8 @@ function sanitizeJournal(raw:any,project:FilmProject):AutomationRunJournal{
   const targetShotIds=Array.isArray(raw.targetShotIds)?[...new Set(raw.targetShotIds.filter((id:unknown):id is string=>typeof id==='string'&&shotIds.has(id)))]:[];
   const status=raw.status;
   if(!status||typeof status!=='object'||typeof status.running!=='boolean'||typeof status.paused!=='boolean'||typeof status.phase!=='string'||typeof status.message!=='string')throw new Error('Automation run journal status is malformed.');
+  const phases=new Set(['idle','preflight','planning','waiting-render','qc','retrying','waiting-human','building-timeline','paused','complete','error']);
+  if(!phases.has(status.phase))throw new Error('Automation run journal contains an unknown phase.');
   const retryCounts:Record<string,number>={};
   if(status.retryCounts&&typeof status.retryCounts==='object'&&!Array.isArray(status.retryCounts)){for(const[id,value]of Object.entries(status.retryCounts)){const n=Number(value);if(shotIds.has(id)&&Number.isFinite(n)&&n>=0)retryCounts[id]=Math.min(5,Math.trunc(n));}}
   const completedShotIds=Array.isArray(status.completedShotIds)?status.completedShotIds.filter((id:unknown):id is string=>typeof id==='string'&&shotIds.has(id)):[];
