@@ -6,7 +6,7 @@ import type {
 } from '../../shared/types';
 import {
   canonicalTakeReadiness, invalidateObservedFinalState, propagateObservedFinalState,
-  refreshCanonicalRender, renderOutputProductionInputKey, shotProductionInputKey, shotQcInputKey, shotStateFingerprint
+  currentProductionInputKeyForOutput, refreshCanonicalRender, renderOutputProductionInputKey, shotQcInputKey, shotStateFingerprint
 } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 
@@ -25,7 +25,7 @@ export async function recordObservedFinalState(projects:ProjectService,request:R
     const output=project.renderOutputs.find(item=>item.id===request.renderOutputId&&item.shotId===shot.id&&item.mediaType==='video');
     if(!output)throw new Error('Observed final state must reference a video output from the same shot.');
     if(!output.technicalQc?.passed)throw new Error('Observed final state cannot become current until the source video passes technical QC.');
-    const recordedInputKey=renderOutputProductionInputKey(project,output),currentInputKey=shotProductionInputKey(project,shot);
+    const recordedInputKey=renderOutputProductionInputKey(project,output),currentInputKey=currentProductionInputKeyForOutput(project,shot,output);
     if(!recordedInputKey||recordedInputKey!==currentInputKey)throw new Error('Observed final state cannot be recorded from a stale or provenance-unknown render output.');
     for(const layer of ['visual','semantic'] as const){
       const expected=shotQcInputKey(project,shot.id,output.id,layer);
@@ -81,7 +81,7 @@ export async function recordShotQc(projects:ProjectService,request:RecordShotQcR
     if(!output)throw new Error('QC must reference a video output from the same shot.');
     if(!['visual','semantic','continuity'].includes(request.layer))throw new Error('Only visual, semantic, or continuity QC can be recorded through the production-state API.');
     if(!['pass','fail','unknown','human-verify'].includes(request.status))throw new Error('Invalid QC status.');
-    const recordedInputKey=renderOutputProductionInputKey(project,output),currentInputKey=shotProductionInputKey(project,shot);
+    const recordedInputKey=renderOutputProductionInputKey(project,output),currentInputKey=currentProductionInputKeyForOutput(project,shot,output);
     if(!recordedInputKey||recordedInputKey!==currentInputKey)throw new Error('QC cannot be recorded against a stale or provenance-unknown render output. Queue a render for the current shot inputs first.');
     const issues=normalizeIssues(request.issues);
     const inputKey=shotQcInputKey(project,shot.id,output.id,request.layer);
