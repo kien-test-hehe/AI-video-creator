@@ -223,6 +223,34 @@ describe('project schema canonicalization',()=>{
   });
 
 });
+describe('project open compatibility safety',()=>{
+  const validProject=(root:string)=>({
+    schemaVersion:2,id:'project-safe',name:'Film',rootPath:root,createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Film',logline:'',script:'',notes:''},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],settings:{}
+  });
+  it('does not replace a newer-schema primary project with an older backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-newer-schema-'));
+    try{
+      const primary={...validProject(root),schemaVersion:3,futureData:{keep:'me'}};
+      await writeFile(join(root,'cineforge.project.json'),JSON.stringify(primary),'utf8');
+      await writeFile(join(root,'cineforge.project.backup.json'),JSON.stringify(validProject(root)),'utf8');
+      const service=new ProjectService();
+      await expect(service.openAt(root)).rejects.toThrow(/unsupported project schema/i);
+      expect(JSON.parse(await readFile(join(root,'cineforge.project.json'),'utf8'))).toEqual(primary);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+  it('does not recover from backup over a primary project that only violates a safety limit',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-limit-primary-'));
+    try{
+      const primary=validProject(root);primary.story.title='x'.repeat(501);
+      await writeFile(join(root,'cineforge.project.json'),JSON.stringify(primary),'utf8');
+      await writeFile(join(root,'cineforge.project.backup.json'),JSON.stringify(validProject(root)),'utf8');
+      const service=new ProjectService();
+      await expect(service.openAt(root)).rejects.toThrow(/500-character safety limit/i);
+      expect((JSON.parse(await readFile(join(root,'cineforge.project.json'),'utf8')) as any).story.title).toHaveLength(501);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('screenplay parsing',()=>{it('splits INT/EXT headings',()=>{const scenes=parseScreenplay('INT. GARAGE - NIGHT\nCar waits.\n\nEXT. ROAD - DAWN\nCar moves.');expect(scenes).toHaveLength(2);expect(scenes[0].location).toBe('GARAGE');expect(scenes[1].timeOfDay).toBe('DAWN');});});
 describe('workflow binding object-key safety',()=>{
   it('rejects prototype-polluting Comfy binding inputs at runtime',()=>{
