@@ -129,6 +129,7 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
     task.status=request.status;
     task.resolution=requireString(request.resolution,20_000,'human task resolution');
     task.resolvedAt=new Date().toISOString();
+    if(linkedQc)refreshCanonicalRender(project,linkedQc.shotId);
   });
 }
 
