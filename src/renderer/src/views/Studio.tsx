@@ -369,7 +369,7 @@ export function Studio(){
     </header>
     <section className={`studio-automation-bar ${automation?.phase||'idle'}`}>
       <div><span className="eyebrow">AUTONOMOUS PRODUCTION</span><strong>{automation?.message||'Idle · human-on-the-loop runtime ready'}</strong></div>
-      <div className="studio-auto-metrics"><span><b>{automation?.completedShotIds.length??0}</b> / {sortedShots.length} canonical</span><span>Current: <b>{automation?.currentShotId?project.shots.find(shot=>shot.id===automation.currentShotId):undefined?.title||'—'}</b></span><span>Retries: <b>{automation?.retryCounts?Object.values(automation.retryCounts).reduce((sum,value)=>sum+value,0):0}</b></span><span>Blockers: <b>{automation?.blockedHumanTaskIds.length??0}</b></span><span>Readiness: <b>{readiness?.readyForProduction?'ready':readiness?'check':'unknown'}</b></span></div>
+      <div className="studio-auto-metrics"><span><b>{automation?.completedShotIds.length??0}</b> / {sortedShots.length} canonical</span><span>Current: <b>{(automation?.currentShotId?project.shots.find(shot=>shot.id===automation.currentShotId):undefined)?.title||'—'}</b></span><span>Retries: <b>{automation?.retryCounts?Object.values(automation.retryCounts).reduce((sum,value)=>sum+value,0):0}</b></span><span>Blockers: <b>{automation?.blockedHumanTaskIds.length??0}</b></span><span>Readiness: <b>{readiness?.readyForProduction?'ready':readiness?'check':'unknown'}</b></span></div>
       {automation?.lastError&&<small>{automation.lastError}</small>}
     </section>
 
