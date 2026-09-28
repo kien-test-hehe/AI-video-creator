@@ -679,6 +679,19 @@ describe('machine settings persistence trust',()=>{
     }
   });
 });
+describe('machine settings structural validation',()=>{
+  it('treats non-object primary settings as corruption instead of silently loading defaults',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-settings-shape-')),userdata=join(root,'userdata');
+    try{
+      const service=new AppSettingsService(userdata);await service.load();
+      const trusted=service.get();trusted.director.model='trusted';await service.save(trusted);
+      const newer=service.get();newer.director.temperature=0.4;await service.save(newer);
+      await writeFile(join(userdata,'machine-settings.v1.json'),'[]','utf8');
+      const recovered=new AppSettingsService(userdata);await recovered.load();
+      expect(recovered.get().director.model).toBe('trusted');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('machine settings recovery preservation and versioning',()=>{
   it('preserves a rejected primary before restoring a trusted backup',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-settings-recovery-')),userdata=join(root,'userdata');
