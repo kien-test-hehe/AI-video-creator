@@ -209,16 +209,20 @@ export class ProductionRuntimeService extends EventEmitter{
     project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
     if(!hasCurrentQcPass(project,shotId,outputId,'visual')||!hasCurrentQcPass(project,shotId,outputId,'semantic'))return;
 
+    const needsContinuity=project.shotDependencies.some(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0);
+    if(needsContinuity){
+      await this.ensureQcLayer(shotId,outputId,'continuity',frames);
+      project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
+      if(!hasCurrentQcPass(project,shotId,outputId,'continuity'))return;
+    }
+
     const observed=shot.observedFinalStateId?project.shotStates.find(state=>state.id===shot!.observedFinalStateId&&state.status==='current'&&state.sourceRenderOutputId===outputId):undefined;
     if(!observed){
       const frameAssetId=await this.ensureObservedFrameAsset(output,stableFinalFrame);
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
       const draft=await extractObservedStateDraft(this.settings.get(),project,shot,stableFinalFrame);
       await recordObservedFinalState(this.projects,{projectRoot:project.rootPath,shotId,renderOutputId:outputId,frameAssetId,...draft});
-      project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
     }
-
-    if(project.shotDependencies.some(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0))await this.ensureQcLayer(shotId,outputId,'continuity',frames);
     }finally{await releaseLocalVisionModel(this.settings.get());}
   }
 
