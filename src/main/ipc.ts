@@ -26,6 +26,7 @@ import { validateAndRecordProfile } from './services/profile-validation';
 import { writeCodexMachineContext } from './services/machine-context';
 import type { KeyframeLeaseStore } from './services/keyframe-lease';
 import { listWanGpCatalog, provisionRecommendedWanGpProfiles } from './services/wangp-catalog-service';
+import { MAX_WORKFLOW_JSON_BYTES, stringifyJsonLimited } from './services/json-file';
 
 type Handler = (...args: any[]) => any;
 
@@ -149,7 +150,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
     const convertedName=`${randomUUID()}-converted-${basename(source).replace(/[^a-zA-Z0-9._-]+/g,'_')}.api.json`;
     const apiPath=await assertSafeWritePath(join(project.rootPath,'workflows'),join(project.rootPath,'workflows',convertedName),'converted workflow');
     try{
-      await writeFile(apiPath,JSON.stringify(converted.workflow,null,2),'utf8');
+      await writeFile(apiPath,stringifyJsonLimited(converted.workflow,'Converted ComfyUI API workflow',MAX_WORKFLOW_JSON_BYTES),'utf8');
       await rm(target,{force:true});
       return{path:apiPath,format:'api' as const,suggestedBindings:suggestBindings(converted.workflow),warnings:converted.warnings};
     }catch(error){
