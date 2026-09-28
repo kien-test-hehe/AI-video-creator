@@ -370,8 +370,8 @@ function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
     warnings:boundedArray(source.warnings,'technical QC warnings',128).map(item=>str(item,'',4096)).filter(Boolean)
   };
 }
-function finiteOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):undefined;}
-function intOptional(value:unknown,min:number,max:number):number|undefined{const n=Number(value);return Number.isInteger(n)?Math.min(max,Math.max(min,n)):undefined;}
+function finiteOptional(value:unknown,min:number,max:number):number|undefined{if(value==null||value==='')return undefined;const n=Number(value);if(!Number.isFinite(n))return undefined;if(n<min||n>max)throw new Error(`Project optional number is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function intOptional(value:unknown,min:number,max:number):number|undefined{if(value==null||value==='')return undefined;const n=Number(value);if(!Number.isInteger(n))return undefined;if(n<min||n>max)throw new Error(`Project optional integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
 
 function assertUniqueIds(label:string,items:Array<{id:string}>):void{
   const seen=new Set<string>();for(const item of items){if(seen.has(item.id))throw new Error(`Duplicate ${label} id: ${item.id}`);seen.add(item.id);}
