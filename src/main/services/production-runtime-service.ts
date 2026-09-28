@@ -10,7 +10,7 @@ import { RenderQueueService } from './render-queue';
 import { preflightProject } from './preflight-service';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath } from './path-safety';
 import { sampleVideoFrames, type SampledVideoFrames } from './media-analysis';
-import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft } from './automatic-qc-service';
+import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, selectStableFinalFrame } from './automatic-qc-service';
 import { createHumanTask, recordObservedFinalState, recordShotQc } from './production-state-service';
 import { ensurePrevizPlan } from './previz-service';
 
@@ -170,6 +170,7 @@ export class ProductionRuntimeService extends EventEmitter{
     const outputPath=await assertExistingPathInside(join(project.rootPath,'renders'),output.path,`render output ${output.filename}`);
     const frameDir=join(project.rootPath,'cache','qc',output.id);
     const frames=await sampleVideoFrames(this.settings.get(),outputPath,frameDir);
+    const stableFinalFrame=await selectStableFinalFrame(this.settings.get(),frames.finalCandidates);
 
     await this.ensureQcLayer(shotId,outputId,'visual',frames);
     await this.ensureQcLayer(shotId,outputId,'semantic',frames);
@@ -178,9 +179,9 @@ export class ProductionRuntimeService extends EventEmitter{
 
     const observed=shot.observedFinalStateId?project.shotStates.find(state=>state.id===shot!.observedFinalStateId&&state.status==='current'&&state.sourceRenderOutputId===outputId):undefined;
     if(!observed){
-      const frameAssetId=await this.ensureObservedFrameAsset(output,frames.finalFrame);
+      const frameAssetId=await this.ensureObservedFrameAsset(output,stableFinalFrame);
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
-      const draft=await extractObservedStateDraft(this.settings.get(),project,shot,frames.finalFrame);
+      const draft=await extractObservedStateDraft(this.settings.get(),project,shot,stableFinalFrame);
       await recordObservedFinalState(this.projects,{projectRoot:project.rootPath,shotId,renderOutputId:outputId,frameAssetId,...draft});
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
     }
