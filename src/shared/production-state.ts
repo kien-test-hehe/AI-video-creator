@@ -83,7 +83,7 @@ function isDefaultSequentialDependency(edge:ShotDependency):boolean{
 }
 
 export function shotStateContentKey(state:Pick<ShotState,
-  'shotId'|'role'|'source'|'frameAssetId'|'sourceRenderOutputId'|'derivedFromStateId'|'characters'|'props'|'environment'|'camera'|'actionPhase'|'dialogueState'
+  'shotId'|'role'|'source'|'frameAssetId'|'sourceRenderOutputId'|'derivedFromStateId'|'characters'|'props'|'environment'|'camera'|'actionPhase'|'dialogueState'|'confidence'
 >):string{
   return JSON.stringify({
     shotId:state.shotId,
@@ -97,7 +97,8 @@ export function shotStateContentKey(state:Pick<ShotState,
     environment:state.environment,
     camera:state.camera,
     actionPhase:state.actionPhase,
-    dialogueState:state.dialogueState
+    dialogueState:state.dialogueState,
+    confidence:state.confidence
   });
 }
 
@@ -293,8 +294,8 @@ export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string
         const toState=to?.actualStartStateId?project.shotStates.find(state=>state.id===to.actualStartStateId):undefined;
         return{
           id:edge.id,from:edge.fromShotId,to:edge.toShotId,relation:edge.relation,strength:edge.strength,propagate:edge.propagate,
-          fromObserved:fromState?{id:fromState.id,status:fromState.status,fingerprint:fromState.fingerprint}:undefined,
-          toActualStart:toState?{id:toState.id,status:toState.status,fingerprint:toState.fingerprint}:undefined
+          fromObserved:fromState?{id:fromState.id,status:fromState.status,fingerprint:shotStateFingerprint(fromState)}:undefined,
+          toActualStart:toState?{id:toState.id,status:toState.status,fingerprint:shotStateFingerprint(toState)}:undefined
         };
       })
     : [];
