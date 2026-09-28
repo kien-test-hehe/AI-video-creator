@@ -62,7 +62,10 @@ export function reorderTimeline(project:FilmProject,sourceId:string,targetId:str
   return true;
 }
 
+export function timelineInsertIssue(project:Pick<FilmProject,'timeline'>):string|undefined{return project.timeline.length>=100_000?'Timeline already has the maximum of 100000 clips. Remove/archive clips before adding another take.':undefined;}
+
 export function insertTimelineOutput(project:FilmProject,outputId:string,beforeClipId?:string):boolean{
+  if(timelineInsertIssue(project))return false;
   const output=project.renderOutputs.find(item=>item.id===outputId&&item.mediaType==='video');if(!output)return false;
   if(!project.shots.some(shot=>shot.id===output.shotId))return false;
   const targetClip=beforeClipId?project.timeline.find(clip=>clip.id===beforeClipId):undefined,track=targetClip?.track??0;
@@ -70,4 +73,15 @@ export function insertTimelineOutput(project:FilmProject,outputId:string,beforeC
   const target=targetClip?ordered.findIndex(clip=>clip.id===targetClip.id):ordered.length,index=target<0?ordered.length:target;
   const inserted={id:crypto.randomUUID(),shotId:output.shotId,renderOutputId:output.id,track,order:index,trimInSec:0,volume:1};
   ordered.splice(index,0,inserted);ordered.forEach((clip,order)=>clip.order=order);project.timeline.push(inserted);return true;
+}
+
+export function alternateShotTitle(title:string):string{
+  const suffix=' · alt',max=2000;
+  return `${title.slice(0,Math.max(0,max-suffix.length))}${suffix}`;
+}
+
+export function appendProjectText(current:string,addition:string,max:number,label:string):string{
+  const merged=[current,addition].filter(Boolean).join('\n');
+  if(merged.length>max)throw new Error(`${label} would exceed the ${max}-character project safety limit. Shorten the existing text or suggestion before appending.`);
+  return merged;
 }
