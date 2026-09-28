@@ -82,6 +82,7 @@ export class ComfyClient {
       throw new Error(`ComfyUI rejected prompt (${res.status}): ${JSON.stringify(payload).slice(0,4000)}`);
     }
     if(typeof payload.prompt_id!=='string'||!payload.prompt_id)throw new Error(`ComfyUI /prompt returned success without a prompt_id: ${JSON.stringify(payload).slice(0,2000)}`);
+    if(payload.prompt_id.length>512)throw new Error('ComfyUI /prompt returned a prompt_id that exceeds the 512-character project safety limit.');
     return payload as ComfyPromptResult;
   }
 
@@ -201,7 +202,7 @@ export function cineforgePromptIdentitiesByMetadata(queue:unknown,history:unknow
     if(!Array.isArray(record))return;
     const promptId=typeof record[1]==='string'?record[1]:fallbackId;
     const extra=(record[3] as any)?.cineforge;
-    if(!promptId||!extra||!Object.entries(metadata).every(([key,value])=>extra[key]===value))return;
+    if(!promptId||promptId.length>512||!extra||!Object.entries(metadata).every(([key,value])=>extra[key]===value))return;
     const prior=found.get(promptId);
     if(!prior||prior.state==='history'||state==='running')found.set(promptId,{promptId,state});
   };
