@@ -46,14 +46,19 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
 
     const workflowsRoot=await ensureSafeDirectory(project.rootPath,join(project.rootPath,'workflows'),'managed WanGP workflows directory');
     const safeModel=pick.entry.modelType.replace(/[^a-zA-Z0-9._-]+/g,'_');
+    if(!safeModel||safeModel.length>200)throw new Error(`WanGP model type is too long or unsafe for a managed profile identifier: ${pick.entry.modelType.slice(0,240)}`);
+    const profileName=`Managed · ${pick.entry.name}`;
+    if(profileName.length>240)throw new Error(`WanGP catalog name exceeds the 240-character managed profile safety limit: ${pick.entry.name.slice(0,240)}`);
     const workflowPath=await assertSafeWritePath(workflowsRoot,join(workflowsRoot,`managed-${safeModel}.json`),'managed WanGP settings');
     await writeFile(workflowPath,JSON.stringify(settingsJson,null,2),'utf8');
     const analyzed=analyzeWanGpBindings(settingsJson);
     const id=`managed-wangp-${safeModel}`;
+    const profileNotes=[`Auto-provisioned from WanGP model catalog for role: ${pick.role}.`,pick.entry.description||'',...analyzed.warnings].filter(Boolean).join('\n');
+    if(profileNotes.length>20_000)throw new Error(`WanGP catalog metadata exceeds the 20000-character managed profile notes safety limit for ${pick.entry.modelType}.`);
     const profile:WorkflowProfile={
-      id,runtime:'wangp',purpose:pick.purpose,name:`Managed · ${pick.entry.name}`,modelFamily:mapModelFamily(pick.entry),mode:pick.mode,
+      id,runtime:'wangp',purpose:pick.purpose,name:profileName,modelFamily:mapModelFamily(pick.entry),mode:pick.mode,
       workflowPath,workflowFormat:'wangp-settings',bindings:analyzed.bindings,enabled:false,
-      notes:[`Auto-provisioned from WanGP model catalog for role: ${pick.role}.`,pick.entry.description||'',...analyzed.warnings].filter(Boolean).join('\n'),
+      notes:profileNotes,
       validation:{structuralStatus:'unvalidated'}
     };
     await projects.mutate(p=>{
