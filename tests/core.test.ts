@@ -24,7 +24,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
 import { AppSettingsService } from '../src/main/services/app-settings-service';
-import { ProjectService } from '../src/main/services/project-service';
+import { ProjectService, serializeProjectForStorage } from '../src/main/services/project-service';
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe } from '../src/main/services/keyframe-service';
@@ -203,6 +203,13 @@ describe('project backup recovery preservation',()=>{
       const raw=JSON.parse(await readFile(join(root,preserved!),'utf8'));
       expect(raw.story.title).toHaveLength(501);
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('project serialized-size round trip',()=>{
+  it('rejects a project payload before write when it exceeds the loader byte limit',()=>{
+    const project={schemaVersion:2,id:'p',name:'Film',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',story:{title:'Film',logline:'',script:'',notes:'💥'.repeat(100)},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}} as FilmProject;
+    expect(()=>serializeProjectForStorage(project,256)).toThrow(/storage safety limit/i);
+    expect(serializeProjectForStorage(project,4096)).toContain('"Film"');
   });
 });
 describe('main-process asset kind validation',()=>{
