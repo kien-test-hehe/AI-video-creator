@@ -47,7 +47,8 @@ function sanitizeJournal(raw:any,project:FilmProject):AutomationRunJournal{
   if(raw.projectId!==project.id||raw.projectRoot!==project.rootPath)throw new Error('Automation run journal does not belong to the open project.');
   const shotIds=new Set(project.shots.map(shot=>shot.id));
   const rawTargetShotIds:unknown[]=Array.isArray(raw.targetShotIds)?raw.targetShotIds:[];
-  const targetShotIds:string[]=[...new Set(rawTargetShotIds.filter((id):id is string=>typeof id==='string'&&shotIds.has(id)))];
+  const targetShotIds:string[]=[];
+  for(const id of rawTargetShotIds)if(typeof id==='string'&&shotIds.has(id)&&!targetShotIds.includes(id))targetShotIds.push(id);
   const status=raw.status;
   if(!status||typeof status!=='object'||typeof status.running!=='boolean'||typeof status.paused!=='boolean'||typeof status.phase!=='string'||typeof status.message!=='string')throw new Error('Automation run journal status is malformed.');
   const phases=new Set(['idle','preflight','planning','waiting-render','qc','retrying','waiting-human','building-timeline','paused','complete','error']);
@@ -55,9 +56,11 @@ function sanitizeJournal(raw:any,project:FilmProject):AutomationRunJournal{
   const retryCounts:Record<string,number>={};
   if(status.retryCounts&&typeof status.retryCounts==='object'&&!Array.isArray(status.retryCounts)){for(const[id,value]of Object.entries(status.retryCounts)){const n=Number(value);if(shotIds.has(id)&&Number.isFinite(n)&&n>=0)retryCounts[id]=Math.min(5,Math.trunc(n));}}
   const rawCompletedShotIds:unknown[]=Array.isArray(status.completedShotIds)?status.completedShotIds:[];
-  const completedShotIds:string[]=rawCompletedShotIds.filter((id):id is string=>typeof id==='string'&&shotIds.has(id));
+  const completedShotIds:string[]=[];
+  for(const id of rawCompletedShotIds)if(typeof id==='string'&&shotIds.has(id))completedShotIds.push(id);
   const rawBlockedTaskIds:unknown[]=Array.isArray(status.blockedHumanTaskIds)?status.blockedHumanTaskIds:[];
-  const blockedHumanTaskIds:string[]=rawBlockedTaskIds.filter((id):id is string=>typeof id==='string'&&project.humanTasks.some(task=>task.id===id));
+  const blockedHumanTaskIds:string[]=[];
+  for(const id of rawBlockedTaskIds)if(typeof id==='string'&&project.humanTasks.some(task=>task.id===id))blockedHumanTaskIds.push(id);
   return{
     schemaVersion:1,projectId:project.id,projectRoot:project.rootPath,targetShotIds,
     maxAutoRetries:Math.max(0,Math.min(5,Math.trunc(Number(raw.maxAutoRetries)||0))),buildTimeline:raw.buildTimeline!==false,
