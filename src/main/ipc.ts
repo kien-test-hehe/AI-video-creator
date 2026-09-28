@@ -116,7 +116,7 @@ export function registerIpc(projects: ProjectService, queue: RenderQueueService,
 
   handle(IPC.settingsGet, () => settings.get());
   handle(IPC.settingsSave, async (next: AppMachineSettings) => {
-    if (queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy) throw new Error('Machine runtime settings cannot change while render jobs, keyframe generation, local Director work, or workflow validation/provisioning are active.');
+    if (queue.isBusy()||keyframeBusy||directorBusy||workflowValidationBusy||activeSystemProbePromise) throw new Error('Machine runtime settings cannot change while render jobs, keyframe generation, local Director work, workflow validation/provisioning, or a system probe are active.');
     return settings.save(next);
   });
 
