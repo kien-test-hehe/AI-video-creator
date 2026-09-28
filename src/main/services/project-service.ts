@@ -12,6 +12,7 @@ import { FileSafetyLimitError, readJsonFileLimited } from './json-file';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
+const ASSET_KINDS=new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 
 export class ProjectService {
   private current: FilmProject | null = null;
@@ -148,6 +149,7 @@ export class ProjectService {
   }
 
   async importAsset(kind: AssetKind): Promise<FilmProject | null> {
+    if(!ASSET_KINDS.has(kind))throw new Error(`Invalid asset kind: ${String(kind)}`);
     if (!this.current) throw new Error('Open a project first.');
     const origin={id:this.current.id,rootPath:this.current.rootPath};
     const result = await dialog.showOpenDialog({ title: `Import ${kind}`, properties: ['openFile', 'multiSelections'], filters: assetImportFilters(kind) });
