@@ -10,7 +10,6 @@ import {
 } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 
-const OBSERVATION_ASSET_LIMIT=64;
 const HUMAN_TASK_LIMIT=100_000;
 const QC_RESULT_LIMIT=300_000;
 const SHOT_STATE_LIMIT=200_000;
