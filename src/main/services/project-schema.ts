@@ -386,8 +386,8 @@ function safeId(value: unknown): string {
   if (typeof value === 'string' && /^[a-zA-Z0-9._:-]{1,256}$/.test(value)) return value;
   return randomUUID();
 }
-function clampInt(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);return Number.isInteger(n)?Math.min(max,Math.max(min,n)):fallback;}
-function clampNumber(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;}
+function clampInt(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);if(!Number.isInteger(n))return fallback;if(n<min||n>max)throw new Error(`Project integer is outside the allowed range ${min}..${max}: ${n}`);return n;}
+function clampNumber(value: unknown,min:number,max:number,fallback:number):number{const n=Number(value);if(!Number.isFinite(n))return fallback;if(n<min||n>max)throw new Error(`Project number is outside the allowed range ${min}..${max}: ${n}`);return n;}
 function iso(value: unknown, fallback: string): string { if(typeof value!=='string')return fallback;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():fallback; }
 function maybeIso(value: unknown): string | undefined { if(typeof value!=='string')return undefined;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():undefined; }
 function sourceLabel(value:unknown):string{
