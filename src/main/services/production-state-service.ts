@@ -5,7 +5,7 @@ import type {
   ResolveHumanTaskRequest, ShotQcResult, ShotState
 } from '../../shared/types';
 import {
-  canonicalTakeReadiness, invalidateObservedFinalState, propagateObservedFinalState,
+  canonicalTakeReadiness, invalidateObservedFinalState, latestShotQcResult, propagateObservedFinalState,
   currentProductionInputKeyForOutput, refreshCanonicalRender, renderOutputProductionInputKey, shotQcInputKey, shotStateFingerprint
 } from '../../shared/production-state';
 import { ProjectService } from './project-service';
@@ -29,7 +29,7 @@ export async function recordObservedFinalState(projects:ProjectService,request:R
     if(!recordedInputKey||recordedInputKey!==currentInputKey)throw new Error('Observed final state cannot be recorded from a stale or provenance-unknown render output.');
     for(const layer of ['visual','semantic'] as const){
       const expected=shotQcInputKey(project,shot.id,output.id,layer);
-      const result=project.qcResults.filter(item=>item.shotId===shot.id&&item.renderOutputId===output.id&&item.layer===layer&&item.inputKey===expected).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+      const result=latestShotQcResult(project,shot.id,output.id,layer,expected);
       if(!result||result.status!=='pass')throw new Error(`Observed final state requires current ${layer} QC PASS before it can propagate continuity.`);
     }
 
@@ -123,10 +123,9 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
       if(!linkedQc.renderOutputId||linkedQc.layer==='technical'||!linkedQc.inputKey)throw new Error('QC review task has incomplete provenance and cannot be closed safely.');
       const currentKey=shotQcInputKey(project,linkedQc.shotId,linkedQc.renderOutputId,linkedQc.layer);
       if(currentKey!==linkedQc.inputKey)throw new Error('QC review task became stale because its shot/output/state inputs changed.');
-      const verdict=project.qcResults
-        .filter(result=>result.id!==linkedQc.id&&result.shotId===linkedQc.shotId&&result.renderOutputId===linkedQc.renderOutputId&&result.layer===linkedQc.layer&&result.inputKey===linkedQc.inputKey&&result.createdAt>=linkedQc.createdAt)
-        .sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
-      if(!verdict||!['pass','fail'].includes(verdict.status))throw new Error('QC review tasks require a current PASS or FAIL verdict before they can be closed.');
+      const verdict=latestShotQcResult(project,linkedQc.shotId,linkedQc.renderOutputId,linkedQc.layer,linkedQc.inputKey);
+      const verdictIsAfterReview=Boolean(verdict&&verdict.id!==linkedQc.id&&verdict.createdAt>=linkedQc.createdAt);
+      if(!verdictIsAfterReview||!verdict||!['pass','fail'].includes(verdict.status))throw new Error('QC review tasks require a current PASS or FAIL verdict before they can be closed.');
     }
     task.status=request.status;
     task.resolution=requireString(request.resolution,20_000,'human task resolution');
