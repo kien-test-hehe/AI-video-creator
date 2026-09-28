@@ -122,7 +122,7 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   const keyframeAssetDir=await ensureSafeDirectory(join(project.rootPath,'assets'),join(project.rootPath,'assets','keyframe'),'generated keyframe directory');
   const target=await assertSafeWritePath(keyframeAssetDir,join(project.rootPath,relativePath),'generated keyframe');
   await copyFile(generatedPath,target);await rm(generatedPath,{force:true}).catch(()=>undefined);
-  const asset:Asset={id:assetId,kind:'keyframe',name:`${shot.title} ${request.role} keyframe`,sourcePath:`generated-${request.role}${extension}`,projectPath:relativePath,tags:['generated','keyframe',request.role,profile.modelFamily],notes:`Generated locally with profile ${profile.name}.`,createdAt:new Date().toISOString()};
+  const asset:Asset={id:assetId,kind:'keyframe',name:`${shot.title} ${request.role} keyframe`.slice(0,1000),sourcePath:`generated-${request.role}${extension}`,projectPath:relativePath,tags:['generated','keyframe',request.role,profile.modelFamily],notes:`Generated locally with profile ${profile.name}.`,createdAt:new Date().toISOString()};
   try{
     return await projects.mutate(p=>{
       const targetShot=p.shots.find(s=>s.id===shot.id),targetProfile=p.settings.workflowProfiles.find(item=>item.id===profile.id);
