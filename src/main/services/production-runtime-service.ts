@@ -348,7 +348,8 @@ export class ProductionRuntimeService extends EventEmitter{
     const needsEnd=shot.generation.mode==='flf2v';
 
     if(needsStart&&!shot.startFrameAssetId){
-      const propagated=shot.actualStartStateId?project.shotStates.find(state=>state.id===shot.actualStartStateId&&state.status!=='stale'):undefined;
+      const actualStartStateId=shot.actualStartStateId;
+      const propagated=actualStartStateId?project.shotStates.find(state=>state.id===actualStartStateId&&state.status!=='stale'):undefined;
       if(propagated?.frameAssetId&&project.assets.some(asset=>asset.id===propagated.frameAssetId)){
         await this.projects.mutate(next=>{const target=next.shots.find(item=>item.id===shotId);if(target&&!target.startFrameAssetId){target.startFrameAssetId=propagated.frameAssetId;target.latestRenderId=undefined;target.canonicalRenderId=undefined;invalidateObservedFinalState(next,target.id,'Actual propagated start frame became the generation start reference.');}});
       }else{
