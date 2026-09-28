@@ -245,7 +245,7 @@ export class ProductionRuntimeService extends EventEmitter{
     if(existing&&['pass','fail','human-verify'].includes(existing.status))return;
     let evaluation;
     if(layer==='visual')evaluation=await evaluateVisualQc(this.settings.get(),shot,frames.contactFrames);
-    else if(layer==='semantic')evaluation=await evaluateSemanticQc(this.settings.get(),shot,frames.contactFrames);
+    else if(layer==='semantic')evaluation=await evaluateSemanticQc(this.settings.get(),project,shot,frames.contactFrames);
     else{
       const incoming=project.shotDependencies.filter(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0);
       let previousPath:string|undefined;
