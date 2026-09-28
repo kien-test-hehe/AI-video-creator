@@ -222,18 +222,16 @@ export interface UiWorkflow {
 }
 
 function normalizeLink(link: any): { id: string; originId: string; originSlot: number; targetId: string; targetSlot: number } | null {
-  if (Array.isArray(link) && link.length >= 5) {
-    return { id: String(link[0]), originId: String(link[1]), originSlot: Number(link[2]), targetId: String(link[3]), targetSlot: Number(link[4]) };
-  }
-  if (link && typeof link === 'object') {
-    const id = link.id ?? link[0];
-    const originId = link.origin_id ?? link.originId ?? link[1];
-    const originSlot = link.origin_slot ?? link.originSlot ?? link[2];
-    const targetId = link.target_id ?? link.targetId ?? link[3];
-    const targetSlot = link.target_slot ?? link.targetSlot ?? link[4];
-    if (id != null && originId != null && targetId != null) return { id: String(id), originId: String(originId), originSlot: Number(originSlot), targetId: String(targetId), targetSlot: Number(targetSlot) };
-  }
-  return null;
+  let id:unknown,originId:unknown,originSlot:unknown,targetId:unknown,targetSlot:unknown;
+  if(Array.isArray(link)&&link.length>=5)[id,originId,originSlot,targetId,targetSlot]=link;
+  else if(link&&typeof link==='object'){
+    id=link.id??link[0];originId=link.origin_id??link.originId??link[1];originSlot=link.origin_slot??link.originSlot??link[2];
+    targetId=link.target_id??link.targetId??link[3];targetSlot=link.target_slot??link.targetSlot??link[4];
+  }else return null;
+  const originSlotNumber=Number(originSlot),targetSlotNumber=Number(targetSlot);
+  if(id==null||originId==null||targetId==null||String(id)===''||String(originId)===''||String(targetId)==='')return null;
+  if(!Number.isInteger(originSlotNumber)||originSlotNumber<0||!Number.isInteger(targetSlotNumber)||targetSlotNumber<0)return null;
+  return{id:String(id),originId:String(originId),originSlot:originSlotNumber,targetId:String(targetId),targetSlot:targetSlotNumber};
 }
 
 /**
@@ -250,10 +248,12 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
     if (node.mode != null && node.mode !== 0) continue;
     activeNodes.set(String(node.id), node);
   }
-  const links = new Map<string, ReturnType<typeof normalizeLink>>();
+  const links = new Map<string, NonNullable<ReturnType<typeof normalizeLink>>>();
   for (const raw of ui.links || []) {
     const normalized = normalizeLink(raw);
-    if (normalized) links.set(normalized.id, normalized);
+    if(!normalized){requiresApiExport=true;warnings.push('Workflow contains a malformed link record. Automatic conversion is unsafe; export Save (API Format).');continue;}
+    if(links.has(normalized.id)){requiresApiExport=true;warnings.push(`Workflow contains duplicate link id ${normalized.id}. Automatic conversion is unsafe; export Save (API Format).`);continue;}
+    links.set(normalized.id, normalized);
   }
 
   for (const [nodeId, node] of activeNodes) {
@@ -275,13 +275,19 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
     for (const input of node.inputs || []) {
       if (input.link == null) continue;
       const link = links.get(String(input.link));
-      if (!link) { warnings.push(`Node ${nodeId}.${input.name} references missing link ${String(input.link)}.`); continue; }
+      if(!link){requiresApiExport=true;warnings.push(`Node ${nodeId}.${input.name} references missing or malformed link ${String(input.link)}. Export Save (API Format).`);continue;}
+      if(link.targetId!==nodeId){requiresApiExport=true;warnings.push(`Link ${link.id} targets node ${link.targetId} but is referenced by node ${nodeId}.${input.name}. Export Save (API Format).`);continue;}
       if (!activeNodes.has(link.originId)) {
-        warnings.push(`Node ${nodeId}.${input.name} comes from disabled/bypassed node ${link.originId}; export API format if this branch is required.`);
+        requiresApiExport=true;
+        warnings.push(`Node ${nodeId}.${input.name} comes from disabled/bypassed node ${link.originId}; export Save (API Format).`);
         continue;
       }
       const originType=activeNodes.get(link.originId)!.type;
-      if(!Object.prototype.hasOwnProperty.call(objectInfo,originType))continue;
+      if(!Object.prototype.hasOwnProperty.call(objectInfo,originType)){
+        requiresApiExport=true;
+        warnings.push(`Node ${nodeId}.${input.name} depends on unavailable node ${link.originId} (${originType}); export Save (API Format).`);
+        continue;
+      }
       inputs[input.name] = [link.originId, link.originSlot];
     }
 
@@ -310,7 +316,8 @@ export function uiWorkflowToApi(ui: UiWorkflow, objectInfo: Record<string, any>)
     for (const [name, value] of Object.entries(node.inputs)) {
       if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && !result[value[0]]) {
         delete node.inputs[name];
-        warnings.push(`Removed unresolved link ${node.class_type}.${name} -> ${value[0]}.`);
+        requiresApiExport=true;
+        warnings.push(`Removed unresolved link ${node.class_type}.${name} -> ${value[0]}. Export Save (API Format).`);
       }
     }
   }

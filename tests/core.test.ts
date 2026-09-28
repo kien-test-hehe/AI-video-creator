@@ -510,6 +510,25 @@ describe('strict workflow boolean transforms',()=>{
 describe('workflow engine',()=>{
  it('detects and binds API workflow',()=>{expect(detectWorkflowFormat(api)).toBe('api');const suggestions=suggestBindings(api);expect(suggestions.some(b=>b.key==='prompt')).toBe(true);const out=applyBindings(api,[{key:'prompt',selector:{nodeId:'1'},input:'text',required:true}],{prompt:'new',negativePrompt:'',width:1,height:1,frames:1,fps:24,seed:2,filenamePrefix:'x'});expect(out['1'].inputs.text).toBe('new');expect(api['1'].inputs.text).toBe('old');});
  it('converts a minimal UI graph using object_info',()=>{const ui={nodes:[{id:1,type:'PrimitiveNode',mode:0,inputs:[],widgets_values:[7]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,0,2,0,'INT']]};const info={PrimitiveNode:{input:{required:{value:['INT',{}]}}},Consumer:{input:{required:{value:['INT',{forceInput:true}]}}}};const converted=uiWorkflowToApi(ui,info);expect(converted.workflow['1'].inputs.value).toBe(7);expect(converted.workflow['2'].inputs.value).toEqual(['1',0]);expect(converted.requiresApiExport).toBe(false);});
+ it('refuses partial UI conversion when dependency links are missing, malformed, duplicated, or point at the wrong target',()=>{
+   const info={Source:{input:{required:{value:['INT',{}]}}},Consumer:{input:{required:{value:['INT',{forceInput:true}]}}}};
+   const missing=uiWorkflowToApi({nodes:[{id:1,type:'Source',mode:0,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:9}],widgets_values:[]}],links:[]},info);
+   expect(missing.requiresApiExport).toBe(true);expect(missing.warnings.join(' ')).toMatch(/missing or malformed link/i);
+
+   const malformed=uiWorkflowToApi({nodes:[{id:1,type:'Source',mode:0,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,'NaN',2,0,'INT']]},info);
+   expect(malformed.requiresApiExport).toBe(true);expect(malformed.warnings.join(' ')).toMatch(/malformed link/i);
+
+   const duplicate=uiWorkflowToApi({nodes:[{id:1,type:'Source',mode:0,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,0,2,0,'INT'],[3,1,0,2,0,'INT']]},info);
+   expect(duplicate.requiresApiExport).toBe(true);expect(duplicate.warnings.join(' ')).toMatch(/duplicate link id/i);
+
+   const wrongTarget=uiWorkflowToApi({nodes:[{id:1,type:'Source',mode:0,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,0,99,0,'INT']]},info);
+   expect(wrongTarget.requiresApiExport).toBe(true);expect(wrongTarget.warnings.join(' ')).toMatch(/targets node 99/i);
+ });
+ it('refuses UI conversion when a required dependency originates from a disabled node',()=>{
+   const ui={nodes:[{id:1,type:'Source',mode:2,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,0,2,0,'INT']]};
+   const converted=uiWorkflowToApi(ui,{Source:{input:{required:{value:['INT',{}]}}},Consumer:{input:{required:{value:['INT',{forceInput:true}]}}}});
+   expect(converted.requiresApiExport).toBe(true);expect(converted.warnings.join(' ')).toMatch(/disabled\/bypassed/i);
+ });
  it('does not infer negative_prompt as a positive prompt binding',()=>{
    const workflow:ApiWorkflow={'1':{class_type:'CLIPTextEncode',inputs:{negative_prompt:'bad'},_meta:{title:'Conditioning'}},'2':{class_type:'KSampler',inputs:{seed:1}}};
    const suggestions=suggestBindings(workflow);
