@@ -43,7 +43,7 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
-import { canonicalTakeReadiness, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
+import { canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1289,6 +1289,27 @@ describe('WanGP list-valued binding inference',()=>{
 });
 describe('WanGP settings binding',()=>{it('infers current WanGP timing and reference-array keys without coupling to one nesting layout',()=>{const bindings=suggestWanGpBindings({prompt:'old',generation:{seed:1,width:832,height:480,num_frames:81,num_inference_steps:30},inputs:{start_image:'start.png',image_refs:null}});expect(bindings.find(b=>b.key==='prompt')?.jsonPath).toBe('prompt');expect(bindings.find(b=>b.key==='seed')?.jsonPath).toBe('generation.seed');expect(bindings.find(b=>b.key==='frames')?.jsonPath).toBe('generation.num_frames');expect(bindings.find(b=>b.key==='steps')?.jsonPath).toBe('generation.num_inference_steps');expect(bindings.find(b=>b.key==='startImage')?.jsonPath).toBe('inputs.start_image');expect(bindings.find(b=>b.key==='referenceImages')?.jsonPath).toBe('inputs.image_refs');});});
 
+
+
+
+describe('render production provenance workflow identity',()=>{
+  it('binds a take to the workflow profile actually used instead of whichever matching profile auto-routing would choose later',()=>{
+    const shot:Shot={id:'s',sceneId:'scene',index:1,title:'S',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}};
+    const profile=(id:string,path:string):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:path,workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid'}});
+    const a=profile('a','/tmp/a.json'),b=profile('b','/tmp/b.json');
+    const project={shots:[shot],assets:[],shotStates:[],renderJobs:[],renderOutputs:[],settings:{workflowProfiles:[a,b]}} as unknown as FilmProject;
+    const aKey=shotProductionInputKey(project,shot,a),bKey=shotProductionInputKey(project,shot,b);
+    expect(aKey).not.toBe(bKey);
+    const output={id:'out',jobId:'job-a',shotId:'s',path:'/tmp/out.mp4',filename:'out.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',productionInputKey:aKey} as any;
+    project.renderOutputs.push(output);
+    project.renderJobs.push({id:'job-a',shotId:'s',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',status:'done',progress:1,message:'',modelFamily:'ltx-2.5-fast',workflowProfileId:'a',outputs:[],spec:{shot:structuredClone(shot),workflowProfile:structuredClone(a),effectivePrompt:'p',productionInputKey:aKey,queuedProjectUpdatedAt:'2026-01-01T00:00:00.000Z',workflowSha256:'0'.repeat(64),assetFingerprints:[],runtimeFingerprint:{backend:'wangp',environmentSha256:'0'.repeat(64)}}});
+    expect(currentProductionInputKeyForOutput(project,shot,output)).toBe(aKey);
+    project.settings.workflowProfiles=[b,a];
+    expect(currentProductionInputKeyForOutput(project,shot,output)).toBe(aKey);
+    project.settings.workflowProfiles.find(item=>item.id==='a')!.workflowPath='/tmp/a-v2.json';
+    expect(currentProductionInputKeyForOutput(project,shot,output)).not.toBe(aKey);
+  });
+});
 
 describe('production state core',()=>{
   const rawTwoShotProject=()=>({
