@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
 export const MAX_WORKFLOW_JSON_BYTES=64*1024*1024;
+export class FileSafetyLimitError extends Error{constructor(message:string){super(message);this.name='FileSafetyLimitError';}}
 
 export async function readFileBufferLimited(
   path:string,
@@ -10,13 +11,13 @@ export async function readFileBufferLimited(
 ):Promise<Buffer>{
   const info=await stat(path);
   if(!info.isFile())throw new Error(`${label} is not a regular file: ${path}`);
-  if(info.size>maxBytes)throw new Error(`${label} is too large (${info.size} bytes; limit ${maxBytes} bytes).`);
+  if(info.size>maxBytes)throw new FileSafetyLimitError(`${label} is too large (${info.size} bytes; limit ${maxBytes} bytes).`);
 
   const chunks:Buffer[]=[];let total=0;
   for await(const chunk of createReadStream(path,{highWaterMark:64*1024})){
     const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);
     total+=bytes.length;
-    if(total>maxBytes)throw new Error(`${label} grew beyond the ${maxBytes}-byte safety limit while being read.`);
+    if(total>maxBytes)throw new FileSafetyLimitError(`${label} grew beyond the ${maxBytes}-byte safety limit while being read.`);
     chunks.push(bytes);
   }
   return Buffer.concat(chunks,total);
