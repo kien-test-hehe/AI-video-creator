@@ -849,6 +849,19 @@ describe('WanGP Docker mount argument safety',()=>{
     }
   });
 });
+describe('machine settings string bounds',()=>{
+  it('rejects oversized values before save so persisted settings remain reloadable',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-machine-string-bound-'));
+    try{
+      const service=new AppSettingsService(root),before=await service.load(),next=structuredClone(before);
+      next.director.model='x'.repeat(4097);
+      await expect(service.save(next)).rejects.toThrow(/machine setting string.*4096-character safety limit/i);
+      expect(service.get().director.model).toBe(before.director.model);
+      const disk=JSON.parse(await readFile(join(root,'machine-settings.v1.json'),'utf8'));
+      expect(disk.director.model).toBe(before.director.model);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('machine settings bootstrap failure',()=>{
   it('fails closed when an explicit bootstrap file exists but is invalid',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-bootstrap-invalid-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
