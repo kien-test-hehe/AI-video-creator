@@ -86,7 +86,8 @@ export async function recordShotQc(projects:ProjectService,request:RecordShotQcR
     const issues=normalizeIssues(request.issues);
     if(request.status==='pass'&&issues.some(issue=>issue.severity==='major'||issue.severity==='blocker'))throw new Error('QC PASS cannot contain major or blocker issues. Use human-verify or fail.');
     const inputKey=shotQcInputKey(project,shot.id,output.id,request.layer);
-    if(request.inputKey&&request.inputKey!==inputKey)throw new Error('QC input key is stale or does not match the current shot/output/state graph.');
+    requireString(request.inputKey,512,'QC input key');
+    if(request.inputKey!==inputKey)throw new Error('QC input key is stale or does not match the current shot/output/state graph.');
     const result:ShotQcResult={
       id:randomUUID(),shotId:shot.id,renderOutputId:output.id,layer:request.layer,status:request.status,
       issues,inputKey,createdAt:new Date().toISOString()
