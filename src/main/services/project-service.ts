@@ -182,7 +182,7 @@ export class ProjectService {
           const prior=retainedActualId?incoming.shotStates.find(state=>state.id===retainedActualId):undefined;
           if(prior)invalidateStateCascade(incoming,[prior.id],'Start frame was manually changed; prior propagated start state is stale.');
           if(shot.startFrameAssetId){
-            const now=new Date().toISOString(),humanState={
+            const now=new Date().toISOString(),humanState:FilmProject['shotStates'][number]={
               id:randomUUID(),shotId:shot.id,role:'actual-start' as const,source:'human' as const,status:'current' as const,
               frameAssetId:shot.startFrameAssetId,
               characters:structuredClone(prior?.characters??[]),props:structuredClone(prior?.props??[]),
