@@ -315,6 +315,12 @@ describe('project schema canonicalization',()=>{
     const loaded=loadPortableProject(raw,'/project').project;
     expect(loaded.renderOutputs[0].createdAt).toBe('2026-01-01T14:00:00.000Z');
   });
+  it('rejects out-of-range technical QC measurements instead of silently clamping them',()=>{
+    const raw:any=baseProject();raw.renderOutputs[0].technicalQc={checkedAt:'2026-01-02T00:00:00.000Z',passed:false,issues:[],warnings:[],width:20_000};
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/optional integer.*1\.\.16384/i);
+    raw.renderOutputs[0].technicalQc.width=1920;raw.renderOutputs[0].technicalQc.audioPeakDb=101;
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/optional number.*-300\.\.100/i);
+  });
   it('rejects render outputs that do not have a durable path',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/render output path is required/i);
