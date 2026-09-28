@@ -20,6 +20,20 @@ export function productionStableId(prefix:string,input:string):string{
   return `${safePrefix}:${hash.toString(16).padStart(8,'0')}`;
 }
 
+export function productionFingerprint(prefix:string,input:string):string{
+  let a=0x811c9dc5,b=0x9e3779b9,c=0x85ebca6b,d=0xc2b2ae35;
+  for(let index=0;index<input.length;index++){
+    const value=input.charCodeAt(index);
+    a=Math.imul((a^value)>>>0,0x01000193)>>>0;
+    b=Math.imul((b^(value+index))>>>0,0x27d4eb2d)>>>0;
+    c=Math.imul((c^(value+(a&0xffff)))>>>0,0x165667b1)>>>0;
+    d=Math.imul((d^(value+(b>>>16)))>>>0,0x85ebca77)>>>0;
+  }
+  const safePrefix=prefix.replace(/[^a-zA-Z0-9._:-]+/g,'-').slice(0,180)||'fingerprint';
+  const hex=(value:number)=>value.toString(16).padStart(8,'0');
+  return `${safePrefix}:${hex(a)}${hex(b)}${hex(c)}${hex(d)}`;
+}
+
 export function defaultSequentialDependencies(shots:Shot[],createdAt:string):ShotDependency[]{
   const byScene=new Map<string,Shot[]>();
   for(const shot of shots){
@@ -72,7 +86,7 @@ export function shotStateContentKey(state:Pick<ShotState,
 }
 
 export function shotStateFingerprint(state:Parameters<typeof shotStateContentKey>[0]):string{
-  return productionStableId('state-content',shotStateContentKey(state));
+  return productionFingerprint('state-content',shotStateContentKey(state));
 }
 
 export function invalidateStateCascade(project:FilmProject,rootStateIds:Iterable<string>,reason:string):Set<string>{
@@ -195,7 +209,7 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
 
     const fields=new Set(edge.propagate);
     const selected=selectFields(sourceState,fields);
-    const id=productionStableId('state',`${edge.id}:${sourceState.id}:${shotStateContentKey({...sourceState,...selected,shotId:target.id,role:'actual-start',source:'generated',derivedFromStateId:sourceState.id})}`);
+    const id=productionFingerprint('state',`${edge.id}:${sourceState.id}:${shotStateContentKey({...sourceState,...selected,shotId:target.id,role:'actual-start',source:'generated',derivedFromStateId:sourceState.id})}`);
     const propagated:ShotState={
       id,
       shotId:target.id,
@@ -224,7 +238,7 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
 }
 
 export function shotProductionInputKey(project:FilmProject,shot:Shot):string{
-  return productionStableId('render-input',shotProjectRenderInputKey(project,shot));
+  return productionFingerprint('render-input',shotProjectRenderInputKey(project,shot));
 }
 
 export function renderOutputProductionInputKey(project:FilmProject,output:RenderOutput):string|undefined{
@@ -252,7 +266,7 @@ export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string
         };
       })
     : [];
-  return productionStableId('qc-input',JSON.stringify({
+  return productionFingerprint('qc-input',JSON.stringify({
     layer,shotId,outputId,productionInputKey,
     currentShotInput:shot?shotProductionInputKey(project,shot):undefined,
     incident
