@@ -162,6 +162,7 @@ export class ProjectService {
     try{
       return await this.mutate(async project => {
         if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while the asset import dialog was open. Import was cancelled.');
+        if(project.assets.length+result.filePaths.length>100_000)throw new Error('Asset import would exceed the 100000-asset project safety limit.');
         for (const sourcePath of result.filePaths) {
           const id = randomUUID();
           const original = basename(sourcePath);
@@ -253,6 +254,7 @@ export class ProjectService {
       const scene = project.scenes.find(s => s.id === sceneId);
       if (!scene) throw new Error('Scene not found.');
       if(scene.body.length>200_000)throw new Error('Scene body exceeds the 200000-character shot prompt safety limit. Shorten or split the scene before creating a shot from it.');
+      if(project.shots.length>=100_000)throw new Error('Adding a shot would exceed the 100000-shot project safety limit.');
       const index = project.shots.filter(s => s.sceneId === sceneId).length + 1;
       const id = randomUUID();
       const base = MODEL_DEFAULTS[PRIMARY_VIDEO_MODEL];
