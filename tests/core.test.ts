@@ -173,6 +173,19 @@ describe('renderer save runtime authority',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
+describe('future project schema compatibility',()=>{
+  it('refuses to replace a newer primary project with an older backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-future-project-'));
+    try{
+      const writer=new ProjectService(),created=await writer.createAt(root,'Film');
+      await writeFile(join(root,'cineforge.project.json'),JSON.stringify({...created,schemaVersion:3,futureField:{keep:'me'}},null,2),'utf8');
+      const reader=new ProjectService();
+      await expect(reader.openAt(root)).rejects.toThrow(/unsupported project schema/i);
+      const primary=JSON.parse(await readFile(join(root,'cineforge.project.json'),'utf8'));
+      expect(primary.schemaVersion).toBe(3);expect(primary.futureField).toEqual({keep:'me'});
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
 describe('project backup recovery preservation',()=>{
   it('preserves a rejected primary project before restoring the backup',async()=>{
     const root=await mkdtemp(join(tmpdir(),'cineforge-project-recovery-'));
@@ -673,13 +686,26 @@ describe('machine settings recovery preservation and versioning',()=>{
       const service=new AppSettingsService(userdata);await service.load();
       const trusted=service.get();trusted.director.model='trusted';await service.save(trusted);
       const newer=service.get();newer.director.temperature=0.4;await service.save(newer);
-      await writeFile(join(userdata,'machine-settings.v1.json'),JSON.stringify({schemaVersion:2,director:{model:'future'}}),'utf8');
+      await writeFile(join(userdata,'machine-settings.v1.json'),JSON.stringify({schemaVersion:1,comfy:{url:'https://not-loopback.invalid'}}),'utf8');
       const recovered=new AppSettingsService(userdata);await recovered.load();
       expect(recovered.get().director.model).toBe('trusted');
       const preserved=(await readdir(userdata)).find(name=>name.startsWith('machine-settings.v1.rejected-')&&name.endsWith('.json'));
       expect(preserved).toBeTruthy();
       const rejected=JSON.parse(await readFile(join(userdata,preserved!),'utf8'));
-      expect(rejected.schemaVersion).toBe(2);
+      expect(rejected.comfy.url).toBe('https://not-loopback.invalid');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('future machine settings compatibility',()=>{
+  it('refuses to replace newer settings with a v1 backup',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-future-settings-')),userdata=join(root,'userdata');
+    try{
+      const service=new AppSettingsService(userdata);await service.load();
+      const current=service.get();current.director.model='v1';await service.save(current);
+      await writeFile(join(userdata,'machine-settings.v1.json'),JSON.stringify({schemaVersion:2,futureField:'keep-me'}),'utf8');
+      await expect(new AppSettingsService(userdata).load()).rejects.toThrow(/unsupported machine settings schema/i);
+      const primary=JSON.parse(await readFile(join(userdata,'machine-settings.v1.json'),'utf8'));
+      expect(primary.schemaVersion).toBe(2);expect(primary.futureField).toBe('keep-me');
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
