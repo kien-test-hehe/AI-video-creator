@@ -140,7 +140,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
   const source = asObject(value, 'workflow profile');
   const format = enumOrDefault(source.workflowFormat,new Set(['wangp-settings','ui','api'] as const),'api','workflow format');
   const runtime = source.runtime==null||source.runtime===''?(format==='wangp-settings'?'wangp':'comfyui'):enumOrDefault(source.runtime,new Set(['wangp','comfyui'] as const),'comfyui','workflow runtime');
-  const validationSource = source.validation && typeof source.validation === 'object' ? source.validation : {};
+  const validationSource = optionalObject(source.validation,'workflow validation') ?? {};
   return {
     id: safeId(source.id),
     runtime,
@@ -228,8 +228,8 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(safeId).filter(id=>assetIds.has(id));
   const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => {const filtered=rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!));if(filtered.length>max)throw new Error(`Shot asset role exceeds the ${max}-item safety limit.`);return filtered;};
   const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
-    if (typeof value !== 'string' || !value) return undefined;
-    return assetIds.has(value)&&allowed.has(assetKinds.get(value)!) ? value : undefined;
+    const id=optionalString(value,'shot asset reference');if(!id)return undefined;
+    return assetIds.has(id)&&allowed.has(assetKinds.get(id)!) ? id : undefined;
   };
   const characterKinds=new Set<AssetKind>(['character']),locationKinds=new Set<AssetKind>(['location']),propKinds=new Set<AssetKind>(['prop','wardrobe']),referenceKinds=new Set<AssetKind>(['reference']);
   const startKinds=new Set<AssetKind>(['image','reference','keyframe','character','location']),endKinds=new Set<AssetKind>(['image','reference','keyframe']),videoKinds=new Set<AssetKind>(['video']),audioKinds=new Set<AssetKind>(['audio']);
@@ -268,9 +268,9 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
       seed: clampInt(generationSource.seed,0,2_147_483_647,Math.floor(Math.random()*2_147_483_647)),
       negativePrompt: str(generationSource.negativePrompt,'',100_000),
       includeAudio: booleanOrDefault(generationSource.includeAudio,defaults.includeAudio??false,'shot includeAudio flag'),
-      workflowProfileId: typeof generationSource.workflowProfileId === 'string' ? generationSource.workflowProfileId : undefined
+      workflowProfileId: optionalString(generationSource.workflowProfileId,'shot workflow profile id')
     },
-    latestRenderId: typeof source.latestRenderId === 'string' ? source.latestRenderId : undefined
+    latestRenderId: optionalString(source.latestRenderId,'shot latest render id')
   };
 }
 
@@ -293,12 +293,12 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
   const source = asObject(value, 'render job');
   const shotId = safeId(source.shotId);
   if (!shotIds.has(shotId)) throw new Error(`Render job references unknown shot: ${shotId}`);
-  const profileId = typeof source.workflowProfileId === 'string' ? source.workflowProfileId : undefined;
+  const profileId = optionalString(source.workflowProfileId,'render job workflow profile id');
   let spec: RenderJob['spec'];
-  if(source.spec&&typeof source.spec==='object'){
-    const rawSpec=asObject(source.spec,'render job spec');
+  const rawSpec=optionalObject(source.spec,'render job spec');
+  if(rawSpec){
     const workflowProfile=sanitizeWorkflowProfile(rawSpec.workflowProfile);
-    const runtimeRaw=rawSpec.runtimeFingerprint&&typeof rawSpec.runtimeFingerprint==='object'?rawSpec.runtimeFingerprint:{};
+    const runtimeRaw=optionalObject(rawSpec.runtimeFingerprint,'runtime fingerprint') ?? {};
     const specShot=sanitizeShot(rawSpec.shot,sceneIds,assetIds,assetKinds);
     if(specShot.id!==shotId)throw new Error(`Render job ${String(source.id)} immutable spec shot id ${specShot.id} does not match job shotId ${shotId}.`);
     spec={
@@ -326,7 +326,7 @@ function sanitizeRenderJob(value: unknown, shotIds: Set<string>, profiles: Workf
     message:str(source.message,'',10_000), modelFamily:enumOrDefault(source.modelFamily,MODEL_FAMILIES,'custom','render job model family'),
     workflowProfileId: profileId && profiles.some(p=>p.id===profileId) ? profileId : undefined,
     comfyPromptId:str(source.comfyPromptId,'',512)||undefined,
-    backendPid:Number.isInteger(source.backendPid)&&source.backendPid>0?source.backendPid:undefined,
+    backendPid:optionalPositiveInteger(source.backendPid,'render job backend pid'),
     lastHeartbeatAt:maybeIso(source.lastHeartbeatAt),
     error:str(source.error,'',50_000)||undefined,
     outputs:[],
@@ -346,16 +346,14 @@ function sanitizeTimelineClip(value: unknown, shotIds: Set<string>, outputs: Map
 }
 
 function sanitizeComfyMeta(value:unknown):Record<string,unknown>|undefined{
-  if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
-  const source=value as Record<string,unknown>,out:Record<string,unknown>={};
+  const source=optionalObject(value,'Comfy metadata');if(!source)return undefined;const out:Record<string,unknown>={};
   for(const key of ['filename','subfolder','type','runtime','profile']){
-    const v=source[key];if(typeof v==='string'){if(v.length>4096)throw new Error(`Comfy metadata ${key} exceeds the 4096-character project safety limit.`);out[key]=v;}
+    const v=source[key];if(v==null)continue;if(typeof v!=='string')throw new Error(`Comfy metadata ${key} must be a string.`);if(v.length>4096)throw new Error(`Comfy metadata ${key} exceeds the 4096-character project safety limit.`);out[key]=v;
   }
   return Object.keys(out).length?out:undefined;
 }
 function sanitizeTechnicalQc(value:unknown):RenderOutput['technicalQc']{
-  if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
-  const source=value as Record<string,unknown>;
+  const source=optionalObject(value,'technical QC');if(!source)return undefined;
   return{
     checkedAt:iso(source.checkedAt,new Date().toISOString()),
     passed:booleanOrDefault(source.passed,false,'technical QC passed flag'),
@@ -376,6 +374,20 @@ function assertUniqueIds(label:string,items:Array<{id:string}>):void{
   const seen=new Set<string>();for(const item of items){if(seen.has(item.id))throw new Error(`Duplicate ${label} id: ${item.id}`);seen.add(item.id);}
 }
 
+function optionalObject(value:unknown,label:string):Record<string,any>|undefined{
+  if(value==null)return undefined;
+  if(typeof value!=='object'||Array.isArray(value))throw new Error(`Invalid ${label}: expected an object.`);
+  return value as Record<string,any>;
+}
+function optionalString(value:unknown,label:string):string|undefined{
+  if(value==null||value==='')return undefined;
+  if(typeof value!=='string')throw new Error(`Invalid ${label}: expected a string.`);
+  return value;
+}
+function optionalPositiveInteger(value:unknown,label:string):number|undefined{
+  if(value==null||value==='')return undefined;
+  const n=Number(value);if(!Number.isInteger(n)||n<=0)throw new Error(`Invalid ${label}: expected a positive integer.`);return n;
+}
 function asObject(value: unknown, label: string): Record<string, any> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label}: expected an object.`);
   return value as Record<string, any>;
@@ -418,4 +430,4 @@ function sourceLabel(value:unknown):string{
   if(label.length>2048)throw new Error('Asset source label exceeds the 2048-character project safety limit.');
   return label;
 }
-function sha(value: unknown): string | undefined { return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined; }
+function sha(value: unknown): string | undefined { if(value==null||value==='')return undefined;if(typeof value==='string'&&/^[a-f0-9]{64}$/i.test(value))return value.toLowerCase();throw new Error('Invalid SHA-256 project fingerprint.'); }
