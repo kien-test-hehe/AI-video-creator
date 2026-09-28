@@ -250,6 +250,7 @@ export class ProjectService {
     return this.mutate(project => {
       const scene = project.scenes.find(s => s.id === sceneId);
       if (!scene) throw new Error('Scene not found.');
+      if(scene.body.length>200_000)throw new Error('Scene body exceeds the 200000-character shot prompt safety limit. Shorten or split the scene before creating a shot from it.');
       const index = project.shots.filter(s => s.sceneId === sceneId).length + 1;
       const id = randomUUID();
       const base = MODEL_DEFAULTS[PRIMARY_VIDEO_MODEL];
