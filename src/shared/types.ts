@@ -275,6 +275,54 @@ export interface FilmProject {
   settings:ProjectSettings;
 }
 
+export interface RecordObservedFinalStateRequest {
+  projectRoot:string;
+  shotId:UUID;
+  renderOutputId:UUID;
+  frameAssetId?:UUID;
+  characters:CharacterContinuityState[];
+  props:PropContinuityState[];
+  environment:EnvironmentContinuityState;
+  camera:CameraContinuityState;
+  actionPhase:string;
+  dialogueState:string;
+  confidence?:number;
+}
+
+export interface RecordShotQcRequest {
+  projectRoot:string;
+  shotId:UUID;
+  renderOutputId:UUID;
+  layer:Exclude<QcLayer,'technical'>;
+  status:QcStatus;
+  issues:QcIssue[];
+  inputKey?:string;
+}
+
+export interface CreateHumanTaskRequest {
+  projectRoot:string;
+  type:HumanTaskType;
+  shotId?:UUID;
+  title:string;
+  reason:string;
+  recommendedAction?:string;
+  relatedAssetIds?:UUID[];
+  relatedRenderOutputIds?:UUID[];
+}
+
+export interface ResolveHumanTaskRequest {
+  projectRoot:string;
+  taskId:UUID;
+  status:'resolved'|'dismissed';
+  resolution:string;
+}
+
+export interface PromoteCanonicalTakeRequest {
+  projectRoot:string;
+  shotId:UUID;
+  renderOutputId:UUID;
+}
+
 export interface KeyframeRequest { projectRoot:string;shotId:UUID;role:'start'|'end';workflowProfileId:UUID; }
 export interface RenderRequest { projectRoot:string;shotId:UUID;forceWorkflowProfileId?:UUID; }
 export interface RenderBatchRequest { projectRoot:string;shotIds:UUID[];skipIfRendered?:boolean; }
