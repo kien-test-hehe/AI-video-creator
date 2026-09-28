@@ -221,6 +221,12 @@ describe('project schema canonicalization',()=>{
     tooManyScenes.scenes=Array.from({length:10_001},(_,index)=>({id:`scene-${index}`,index:index+1,heading:'INT. ROOM',body:'',shotIds:[]}));
     expect(()=>loadPortableProject(tooManyScenes,'/project')).toThrow(/project scenes.*10,?000 items/i);
   });
+  it('rejects malformed explicit identifiers instead of silently replacing identity',()=>{
+    const raw=baseProject();raw.id='bad project id with spaces';
+    expect(()=>loadPortableProject(raw,'/project')).toThrow(/invalid project identifier/i);
+    const missing=baseProject();delete (missing as any).id;
+    expect(loadPortableProject(missing,'/project').project.id).toMatch(/^[a-f0-9-]{36}$/i);
+  });
   it('rejects explicit out-of-range project numerics instead of silently clamping them',()=>{
     const raw=baseProject();raw.shots[0].generation.width=9000;
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/allowed range 256\.\.8192/i);
