@@ -94,15 +94,26 @@ export async function recordShotQc(projects:ProjectService,request:RecordShotQcR
     };
     project.qcResults.push(result);
     if(request.status==='human-verify'){
-      const task=createHumanTaskRecord(project,{
-        projectRoot:project.rootPath,
-        type:request.layer==='continuity'?'verify-continuity':'manual-qc',
-        shotId:shot.id,
-        title:`${request.layer[0].toUpperCase()+request.layer.slice(1)} QC needs review · ${shot.title}`,
-        reason:issues.map(issue=>issue.message).filter(Boolean).join(' | ')||`${request.layer} QC returned an uncertain result.`,
-        recommendedAction:'Inspect the rendered take against its shot contract and references, then record a PASS or FAIL verdict with a review note.',
-        relatedRenderOutputIds:[output.id]
-      });
+      const existingReview=[...project.qcResults].reverse().find(item=>
+        item.id!==result.id&&item.shotId===shot.id&&item.renderOutputId===output.id&&item.layer===request.layer&&item.inputKey===inputKey&&item.humanOverrideTaskId&&
+        project.humanTasks.some(task=>task.id===item.humanOverrideTaskId&&task.status==='open')
+      );
+      const task=existingReview?.humanOverrideTaskId
+        ? project.humanTasks.find(item=>item.id===existingReview.humanOverrideTaskId)!
+        : createHumanTaskRecord(project,{
+            projectRoot:project.rootPath,
+            type:request.layer==='continuity'?'verify-continuity':'manual-qc',
+            shotId:shot.id,
+            title:`${request.layer[0].toUpperCase()+request.layer.slice(1)} QC needs review · ${shot.title}`,
+            reason:issues.map(issue=>issue.message).filter(Boolean).join(' | ')||`${request.layer} QC returned an uncertain result.`,
+            recommendedAction:'Inspect the rendered take against its shot contract and references, then record a PASS or FAIL verdict with a review note.',
+            relatedRenderOutputIds:[output.id]
+          });
+      if(existingReview){
+        task.title=`${request.layer[0].toUpperCase()+request.layer.slice(1)} QC needs review · ${shot.title}`;
+        task.reason=issues.map(issue=>issue.message).filter(Boolean).join(' | ')||`${request.layer} QC returned an uncertain result.`;
+        task.recommendedAction='Inspect the rendered take against its shot contract and references, then record a PASS or FAIL verdict with a review note.';
+      }
       result.humanOverrideTaskId=task.id;
     }
     refreshCanonicalRender(project,shot.id);
@@ -118,7 +129,11 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
     assertProject(project,request.projectRoot);
     const task=project.humanTasks.find(item=>item.id===request.taskId);if(!task)throw new Error('Human task not found.');
     if(!['resolved','dismissed'].includes(request.status))throw new Error('Human task can only be resolved or dismissed.');
-    const linkedQc=project.qcResults.find(result=>result.humanOverrideTaskId===task.id);
+    let linkedQc:ShotQcResult|undefined;
+    for(const result of project.qcResults){
+      if(result.humanOverrideTaskId!==task.id)continue;
+      if(!linkedQc||result.createdAt>linkedQc.createdAt||result.createdAt===linkedQc.createdAt)linkedQc=result;
+    }
     if(linkedQc){
       if(!linkedQc.renderOutputId||linkedQc.layer==='technical'||!linkedQc.inputKey)throw new Error('QC review task has incomplete provenance and cannot be closed safely.');
       const currentKey=shotQcInputKey(project,linkedQc.shotId,linkedQc.renderOutputId,linkedQc.layer);
