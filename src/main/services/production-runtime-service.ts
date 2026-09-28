@@ -152,7 +152,7 @@ export class ProductionRuntimeService extends EventEmitter{
         const currentOutput=findCurrentPassingTake(project,shot);
         if(currentOutput){
           this.setStatus({phase:'qc',message:`Extracting actual state and QC for ${shot.title}.`});
-          await this.processTake(activeShotId,currentOutput.id);
+          await this.processTake(currentShotId,currentOutput.id);
           const fresh=this.projects.getCurrent();if(!fresh)break;
           const freshShot=fresh.shots.find(item=>item.id===currentShotId);
           if(freshShot?.canonicalRenderId&&canonicalTakeReadiness(fresh,currentShotId,freshShot.canonicalRenderId).ready){
@@ -181,24 +181,24 @@ export class ProductionRuntimeService extends EventEmitter{
           this.setStatus({phase:'waiting-human',message:`Generation inputs for ${shot.title} need human action.`,blockedHumanTaskIds:preparationBlockers.map(task=>task.id)});break;
         }
         const preparedReport=await preflightProject(project,this.settings.get());
-        const preparedErrors=preparedReport.issues.filter(issue=>issue.level==='error'&&issue.shotId===activeShotId);
+        const preparedErrors=preparedReport.issues.filter(issue=>issue.level==='error'&&issue.shotId===currentShotId);
         if(preparedErrors.length){
           await this.ensureHumanTask(shot,'route-unsupported','Workflow input mismatch',preparedErrors.map(issue=>`${issue.code}: ${issue.message}`).join(' | '),'Open Settings / Shot Workshop, fix or re-route the video workflow bindings for the prepared start/end/reference inputs, then resume AUTO RUN.');
           const fresh=this.projects.getCurrent();
-          this.setStatus({phase:'waiting-human',message:`Prepared inputs for ${shot.title} do not match its video workflow.`,blockedHumanTaskIds:fresh?.humanTasks.filter(task=>task.status==='open'&&task.shotId===activeShotId).map(task=>task.id)??[]});break;
+          this.setStatus({phase:'waiting-human',message:`Prepared inputs for ${shot.title} do not match its video workflow.`,blockedHumanTaskIds:fresh?.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId).map(task=>task.id)??[]});break;
         }
 
         const failedJob=[...project.renderJobs].filter(job=>job.shotId===currentShotId&&['failed','orphaned'].includes(job.status)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0];
         if(failedJob){
-          const count=this.status.retryCounts[activeShotId]??0;
+          const count=this.status.retryCounts[currentShotId]??0;
           if(count<this.maxAutoRetries){
-            this.status.retryCounts[activeShotId]=count+1;this.setStatus({phase:'retrying',message:`Retrying failed render for ${shot.title} (${count+1}/${this.maxAutoRetries}).`});
+            this.status.retryCounts[currentShotId]=count+1;this.setStatus({phase:'retrying',message:`Retrying failed render for ${shot.title} (${count+1}/${this.maxAutoRetries}).`});
             await this.queue.retry(failedJob.id);break;
           }
         }
 
         this.setStatus({phase:'waiting-render',message:`Queueing ${shot.title}.`});
-        await this.queue.enqueue({projectRoot:project.rootPath,shotId:activeShotId});
+        await this.queue.enqueue({projectRoot:project.rootPath,shotId:currentShotId});
         break;
       }while(this.advanceAgain);
     }catch(error){this.fail(error instanceof Error?error.message:String(error));}
@@ -209,7 +209,7 @@ export class ProductionRuntimeService extends EventEmitter{
     for(const id of this.targetShotIds){
       const shot=project.shots.find(item=>item.id===id);if(!shot)continue;
       if(shot.canonicalRenderId&&canonicalTakeReadiness(project,shot.id,shot.canonicalRenderId).ready){
-        if(!this.status.completedShotIds.includes(activeShotId))this.status.completedShotIds.push(activeShotId);
+        if(!this.status.completedShotIds.includes(shot.id))this.status.completedShotIds.push(shot.id);
         continue;
       }
       return shot;
