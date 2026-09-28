@@ -15,6 +15,9 @@ const SHOT_STATUSES = new Set<ShotStatus>(['draft','ready','queued','rendering',
 const JOB_STATUSES = new Set<RenderJobStatus>(['queued','preparing','uploading','submitted','running','recovering','stalled','orphaned','downloading','done','failed','cancelled']);
 const PURPOSES = new Set<WorkflowPurpose>(['video','image','audio','utility']);
 
+export class ProjectCompatibilityError extends Error{constructor(message:string){super(message);this.name='ProjectCompatibilityError';}}
+export class ProjectSafetyLimitError extends Error{constructor(message:string){super(message);this.name='ProjectSafetyLimitError';}}
+
 export interface LoadedProject {
   project: FilmProject;
   migratedFrom?: number;
@@ -24,7 +27,7 @@ export interface LoadedProject {
 export function loadPortableProject(raw: unknown, openedRoot: string): LoadedProject {
   const source = asObject(raw, 'project');
   const version = Number(source.schemaVersion ?? 1);
-  if (version !== 1 && version !== 2) throw new Error(`Unsupported project schema: ${String(source.schemaVersion)}`);
+  if (version !== 1 && version !== 2) throw new ProjectCompatibilityError(`Unsupported project schema: ${String(source.schemaVersion)}`);
   const migrationNotes: string[] = [];
   const normalized = version === 1 ? migrateV1ToV2(source, migrationNotes) : source;
   const project = sanitizeV2(normalized, openedRoot);
@@ -117,7 +120,7 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
   const source = asObject(value ?? {}, 'settings');
   const profiles = boundedArray(source.workflowProfiles,'workflow profiles',512).map(sanitizeWorkflowProfile);
   for (const builtin of BUILTIN_WORKFLOW_PROFILES) if (!profiles.some(p=>p.id===builtin.id)) profiles.push(structuredClone(builtin));
-  if(profiles.length>512)throw new Error('workflow profiles exceed the safety limit of 512 items after required built-ins are added.');
+  if(profiles.length>512)throw new ProjectSafetyLimitError('workflow profiles exceed the safety limit of 512 items after required built-ins are added.');
   assertUniqueIds('workflow profile',profiles);
   return {
     costPolicy: {
@@ -225,7 +228,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const modelFamily:ModelFamily = MODEL_FAMILIES.has(rawModelFamily as ModelFamily) ? rawModelFamily as ModelFamily : PRIMARY_VIDEO_MODEL;
   const defaults = MODEL_DEFAULTS[modelFamily];
   const rawIds = (value: unknown) => boundedArray(value,'shot asset references',128).map(safeId).filter(id=>assetIds.has(id));
-  const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => {const ids=rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!));if(ids.length>max)throw new Error(`Shot asset role exceeds the ${max}-item safety limit.`);return ids;};
+  const filterIds = (value: unknown, max:number, allowed:ReadonlySet<AssetKind>) => {const ids=rawIds(value).filter(id=>allowed.has(assetKinds.get(id)!));if(ids.length>max)throw new ProjectSafetyLimitError(`Shot asset role exceeds the ${max}-item safety limit.`);return ids;};
   const optionalAsset = (value: unknown, allowed:ReadonlySet<AssetKind>) => {
     if (typeof value !== 'string' || !value) return undefined;
     return assetIds.has(value)&&allowed.has(assetKinds.get(value)!) ? value : undefined;
@@ -234,7 +237,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const startKinds=new Set<AssetKind>(['image','reference','keyframe','character','location']),endKinds=new Set<AssetKind>(['image','reference','keyframe']),videoKinds=new Set<AssetKind>(['video']),audioKinds=new Set<AssetKind>(['audio']);
   const rawPropIds=rawIds(source.propAssetIds);
   const legacyReferenceIds=source.referenceAssetIds==null?rawPropIds.filter(id=>assetKinds.get(id)==='reference'):[];
-  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,4,referenceKinds),...legacyReferenceIds])];if(referenceAssetIds.length>4)throw new Error('Shot reference assets exceed the 4-item safety limit.');
+  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,4,referenceKinds),...legacyReferenceIds])];if(referenceAssetIds.length>4)throw new ProjectSafetyLimitError('Shot reference assets exceed the 4-item safety limit.');
   return {
     id: safeId(source.id),
     sceneId,
@@ -247,7 +250,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     continuityNotes: str(source.continuityNotes,'',100_000),
     characterAssetIds: filterIds(source.characterAssetIds,4,characterKinds),
     locationAssetId: optionalAsset(source.locationAssetId,locationKinds),
-    propAssetIds: (()=>{const ids=rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!));if(ids.length>2)throw new Error('Shot prop/wardrobe assets exceed the 2-item safety limit.');return ids;})(),
+    propAssetIds: (()=>{const ids=rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!));if(ids.length>2)throw new ProjectSafetyLimitError('Shot prop/wardrobe assets exceed the 2-item safety limit.');return ids;})(),
     referenceAssetIds,
     startFrameAssetId: optionalAsset(source.startFrameAssetId,startKinds),
     endFrameAssetId: optionalAsset(source.endFrameAssetId,endKinds),
@@ -348,7 +351,7 @@ function sanitizeComfyMeta(value:unknown):Record<string,unknown>|undefined{
   if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
   const source=value as Record<string,unknown>,out:Record<string,unknown>={};
   for(const key of ['filename','subfolder','type','runtime','profile']){
-    const v=source[key];if(typeof v==='string'){if(v.length>4096)throw new Error(`Comfy metadata ${key} exceeds the 4096-character safety limit.`);out[key]=v;}
+    const v=source[key];if(typeof v==='string'){if(v.length>4096)throw new ProjectSafetyLimitError(`Comfy metadata ${key} exceeds the 4096-character safety limit.`);out[key]=v;}
   }
   return Object.keys(out).length?out:undefined;
 }
@@ -380,8 +383,8 @@ function asObject(value: unknown, label: string): Record<string, any> {
   return value as Record<string, any>;
 }
 function array(value: unknown): any[] { return Array.isArray(value) ? value : []; }
-function boundedArray(value:unknown,label:string,max:number):any[]{const items=array(value);if(items.length>max)throw new Error(`${label} exceed the safety limit of ${max} items.`);return items;}
-function str(value: unknown, fallback: string, max: number): string { if(typeof value!=='string')return fallback;if(value.length>max)throw new Error(`Project string exceeds the ${max}-character safety limit.`);return value; }
+function boundedArray(value:unknown,label:string,max:number):any[]{const items=array(value);if(items.length>max)throw new ProjectSafetyLimitError(`${label} exceed the safety limit of ${max} items.`);return items;}
+function str(value: unknown, fallback: string, max: number): string { if(typeof value!=='string')return fallback;if(value.length>max)throw new ProjectSafetyLimitError(`Project string exceeds the ${max}-character safety limit.`);return value; }
 function safeId(value: unknown): string {
   if (typeof value === 'string' && /^[a-zA-Z0-9._:-]{1,256}$/.test(value)) return value;
   return randomUUID();
@@ -393,6 +396,6 @@ function maybeIso(value: unknown): string | undefined { return typeof value === 
 function sourceLabel(value:unknown):string{
   if(typeof value!=='string')return'';
   const parts=value.replace(/\\/g,'/').split('/').filter(Boolean);
-  const label=parts.at(-1)||'';if(label.length>2048)throw new Error('Asset source label exceeds the 2048-character safety limit.');return label;
+  const label=parts.at(-1)||'';if(label.length>2048)throw new ProjectSafetyLimitError('Asset source label exceeds the 2048-character safety limit.');return label;
 }
 function sha(value: unknown): string | undefined { return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined; }
