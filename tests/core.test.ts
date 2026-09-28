@@ -176,6 +176,15 @@ describe('project schema canonicalization',()=>{
     expect(loaded.shots[0].latestRenderId).toBe('passing-output');
     expect(loaded.shots[0].status).toBe('rendered');
   });
+  it('rejects canonical project data that exceeds safety limits instead of truncating it',()=>{
+    const longText=baseProject();longText.story.title='x'.repeat(501);
+    expect(()=>loadPortableProject(longText,'/project')).toThrow(/500-character safety limit/i);
+
+    const tooManyScenes=baseProject();
+    tooManyScenes.shots=[];tooManyScenes.renderOutputs=[];
+    tooManyScenes.scenes=Array.from({length:10_001},(_,index)=>({id:`scene-${index}`,index:index+1,heading:'INT. ROOM',body:'',shotIds:[]}));
+    expect(()=>loadPortableProject(tooManyScenes,'/project')).toThrow(/project scenes.*10,?000 items/i);
+  });
   it('rejects render outputs that do not have a durable path',()=>{
     const raw=baseProject();raw.renderOutputs[0].path='';
     expect(()=>loadPortableProject(raw,'/project')).toThrow(/render output path is required/i);
