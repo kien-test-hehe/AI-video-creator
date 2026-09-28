@@ -1496,6 +1496,13 @@ describe('production state main-process authority',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 
+  it('rejects a QC PASS verdict that still contains a major or blocker issue',async()=>{
+    const{root,service}=await setupProject();
+    try{
+      await expect(recordShotQc(service,{projectRoot:root,shotId:'shot-auth',renderOutputId:'out-auth',layer:'visual',status:'pass',issues:[{code:'FACE_BROKEN',severity:'blocker',message:'Identity is visibly wrong.'}]})).rejects.toThrow(/PASS cannot contain major or blocker/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
   it('records an observed final state only from a current render with technical, visual and semantic QC pass',async()=>{
     const{root,service}=await setupProject();
     try{
