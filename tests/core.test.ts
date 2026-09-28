@@ -1328,7 +1328,7 @@ describe('production state core',()=>{
     expect(state.derivedFromStateId).toBe('state-final-a');
     expect(state.status).toBe('unreviewed');
     expect(state.environment.lighting).toBe('warm');
-    expect(state.camera).toEqual({});
+    expect(state.camera).toEqual({screenDirection:'left-to-right'});
 
     invalidateObservedFinalState(project,'shot-a','new canonical take');
     expect(project.shotStates.find(item=>item.id==='state-final-a')?.status).toBe('stale');
