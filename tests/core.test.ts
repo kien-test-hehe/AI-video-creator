@@ -1308,7 +1308,7 @@ describe('WanGP settings binding',()=>{it('infers current WanGP timing and refer
 describe('render production provenance workflow identity',()=>{
   it('binds a take to the workflow profile actually used instead of whichever matching profile auto-routing would choose later',()=>{
     const shot:Shot={id:'s',sceneId:'scene',index:1,title:'S',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}};
-    const profile=(id:string,path:string):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:path,workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid'}});
+    const profile=(id:string,path:string):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:path,workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',sourceSha256:'0'.repeat(64)}});
     const a=profile('a','/tmp/a.json'),b=profile('b','/tmp/b.json');
     const project={shots:[shot],assets:[],shotStates:[],renderJobs:[],renderOutputs:[],settings:{workflowProfiles:[a,b]}} as unknown as FilmProject;
     const aKey=shotProductionInputKey(project,shot,a),bKey=shotProductionInputKey(project,shot,b);
@@ -1321,6 +1321,9 @@ describe('render production provenance workflow identity',()=>{
     expect(currentProductionInputKeyForOutput(project,shot,output)).toBe(aKey);
     project.settings.workflowProfiles.find(item=>item.id==='a')!.workflowPath='/tmp/a-v2.json';
     expect(currentProductionInputKeyForOutput(project,shot,output)).not.toBe(aKey);
+    project.settings.workflowProfiles.find(item=>item.id==='a')!.workflowPath='/tmp/a.json';
+    project.settings.workflowProfiles.find(item=>item.id==='a')!.validation!.sourceSha256='1'.repeat(64);
+    expect(currentProductionInputKeyForOutput(project,shot,output)).toBeUndefined();
   });
 });
 
