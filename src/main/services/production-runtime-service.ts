@@ -179,6 +179,13 @@ export class ProductionRuntimeService extends EventEmitter{
         if(preparationBlockers.length){
           this.setStatus({phase:'waiting-human',message:`Generation inputs for ${shot.title} need human action.`,blockedHumanTaskIds:preparationBlockers.map(task=>task.id)});break;
         }
+        const preparedReport=await preflightProject(project,this.settings.get());
+        const preparedErrors=preparedReport.issues.filter(issue=>issue.level==='error'&&issue.shotId===shot!.id);
+        if(preparedErrors.length){
+          await this.ensureHumanTask(shot,'route-unsupported','Workflow input mismatch',preparedErrors.map(issue=>`${issue.code}: ${issue.message}`).join(' | '),'Open Settings / Shot Workshop, fix or re-route the video workflow bindings for the prepared start/end/reference inputs, then resume AUTO RUN.');
+          const fresh=this.projects.getCurrent();
+          this.setStatus({phase:'waiting-human',message:`Prepared inputs for ${shot.title} do not match its video workflow.`,blockedHumanTaskIds:fresh?.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot!.id).map(task=>task.id)??[]});break;
+        }
 
         const failedJob=[...project.renderJobs].filter(job=>job.shotId===shot.id&&['failed','orphaned'].includes(job.status)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0];
         if(failedJob){
@@ -347,7 +354,8 @@ export class ProductionRuntimeService extends EventEmitter{
         const profile=selectImageProfile(project);
         if(profile){
           this.setStatus({phase:'keyframes',message:`Generating start keyframe for ${shot.title}.`});
-          await generateKeyframe(this.projects,this.settings.get(),{projectRoot:project.rootPath,shotId,role:'start',workflowProfileId:profile.id},this.keyframeLeases);
+          try{await generateKeyframe(this.projects,this.settings.get(),{projectRoot:project.rootPath,shotId,role:'start',workflowProfileId:profile.id},this.keyframeLeases);}
+          catch(error){await this.ensureHumanTask(shot,'verify-keyframe','Automatic start keyframe failed',`Automatic start-keyframe generation failed: ${error instanceof Error?error.message:String(error)}`,'Inspect the image workflow/model, then generate or import a start keyframe in Shot Workshop and resume AUTO RUN.');return;}
         }else await this.ensureHumanTask(shot,'verify-keyframe','Start keyframe required',`Shot “${shot.title}” uses ${shot.generation.mode} and has no start frame or validated local image workflow.`,'Use Shot Workshop to generate/import and attach a start keyframe, then resume AUTO RUN.');
       }
     }
@@ -357,7 +365,8 @@ export class ProductionRuntimeService extends EventEmitter{
       const profile=selectImageProfile(project);
       if(profile){
         this.setStatus({phase:'keyframes',message:`Generating target end keyframe for ${shot.title}.`});
-        await generateKeyframe(this.projects,this.settings.get(),{projectRoot:project.rootPath,shotId,role:'end',workflowProfileId:profile.id},this.keyframeLeases);
+        try{await generateKeyframe(this.projects,this.settings.get(),{projectRoot:project.rootPath,shotId,role:'end',workflowProfileId:profile.id},this.keyframeLeases);}
+        catch(error){await this.ensureHumanTask(shot,'verify-keyframe','Automatic end keyframe failed',`Automatic end-keyframe generation failed: ${error instanceof Error?error.message:String(error)}`,'Inspect the image workflow/model, then generate or import a target end keyframe in Shot Workshop and resume AUTO RUN.');return;}
       }else await this.ensureHumanTask(shot,'verify-keyframe','End keyframe required',`Shot “${shot.title}” uses FLF2V and has no end keyframe or validated local image workflow.`,'Use Shot Workshop to generate/import and attach a target end keyframe, then resume AUTO RUN.');
     }
     await this.reconcilePreparationTasks(this.projects.getCurrent()!.shots.find(item=>item.id===shotId)!);
@@ -367,8 +376,8 @@ export class ProductionRuntimeService extends EventEmitter{
     const project=this.projects.getCurrent();if(!project)return;
     const now=new Date().toISOString();
     const satisfied=(taskTitle:string)=>{
-      if(taskTitle==='Start keyframe required')return Boolean(shot.startFrameAssetId);
-      if(taskTitle==='End keyframe required')return Boolean(shot.endFrameAssetId);
+      if(taskTitle==='Start keyframe required'||taskTitle==='Automatic start keyframe failed')return Boolean(shot.startFrameAssetId);
+      if(taskTitle==='End keyframe required'||taskTitle==='Automatic end keyframe failed')return Boolean(shot.endFrameAssetId);
       if(taskTitle==='Reference video required')return Boolean(shot.referenceVideoAssetId);
       return false;
     };
