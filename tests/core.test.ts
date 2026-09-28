@@ -43,7 +43,7 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
-import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
+import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 
 const api: ApiWorkflow = {
@@ -1836,5 +1836,38 @@ describe('manual continuity frame selection',()=>{
     expect(continuityFrameForShot(project,shot)).toEqual({assetId:'planned',source:'planned-end'});
     shot.endFrameAssetId=undefined;
     expect(continuityFrameForShot(project,shot)).toBeUndefined();
+  });
+});
+
+
+describe('human QC reconciliation canonical refresh',()=>{
+  it('re-evaluates canonical readiness after a stale review task is auto-dismissed',()=>{
+    const shot={
+      id:'b',sceneId:'scene',index:1,title:'B',prompt:'B',camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+    } as Shot;
+    const project={
+      schemaVersion:3,id:'p',name:'p',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'p',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['a','b']}],
+      assets:[],shots:[{...structuredClone(shot),id:'a',index:0},shot],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],
+      shotDependencies:[{id:'edge',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}],
+      qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    const output={id:'out-b',jobId:'legacy',shotId:'b',path:'/tmp/p/renders/b.mp4',filename:'b.mp4',mediaType:'video' as const,createdAt:'2026-01-01T00:00:01.000Z',productionInputKey:shotProductionInputKey(project,shot),technicalQc:{checkedAt:'2026-01-01T00:00:01.000Z',passed:true,issues:[],warnings:[]}};
+    project.renderOutputs.push(output);
+    project.qcResults.push(
+      {id:'visual',shotId:'b',renderOutputId:'out-b',layer:'visual',status:'pass',issues:[],inputKey:shotQcInputKey(project,'b','out-b','visual'),createdAt:'2026-01-01T00:00:02.000Z'},
+      {id:'semantic',shotId:'b',renderOutputId:'out-b',layer:'semantic',status:'pass',issues:[],inputKey:shotQcInputKey(project,'b','out-b','semantic'),createdAt:'2026-01-01T00:00:02.000Z'}
+    );
+    const continuityKey=shotQcInputKey(project,'b','out-b','continuity');
+    project.qcResults.push({id:'continuity',shotId:'b',renderOutputId:'out-b',layer:'continuity',status:'human-verify',issues:[],inputKey:continuityKey,createdAt:'2026-01-01T00:00:02.000Z',humanOverrideTaskId:'task'});
+    project.humanTasks.push({id:'task',type:'verify-continuity',status:'open',shotId:'b',title:'Review',reason:'Review',relatedAssetIds:[],relatedRenderOutputIds:['out-b'],createdAt:'2026-01-01T00:00:02.000Z'});
+    expect(canonicalTakeReadiness(project,'b','out-b').ready).toBe(false);
+    project.shotDependencies=[];
+    expect(reconcileHumanQcTasks(project,['b'])).toEqual(['task']);
+    expect(project.humanTasks[0].status).toBe('dismissed');
+    expect(project.shots.find(item=>item.id==='b')?.canonicalRenderId).toBe('out-b');
   });
 });
