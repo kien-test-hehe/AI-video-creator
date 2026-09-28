@@ -202,6 +202,12 @@ describe('project backup recovery preservation',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
+describe('main-process asset kind validation',()=>{
+  it('rejects runtime values outside AssetKind before opening a file dialog',async()=>{
+    const service=new ProjectService();
+    await expect(service.importAsset('../escape' as any)).rejects.toThrow(/invalid asset kind/i);
+  });
+});
 describe('project schema canonicalization',()=>{
   const baseProject=()=>({
     schemaVersion:2,id:'project-1',name:'Film',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
@@ -720,6 +726,19 @@ describe('future machine settings compatibility',()=>{
       const primary=JSON.parse(await readFile(join(userdata,'machine-settings.v1.json'),'utf8'));
       expect(primary.schemaVersion).toBe(2);expect(primary.futureField).toBe('keep-me');
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+describe('WanGP Docker image argument safety',()=>{
+  it('rejects option-like Docker image values before docker run can parse them as flags',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-docker-image-')),bootstrap=join(root,'bootstrap.json'),prior=process.env.CINEFORGE_BOOTSTRAP_SETTINGS;
+    try{
+      await writeFile(bootstrap,JSON.stringify({schemaVersion:1,wangp:{executionMode:'docker',docker:{image:'--privileged'}}}),'utf8');
+      process.env.CINEFORGE_BOOTSTRAP_SETTINGS=bootstrap;
+      await expect(new AppSettingsService(join(root,'userdata')).load()).rejects.toThrow(/docker image.*not a docker cli option/i);
+    }finally{
+      if(prior==null)delete process.env.CINEFORGE_BOOTSTRAP_SETTINGS;else process.env.CINEFORGE_BOOTSTRAP_SETTINGS=prior;
+      await rm(root,{recursive:true,force:true});
+    }
   });
 });
 describe('machine settings bootstrap failure',()=>{
