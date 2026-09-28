@@ -314,6 +314,22 @@ export function shotQcInputKey(project:FilmProject,shotId:string,outputId:string
   }));
 }
 
+export function latestShotQcResult(
+  project:FilmProject,
+  shotId:string,
+  outputId:string,
+  layer:QcLayer,
+  inputKey?:string
+):FilmProject['qcResults'][number]|undefined{
+  let latest:FilmProject['qcResults'][number]|undefined;
+  for(const result of project.qcResults){
+    if(result.shotId!==shotId||result.renderOutputId!==outputId||result.layer!==layer)continue;
+    if(inputKey!==undefined&&result.inputKey!==inputKey)continue;
+    if(!latest||result.createdAt>latest.createdAt||result.createdAt===latest.createdAt)latest=result;
+  }
+  return latest;
+}
+
 export function reconcileHumanQcTasks(project:FilmProject,shotIds?:Iterable<string>):string[]{
   const scope=shotIds?new Set(shotIds):undefined;
   const qcByTask=new Map(project.qcResults.filter(result=>result.humanOverrideTaskId).map(result=>[result.humanOverrideTaskId!,result] as const));
@@ -357,7 +373,7 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
   for(const layer of ['visual','semantic'] as const){
     const expected=shotQcInputKey(project,shotId,outputId,layer);
     const results=project.qcResults.filter(result=>result.shotId===shotId&&result.renderOutputId===outputId&&result.layer===layer);
-    const matching=results.filter(result=>result.inputKey===expected).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+    const matching=latestShotQcResult(project,shotId,outputId,layer,expected);
     if(!matching){
       blockers.push(results.length?`${layer} QC is stale for current shot/state inputs.`:`${layer} QC is missing.`);
     }else if(matching.status!=='pass')blockers.push(`${layer} QC is ${matching.status}.`);
@@ -368,7 +384,7 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
   if(hasContinuityDependency){
     const layer='continuity' as const,expected=shotQcInputKey(project,shotId,outputId,layer);
     const results=project.qcResults.filter(result=>result.shotId===shotId&&result.renderOutputId===outputId&&result.layer===layer);
-    const matching=results.filter(result=>result.inputKey===expected).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+    const matching=latestShotQcResult(project,shotId,outputId,layer,expected);
     if(!matching)blockers.push(results.length?'continuity QC is stale for current dependency/state inputs.':'continuity QC is missing.');
     else if(matching.status!=='pass')blockers.push(`continuity QC is ${matching.status}.`);
     else if(matching.issues.some(issue=>issue.severity==='major'||issue.severity==='blocker'))blockers.push('continuity QC PASS contains major or blocker issues.');
