@@ -1528,6 +1528,20 @@ describe('production topology and destructive mutation regression guards',()=>{
   const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
   const shot=(id:string,index:number):Shot=>({id,sceneId:'scene-topology',index,title:id,prompt:id,camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:index}});
 
+  it('does not add a contradictory default continuity edge when an explicit edge already owns the adjacent pair',()=>{
+    const a=shot('a',1),b=shot('b',2);
+    const project={
+      schemaVersion:3,id:'explicit-edge',name:'explicit-edge',rootPath:'/tmp/explicit-edge',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'explicit-edge',logline:'',script:'',notes:''},scenes:[{id:'scene-topology',index:1,heading:'',body:'',shotIds:['a','b']}],
+      assets:[],shots:[a,b],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],
+      shotDependencies:[{id:'custom-parallel',fromShotId:'a',toShotId:'b',relation:'parallel',strength:'hard',propagate:[],createdAt:'2026-01-01T00:00:00.000Z'}],
+      qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    rebuildDefaultSequentialDependencies(project,['scene-topology'],'2026-01-01T00:00:01.000Z');
+    expect(project.shotDependencies).toEqual([expect.objectContaining({id:'custom-parallel',relation:'parallel'})]);
+  });
+
   it('rebuilds sequential continuity after reorder and stales a propagated start whose predecessor changed',()=>{
     const a=shot('a',1),b=shot('b',2),c=shot('c',3);
     const project={
