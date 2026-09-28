@@ -81,6 +81,8 @@ export async function recordShotQc(projects:ProjectService,request:RecordShotQcR
     if(!output)throw new Error('QC must reference a video output from the same shot.');
     if(!['visual','semantic','continuity'].includes(request.layer))throw new Error('Only visual, semantic, or continuity QC can be recorded through the production-state API.');
     if(!['pass','fail','unknown','human-verify'].includes(request.status))throw new Error('Invalid QC status.');
+    const recordedInputKey=renderOutputProductionInputKey(project,output),currentInputKey=shotProductionInputKey(project,shot);
+    if(!recordedInputKey||recordedInputKey!==currentInputKey)throw new Error('QC cannot be recorded against a stale or provenance-unknown render output. Queue a render for the current shot inputs first.');
     const issues=normalizeIssues(request.issues);
     const inputKey=shotQcInputKey(project,shot.id,output.id,request.layer);
     if(request.inputKey&&request.inputKey!==inputKey)throw new Error('QC input key is stale or does not match the current shot/output/state graph.');
