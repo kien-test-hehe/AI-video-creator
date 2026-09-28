@@ -925,7 +925,12 @@ export class RenderQueueService extends EventEmitter {
 }
 
 function collectReferencedAssetIds(shot:Shot):string[]{return[...new Set([...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId].filter((v):v is string=>Boolean(v)))];}
-function assetLine(asset:Asset|undefined,label:string):string{if(!asset)return'';return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}`;}
+function assetLine(asset:Asset|undefined,label:string):string{
+  if(!asset)return'';
+  const continuity=asset.continuity?JSON.stringify(asset.continuity):'';
+  const bible=continuity?(continuity.length>20_000?continuity.slice(0,20_000):continuity):'';
+  return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}${bible?`\nStructured continuity bible: ${bible}`:''}`;
+}
 function stateLine(project:FilmProject,stateId:string|undefined,label:string):string{
   if(!stateId)return'';
   const state=project.shotStates.find(item=>item.id===stateId&&item.status!=='stale');
