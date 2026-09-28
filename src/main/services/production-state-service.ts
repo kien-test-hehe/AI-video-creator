@@ -145,6 +145,16 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
     task.status=request.status;
     task.resolution=requireString(request.resolution,20_000,'human task resolution');
     task.resolvedAt=new Date().toISOString();
+    if(task.type==='verify-previz'&&task.shotId){
+      const shot=project.shots.find(item=>item.id===task.shotId);
+      if(shot?.previz){
+        shot.previz.status=request.status==='resolved'?'ready':'human-verify';
+        shot.previz.reason=request.status==='resolved'
+          ?`Human override: previz approved. ${task.resolution}`
+          :`Human override: previz review dismissed. ${task.resolution}`;
+        shot.previz.updatedAt=task.resolvedAt;
+      }
+    }
     if(linkedQc)refreshCanonicalRender(project,linkedQc.shotId);
   });
 }
