@@ -41,6 +41,7 @@ import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
+import { buildWorkflowImportNotes, WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -528,6 +529,16 @@ describe('workflow engine',()=>{
    const ui={nodes:[{id:1,type:'Source',mode:2,inputs:[],widgets_values:[1]},{id:2,type:'Consumer',mode:0,inputs:[{name:'value',link:3}],widgets_values:[]}],links:[[3,1,0,2,0,'INT']]};
    const converted=uiWorkflowToApi(ui,{Source:{input:{required:{value:['INT',{}]}}},Consumer:{input:{required:{value:['INT',{forceInput:true}]}}}});
    expect(converted.requiresApiExport).toBe(true);expect(converted.warnings.join(' ')).toMatch(/disabled\/bypassed/i);
+ });
+ it('rejects auto-suggested bindings beyond the canonical workflow binding limit',()=>{
+   const workflow:ApiWorkflow={};
+   for(let i=0;i<=WORKFLOW_BINDING_LIMIT;i++)workflow[String(i)]={class_type:'CLIPTextEncode',inputs:{text:'prompt'},_meta:{title:`Positive ${i}`}};
+   expect(()=>suggestBindings(workflow)).toThrow(/binding project safety limit/i);
+ });
+ it('caps generated workflow import notes while preserving an explicit truncation marker',()=>{
+   const notes=buildWorkflowImportNotes('Imported workflow.',Array.from({length:400},(_,i)=>`warning-${i}-${'x'.repeat(100)}`));
+   expect(notes.length).toBeLessThanOrEqual(WORKFLOW_PROFILE_NOTES_LIMIT);
+   expect(notes).toMatch(/Additional import warnings truncated/i);
  });
  it('does not infer negative_prompt as a positive prompt binding',()=>{
    const workflow:ApiWorkflow={'1':{class_type:'CLIPTextEncode',inputs:{negative_prompt:'bad'},_meta:{title:'Conditioning'}},'2':{class_type:'KSampler',inputs:{seed:1}}};
