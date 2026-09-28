@@ -44,9 +44,24 @@ export function shotKeyframeInputKey(shot:Shot,role:'start'|'end'):string{
 }
 
 
-export function keyframeProjectInputKey(_project:FilmProject,shot:Shot,role:'start'|'end',profile:WorkflowProfile|undefined):string{
+function stateRenderKey(project:FilmProject,stateId:string|undefined):unknown{
+  if(!stateId)return undefined;
+  const state=project.shotStates.find(item=>item.id===stateId);
+  if(!state)return{missing:stateId};
+  return{
+    id:state.id,role:state.role,source:state.source,status:state.status,frameAssetId:state.frameAssetId,
+    derivedFromStateId:state.derivedFromStateId,characters:state.characters,props:state.props,
+    environment:state.environment,camera:state.camera,actionPhase:state.actionPhase,dialogueState:state.dialogueState,
+    confidence:state.confidence,fingerprint:state.fingerprint
+  };
+}
+
+export function keyframeProjectInputKey(project:FilmProject,shot:Shot,role:'start'|'end',profile:WorkflowProfile|undefined):string{
   return JSON.stringify({
     shot:shotKeyframeInputKey(shot,role),
+    actualStartState:stateRenderKey(project,shot.actualStartStateId),
+    plannedStartState:stateRenderKey(project,shot.plannedStartStateId),
+    plannedEndState:stateRenderKey(project,shot.plannedEndStateId),
     workflow:workflowExecutionKey(profile)
   });
 }
@@ -87,7 +102,14 @@ export function shotProjectRenderInputKey(project:FilmProject,shot:Shot):string{
   const promptAssets=[...new Set(ids)].map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({
     id:asset!.id,kind:asset!.kind,name:asset!.name,notes:asset!.notes
   })).sort((a,b)=>a.id.localeCompare(b.id));
-  return JSON.stringify({shot:shotRenderInputKey(shot),promptAssets,workflow:workflowExecutionKey(effectiveWorkflowProfile(project,shot))});
+  return JSON.stringify({
+    shot:shotRenderInputKey(shot),
+    promptAssets,
+    actualStartState:stateRenderKey(project,shot.actualStartStateId),
+    plannedStartState:stateRenderKey(project,shot.plannedStartStateId),
+    plannedEndState:stateRenderKey(project,shot.plannedEndStateId),
+    workflow:workflowExecutionKey(effectiveWorkflowProfile(project,shot))
+  });
 }
 
 
