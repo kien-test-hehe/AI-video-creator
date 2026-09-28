@@ -181,7 +181,8 @@ if ($Deep -and $npm -and (Test-Path $npm)) {
       @{ Label='Unit tests'; Args=@('test') },
       @{ Label='Core smoke'; Args=@('run','test:smoke') }
     )) {
-      & $npm @($check.Args)
+      $commandArgs = [string[]]$check.Args
+      & $npm @commandArgs
       if ($LASTEXITCODE -eq 0) { Pass "$($check.Label) passed." } else { Fail "$($check.Label) failed with exit code $LASTEXITCODE." }
     }
     if ($env:CINEFORGE_PYTHON -and (Test-Path $env:CINEFORGE_PYTHON)) {
