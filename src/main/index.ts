@@ -114,6 +114,6 @@ if(ownsSingleInstanceLock)app.on('second-instance',()=>{
 app.on('before-quit',event=>{
   if(shutdownInProgress)return;
   shutdownInProgress=true;event.preventDefault();
-  void shutdownForegroundOperations().finally(()=>app.quit());
+  void Promise.allSettled([shutdownForegroundOperations(),automation?.flush()??Promise.resolve()]).finally(()=>app.quit());
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
