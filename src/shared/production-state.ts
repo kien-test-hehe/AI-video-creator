@@ -339,6 +339,8 @@ export function canonicalTakeReadiness(project:FilmProject,shotId:string,outputI
   else if(recordedInputKey!==currentInputKey)blockers.push('Render output was generated from stale shot, reference, workflow, or propagated-state inputs.');
 
   if(!output.technicalQc?.passed)blockers.push('Technical QC has not passed.');
+  const openReview=project.humanTasks.find(task=>task.status==='open'&&task.relatedRenderOutputIds.includes(outputId)&&['manual-qc','verify-continuity'].includes(task.type));
+  if(openReview)blockers.push(`Human QC review is still open: ${openReview.title}`);
 
   for(const layer of ['visual','semantic'] as const){
     const expected=shotQcInputKey(project,shotId,outputId,layer);
