@@ -114,6 +114,18 @@ export class ProjectService {
       if (!this.current) throw new Error('No project is open.');
       const candidate=structuredClone(project);
       const proposedShotIds=new Set(Array.isArray(candidate.shots)?candidate.shots.map(shot=>shot?.id).filter((id):id is string=>typeof id==='string'):[]);
+      const currentShotIds=new Set(this.current.shots.map(shot=>shot.id));
+      for(const shot of candidate.shots){
+        if(currentShotIds.has(shot.id))continue;
+        shot.latestRenderId=undefined;
+        shot.latestAttemptRenderId=undefined;
+        shot.canonicalRenderId=undefined;
+        shot.plannedStartStateId=undefined;
+        shot.plannedEndStateId=undefined;
+        shot.actualStartStateId=undefined;
+        shot.observedFinalStateId=undefined;
+        shot.status=shot.status==='ready'?'ready':'draft';
+      }
       candidate.renderJobs=this.current.renderJobs.filter(job=>proposedShotIds.has(job.shotId));
       candidate.renderOutputs=this.current.renderOutputs.filter(output=>proposedShotIds.has(output.shotId));
       candidate.shotStates=this.current.shotStates.filter(state=>proposedShotIds.has(state.shotId));
@@ -161,10 +173,11 @@ export class ProjectService {
         }
         shot.latestAttemptRenderId=currentShot.latestAttemptRenderId;
         shot.canonicalRenderId=currentShot.canonicalRenderId;
-        shot.plannedStartStateId=currentShot.plannedStartStateId;
-        shot.plannedEndStateId=currentShot.plannedEndStateId;
-        shot.actualStartStateId=currentShot.actualStartStateId;
-        shot.observedFinalStateId=currentShot.observedFinalStateId;
+        const stateIds=new Set(incoming.shotStates.map(state=>state.id));
+        shot.plannedStartStateId=currentShot.plannedStartStateId&&stateIds.has(currentShot.plannedStartStateId)?currentShot.plannedStartStateId:undefined;
+        shot.plannedEndStateId=currentShot.plannedEndStateId&&stateIds.has(currentShot.plannedEndStateId)?currentShot.plannedEndStateId:undefined;
+        shot.actualStartStateId=currentShot.actualStartStateId&&stateIds.has(currentShot.actualStartStateId)?currentShot.actualStartStateId:undefined;
+        shot.observedFinalStateId=currentShot.observedFinalStateId&&stateIds.has(currentShot.observedFinalStateId)?currentShot.observedFinalStateId:undefined;
       }
       rebuildDefaultSequentialDependencies(incoming,undefined,new Date().toISOString());
       const changedRenderInputShotIds:string[]=[];
