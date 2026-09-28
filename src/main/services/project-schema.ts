@@ -6,6 +6,7 @@ import type {
 import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../shared/defaults';
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 import { assertSafeJsonPath, assertSafeObjectKey } from '../../shared/safe-object';
+import { WORKFLOW_BINDING_LIMIT, WORKFLOW_PROFILE_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../../shared/workflow-limits';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 const MODEL_FAMILIES = new Set<ModelFamily>(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom']);
@@ -121,7 +122,7 @@ function sanitizeProjectSettings(value: unknown): ProjectSettings {
   const costPolicy=optionalObject(source.costPolicy,'project cost policy')??{},capcut=optionalObject(source.capcut,'CapCut project settings')??{};
   const profiles = boundedArray(source.workflowProfiles,'workflow profiles',512).map(sanitizeWorkflowProfile);
   for (const builtin of BUILTIN_WORKFLOW_PROFILES) if (!profiles.some(p=>p.id===builtin.id)) profiles.push(structuredClone(builtin));
-  if(profiles.length>512)throw new Error('workflow profiles exceed the safety limit of 512 items after required built-ins are added.');
+  if(profiles.length>WORKFLOW_PROFILE_LIMIT)throw new Error(`workflow profiles exceed the safety limit of ${WORKFLOW_PROFILE_LIMIT} items after required built-ins are added.`);
   assertUniqueIds('workflow profile',profiles);
   return {
     costPolicy: {
@@ -152,9 +153,9 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
     mode: enumOrDefault(source.mode,MODES,'i2v','workflow generation mode'),
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
-    bindings: boundedArray(source.bindings,'workflow bindings',256).map(sanitizeBinding),
+    bindings: boundedArray(source.bindings,'workflow bindings',WORKFLOW_BINDING_LIMIT).map(sanitizeBinding),
     enabled: booleanOrDefault(source.enabled,false,'workflow enabled flag'),
-    notes: str(source.notes, '', 20_000) || undefined,
+    notes: str(source.notes, '', WORKFLOW_PROFILE_NOTES_LIMIT) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
     validation: {
       structuralStatus: enumOrDefault(validationSource.structuralStatus,new Set(['valid','invalid','unvalidated'] as const),'unvalidated','workflow validation status'),
