@@ -9,7 +9,7 @@ import { loadPortableProject, UnsupportedProjectSchemaError } from './project-sc
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { latestPassingVideoTake } from '../../shared/take-policy';
 import { readJsonFileLimited, stringifyJsonLimited } from './json-file';
-import { invalidateObservedFinalState, invalidateStateCascade, rebuildDefaultSequentialDependencies, refreshCanonicalRender, shotStateFingerprint } from '../../shared/production-state';
+import { invalidateObservedFinalState, invalidateStateCascade, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, refreshCanonicalRender, shotStateFingerprint } from '../../shared/production-state';
 
 const PROJECT_FILE = 'cineforge.project.json';
 const PROJECT_BACKUP_FILE = 'cineforge.project.backup.json';
@@ -214,6 +214,7 @@ export class ProjectService {
         }
       }
       for(const shotId of changedRenderInputShotIds)invalidateObservedFinalState(incoming,shotId,'Shot render inputs or dependency topology changed in the renderer.');
+      reconcileHumanQcTasks(incoming,changedRenderInputShotIds);
       const currentProfiles=new Map(this.current.settings.workflowProfiles.map(profile=>[profile.id,profile]));
       incoming.settings.workflowProfiles=incoming.settings.workflowProfiles.map(profile=>preserveTrustedProfileValidation(currentProfiles.get(profile.id),profile));
       await this.validateStoragePaths(incoming);
@@ -331,6 +332,10 @@ export class ProjectService {
       for(const job of project.renderJobs)job.outputs=job.outputs.filter(item=>item.id!==outputId);
       project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId);
       project.qcResults=project.qcResults.filter(result=>result.renderOutputId!==outputId);
+      for(const task of project.humanTasks){
+        if(task.status!=='open'||!task.relatedRenderOutputIds.includes(outputId))continue;
+        task.status='dismissed';task.resolvedAt=new Date().toISOString();task.resolution=`Automatically dismissed because render output ${outputId} was deleted.`;
+      }
       const outputStateIds=project.shotStates.filter(state=>state.sourceRenderOutputId===outputId).map(state=>state.id);
       if(outputStateIds.length)invalidateStateCascade(project,outputStateIds,`Source render output ${outputId} was deleted.`);
       for(const revision of project.cutRevisions)revision.clipIds=revision.clipIds.filter(id=>project.timeline.some(clip=>clip.id===id));
