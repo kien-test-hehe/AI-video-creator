@@ -79,3 +79,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .workspace.studio-mode{grid-column:2}
 
 .compact-drop-target{border:1px dashed transparent;border-radius:7px;padding:7px;margin-left:-7px;margin-right:-7px}.compact-drop-target:hover,.compact-drop-target:focus-within{border-color:#4b3a36;background:#131010}
+
+/* Studio compact mode owns the app chrome. */
+.workspace.studio-mode>.topbar{display:none}
+.workspace.studio-mode>.content{height:100vh}
+.workspace.studio-mode>.banner{position:fixed;left:54px;right:0;top:42px;z-index:80;margin:0;border-radius:0}
+.compact-bar-actions button:disabled{opacity:.4;cursor:not-allowed}
