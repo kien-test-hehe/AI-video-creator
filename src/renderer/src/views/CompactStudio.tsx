@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type DragEvent } from 'react';
 import { MODEL_DEFAULTS } from '../../../shared/defaults';
 import type { Asset, GenerationMode, ModelFamily, Shot } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
@@ -38,7 +38,7 @@ export function CompactStudio({onOpenAdvanced}:{onOpenAdvanced:()=>void}){
 
   const chooseShot=(shot:Shot)=>{selectShot(shot.id);setReviewTaskId(undefined);setTool('shots');};
   const mutateShot=(fn:(shot:Shot)=>void)=>{if(!selectedShot)return;updateProject(next=>{const target=next.shots.find(item=>item.id===selectedShot.id);if(target)fn(target);});};
-  const dropAssetOnSelected=(event:React.DragEvent<HTMLElement>)=>{
+  const dropAssetOnSelected=(event:DragEvent<HTMLElement>)=>{
     event.preventDefault();if(!selectedShot)return;
     const assetId=event.dataTransfer.getData('application/x-cineforge-asset');if(!assetId)return;
     const asset=project.assets.find(item=>item.id===assetId);if(!asset)return;
