@@ -31,6 +31,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Preserve dependency lock
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: npm-lockfile
@@ -77,6 +78,7 @@ jobs:
       - name: Build NSIS installer
         run: npm run dist:win
       - name: Upload Windows installer
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cineforge-windows
