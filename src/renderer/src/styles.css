@@ -72,3 +72,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .studio-advanced-shell{height:100%;position:relative}.studio-back-compact{position:absolute;right:12px;top:10px;z-index:20;height:28px;border:1px solid #5c4037;border-radius:7px;background:#1b1311;color:#f5c1b5;padding:0 9px;font-size:8px}
 @media(max-width:1300px){.compact-studio{grid-template-columns:54px 210px minmax(360px,1fr) 260px}.compact-asset-grid{grid-template-columns:1fr}.compact-timeline{grid-column:2/5}}
 @media(prefers-reduced-motion:reduce){.compact-studio *{scroll-behavior:auto!important;transition-duration:.001ms!important;animation-duration:.001ms!important}}
+
+/* Compact Studio owns navigation while active. Avoid a duplicate icon rail from Shell. */
+.app-shell.studio-shell{grid-template-columns:0 1fr}
+.sidebar.compact{display:none}
+.workspace.studio-mode{grid-column:2}
