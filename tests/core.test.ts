@@ -53,6 +53,23 @@ const api: ApiWorkflow = {
   '2': { class_type: 'KSampler', inputs: { seed: 1, steps: 20, cfg: 1 } }
 };
 
+describe('Compact Studio source contract',()=>{
+  it('uses the compact CapCut-style workspace by default while preserving Advanced Flow',async()=>{
+    const studio=await readFile(join(process.cwd(),'src','renderer','src','views','Studio.tsx'),'utf8');
+    const compact=await readFile(join(process.cwd(),'src','renderer','src','views','CompactStudio.tsx'),'utf8');
+    const shell=await readFile(join(process.cwd(),'src','renderer','src','components','Shell.tsx'),'utf8');
+    const styles=await readFile(join(process.cwd(),'src','renderer','src','styles.css'),'utf8');
+    expect(studio).toMatch(/return <CompactStudio onOpenAdvanced=/);
+    expect(studio).toMatch(/function StudioAdvanced\(\)/);
+    expect(compact).toMatch(/Media.*Cast.*Places.*Shots.*AI.*Review.*Audio/s);
+    expect(compact).toMatch(/Production timeline/);
+    expect(compact).toMatch(/Generate shot/);
+    expect(compact).toMatch(/Human Review/);
+    expect(shell).toMatch(/studio-shell/);
+    expect(styles).toMatch(/\.workspace\.studio-mode>\.topbar\{display:none\}/);
+  });
+});
+
 describe('Studio guided next step',()=>{
   const base={sceneCount:1,shotCount:2,validVideoWorkflowCount:1,readinessKnown:true,readinessReady:true,preflightState:'ready' as const,openHumanTasks:0,automationRunning:false,canonicalCount:0,timelineCount:0};
   it('guides a fresh project through story, shots, workflows and machine readiness',()=>{
