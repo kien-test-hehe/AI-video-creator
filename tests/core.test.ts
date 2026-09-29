@@ -10,7 +10,7 @@ import { directorText } from '../src/main/services/director-service';
 import { parseVolumeDetectPeak, technicalQcStructuralIssues } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
-import { alternateShotTitle, appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
+import { alternateShotTitle, appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioNextStep, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
@@ -52,6 +52,28 @@ const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
   '2': { class_type: 'KSampler', inputs: { seed: 1, steps: 20, cfg: 1 } }
 };
+
+describe('Studio guided next step',()=>{
+  const base={sceneCount:1,shotCount:2,validVideoWorkflowCount:1,readinessKnown:true,readinessReady:true,preflightState:'ready' as const,openHumanTasks:0,automationRunning:false,canonicalCount:0,timelineCount:0};
+  it('guides a fresh project through story, shots, workflows and machine readiness',()=>{
+    expect(studioNextStep({...base,sceneCount:0}).action).toBe('story');
+    expect(studioNextStep({...base,shotCount:0}).action).toBe('storyboard');
+    expect(studioNextStep({...base,validVideoWorkflowCount:0}).action).toBe('settings');
+    expect(studioNextStep({...base,readinessKnown:false}).action).toBe('system');
+    expect(studioNextStep({...base,readinessReady:false}).tone).toBe('warn');
+  });
+  it('prioritizes preflight and human blockers before autonomous rendering',()=>{
+    expect(studioNextStep({...base,preflightState:'unchecked'}).action).toBe('preflight');
+    expect(studioNextStep({...base,preflightState:'blocked'}).action).toBe('system');
+    expect(studioNextStep({...base,openHumanTasks:2}).action).toBe('human');
+    expect(studioNextStep(base).action).toBe('auto');
+  });
+  it('moves from active production to timeline and finishing without hiding state',()=>{
+    expect(studioNextStep({...base,automationRunning:true}).action).toBe('monitor');
+    expect(studioNextStep({...base,canonicalCount:2}).action).toBe('timeline');
+    expect(studioNextStep({...base,canonicalCount:2,timelineCount:2}).action).toBe('finishing');
+  });
+});
 
 describe('WanGP recursive input safety',()=>{
   it('rejects pathological nesting before recursive traversal can exhaust the JS stack',()=>{
