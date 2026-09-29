@@ -77,3 +77,5 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .app-shell.studio-shell{grid-template-columns:0 1fr}
 .sidebar.compact{display:none}
 .workspace.studio-mode{grid-column:2}
+
+.compact-drop-target{border:1px dashed transparent;border-radius:7px;padding:7px;margin-left:-7px;margin-right:-7px}.compact-drop-target:hover,.compact-drop-target:focus-within{border-color:#4b3a36;background:#131010}
