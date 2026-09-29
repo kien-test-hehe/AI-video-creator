@@ -14,12 +14,13 @@ const MODELS:ModelFamily[]=['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.
 const MODES:GenerationMode[]=['t2v','i2v','flf2v','ia2v','v2v'];
 
 export function CompactStudio({onOpenAdvanced}:{onOpenAdvanced:()=>void}){
-  const{project,queue,automation,selectedShotId,selectShot,updateProject,setQueue,setAutomation,setView,setError,setNotice,setProbe}=useAppStore();
+  const{project,queue,automation,selectedShotId,selectShot,updateProject,setProject,setQueue,setAutomation,setView,setError,setNotice,setProbe,busy}=useAppStore();
   const[tool,setTool]=useState<CompactTool>('media');
   const[tab,setTab]=useState<InspectorTab>('edit');
   const[search,setSearch]=useState('');
   const[reviewTaskId,setReviewTaskId]=useState<string>();
   const[autoBusy,setAutoBusy]=useState(false);
+  const[switchBusy,setSwitchBusy]=useState(false);
   if(!project)return <section className="studio-empty"><Empty>Create or open a project to enter Studio.</Empty></section>;
 
   const sceneIndex=new Map(project.scenes.map(scene=>[scene.id,scene.index] as const));
@@ -35,6 +36,9 @@ export function CompactStudio({onOpenAdvanced}:{onOpenAdvanced:()=>void}){
   const shotQc=selectedShot?project.qcResults.filter(result=>result.shotId===selectedShot.id):[];
   const latestQc=(layer:'technical'|'visual'|'semantic'|'continuity')=>[...shotQc].filter(result=>result.layer===layer).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
   const canonicalCount=project.shots.filter(shot=>Boolean(shot.canonicalRenderId)).length;
+  const switchingBlocked=Boolean(switchBusy||busy||queue.blockedReason||queue.runningJobId||activeJobs.length);
+  const openProject=async()=>{try{setSwitchBusy(true);await Promise.all([useAppStore.getState().persist(),useAppStore.getState().persistMachine()]);const opened=await window.cineforge.project.open();if(opened)setProject(opened);}catch(error){setError(error instanceof Error?error.message:String(error));}finally{setSwitchBusy(false);}};
+  const newProject=async()=>{try{setSwitchBusy(true);await Promise.all([useAppStore.getState().persist(),useAppStore.getState().persistMachine()]);const created=await window.cineforge.project.create('Untitled Film');if(created)setProject(created);}catch(error){setError(error instanceof Error?error.message:String(error));}finally{setSwitchBusy(false);}};
 
   const chooseShot=(shot:Shot)=>{selectShot(shot.id);setReviewTaskId(undefined);setTool('shots');};
   const mutateShot=(fn:(shot:Shot)=>void)=>{if(!selectedShot)return;updateProject(next=>{const target=next.shots.find(item=>item.id===selectedShot.id);if(target)fn(target);});};
@@ -92,6 +96,7 @@ export function CompactStudio({onOpenAdvanced}:{onOpenAdvanced:()=>void}){
 
   return <section className="compact-studio">
     <header className="compact-studio-bar"><div className="compact-title"><strong>{project.story.title||project.name}</strong><span>{selectedShot?.title||'No shot selected'}</span></div><div className="compact-bar-actions">
+      <button className="compact-quiet" disabled={switchingBlocked} onClick={openProject}>Open</button><button className="compact-quiet" disabled={switchingBlocked} onClick={newProject}>New</button>
       <button className="compact-status" onClick={()=>setView('dashboard')}>● Local</button><button className="compact-quiet" onClick={()=>setView('queue')}>Queue {activeJobs.length}</button>
       <button className={automation?.running&&!automation.paused?'compact-quiet active':'compact-primary'} disabled={autoBusy||shots.length===0} onClick={toggleAutomation}>{autoBusy?'…':automation?.running?(automation.paused?'Resume':'Pause'):'AUTO'}</button>
       <button className="compact-quiet" onClick={()=>setView('finishing')}>Export</button></div></header>
