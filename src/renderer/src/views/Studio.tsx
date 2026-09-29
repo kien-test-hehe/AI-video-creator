@@ -8,6 +8,7 @@ import { autoAssignAssetToShot } from '../asset-assignment';
 import { appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioNextStep, studioPreflightState, studioWorkflowIssue, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
+import { CompactStudio } from './CompactStudio';
 import { compareTimelineClips } from '../../../shared/timeline-policy';
 import { takeUseConfirmationMessage } from '../../../shared/take-policy';
 
@@ -25,6 +26,11 @@ const ACTIVE_JOB_STATUSES=new Set(['queued','preparing','uploading','submitted',
 const MIN_ZOOM=.03,MAX_ZOOM=1.5;
 
 export function Studio(){
+  const[advanced,setAdvanced]=useState(false);
+  if(advanced)return <div className="studio-advanced-shell"><button className="studio-back-compact" onClick={()=>setAdvanced(false)}>← Compact Studio</button><StudioAdvanced/></div>;
+  return <CompactStudio onOpenAdvanced={()=>setAdvanced(true)}/>;
+}
+function StudioAdvanced(){
   const{project,probe,queue,automation,selectedShotId,selectShot,updateProject,setProject,setQueue,setAutomation,setView,setError,setNotice,setProbe}=useAppStore();
   const projectId=project?.id;
   const[zoom,setZoom]=useState(.78);
