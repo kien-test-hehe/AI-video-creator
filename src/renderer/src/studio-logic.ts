@@ -10,6 +10,36 @@ export function studioPreflightState(report:PreflightReport|undefined,reportRevi
   if(!reportRevision||!projectUpdatedAt||reportRevision!==projectUpdatedAt)return'stale';
   return report.ready?'ready':'blocked';
 }
+
+export type StudioGuideAction='story'|'storyboard'|'settings'|'system'|'preflight'|'human'|'auto'|'timeline'|'finishing'|'monitor';
+export interface StudioGuideInput{
+  sceneCount:number;
+  shotCount:number;
+  validVideoWorkflowCount:number;
+  readinessKnown:boolean;
+  readinessReady:boolean;
+  preflightState:StudioPreflightState;
+  openHumanTasks:number;
+  automationRunning:boolean;
+  canonicalCount:number;
+  timelineCount:number;
+}
+export interface StudioGuideStep{title:string;detail:string;actionLabel:string;action:StudioGuideAction;tone:'normal'|'warn'|'good';}
+export function studioNextStep(input:StudioGuideInput):StudioGuideStep{
+  if(input.sceneCount===0)return{title:'Start with the story',detail:'Paste or write the screenplay, then parse it into scenes.',actionLabel:'Open Story',action:'story',tone:'normal'};
+  if(input.shotCount===0)return{title:'Turn scenes into shots',detail:'Create the shot plan before choosing generation routes.',actionLabel:'Open Storyboard',action:'storyboard',tone:'normal'};
+  if(input.validVideoWorkflowCount===0)return{title:'Prepare one local video workflow',detail:'Provision or validate at least one WanGP/Comfy video route that matches your shots.',actionLabel:'Open Workflows',action:'settings',tone:'warn'};
+  if(!input.readinessKnown)return{title:'Check this workstation',detail:'Verify GPU, local runtime, FFmpeg and model readiness before rendering.',actionLabel:'Open System',action:'system',tone:'normal'};
+  if(!input.readinessReady)return{title:'Fix workstation blockers',detail:'System readiness has at least one blocking item. Resolve it before AUTO RUN.',actionLabel:'Open System',action:'system',tone:'warn'};
+  if(input.preflightState==='unchecked'||input.preflightState==='stale')return{title:'Run project preflight',detail:'Check the current project state and local routes before spending GPU time.',actionLabel:'Run Preflight',action:'preflight',tone:'normal'};
+  if(input.preflightState==='blocked')return{title:'Fix preflight blockers',detail:'The current project cannot render safely yet. Open System for the exact blocking checks.',actionLabel:'Open System',action:'system',tone:'warn'};
+  if(input.openHumanTasks>0)return{title:'Review human decisions',detail:`${input.openHumanTasks} task${input.openHumanTasks===1?'':'s'} need a human decision before production can continue.`,actionLabel:'Show Human Tasks',action:'human',tone:'warn'};
+  if(input.automationRunning)return{title:'AUTO RUN is working',detail:'Production owns the local GPU. Monitor the current shot, retries and QC blockers here.',actionLabel:'Monitor AUTO RUN',action:'monitor',tone:'good'};
+  if(input.canonicalCount<input.shotCount)return{title:'Ready for autonomous production',detail:`${input.canonicalCount}/${input.shotCount} shots are canonical. CineForge can render, QC, propagate continuity and build the cut.`,actionLabel:'Start AUTO RUN',action:'auto',tone:'good'};
+  if(input.timelineCount===0)return{title:'Build the canonical cut',detail:'All shots are canonical, but the timeline is still empty.',actionLabel:'Open Timeline',action:'timeline',tone:'normal'};
+  return{title:'Finish the film',detail:'The canonical cut is ready for local master export or CapCut finishing.',actionLabel:'Open Finishing',action:'finishing',tone:'good'};
+}
+
 export interface WorkflowRouteResult { ok:boolean;message:string; }
 
 export function routeShotToWorkflow(shot:Shot,profile:WorkflowProfile):WorkflowRouteResult{
