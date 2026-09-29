@@ -34,6 +34,10 @@ NVIDIA display/compute drivers are intentionally **not** silently upgraded by th
 
 The first project defaults to **CapCut Free / No Pro** and **CapCut AI credits disabled**. CineForge detects whether a CapCut executable is present, but it does **not** claim to verify the signed-in CapCut account's subscription tier; Pro/No Pro is an explicit project policy setting. If the machine-local WanGP runtime is ready, CineForge automatically reads its model catalog and provisions recommended local profiles. Model weights remain on-demand because shipping tens of gigabytes inside Git would be impractical.
 
+## Local-only application model
+
+CineForge is a desktop application, not a hosted web service. The packaged Electron renderer loads from local application files; there is no public backend, deployment server, account server, or cloud generation endpoint required by CineForge. WanGP runs as a local process by default. Optional local HTTP integrations such as Ollama and dedicated ComfyUI are restricted to loopback (`127.0.0.1` / `localhost`) and redirects to non-local hosts are rejected.
+
 ## Unified Studio UX
 
 CineForge opens into **Studio**, a filmmaking control surface inspired by the useful interaction model of node-based tools without exposing users to raw diffusion graph complexity.
