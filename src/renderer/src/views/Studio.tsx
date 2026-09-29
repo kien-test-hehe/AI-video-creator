@@ -5,7 +5,7 @@ import { continuityReviewInputKey } from '../../../shared/director-signature';
 import type { Asset, AssetKind, ContinuityReview, FilmProject, GenerationMode, ModelFamily, PreflightReport, QualityIntent, QueueSnapshot, Shot, SystemProbe, WorkstationReadiness } from '../../../shared/types';
 import { projectMediaUrl } from '../media';
 import { autoAssignAssetToShot } from '../asset-assignment';
-import { appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioPreflightState, studioWorkflowIssue, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
+import { appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioNextStep, studioPreflightState, studioWorkflowIssue, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
 import { useAppStore, type ViewId } from '../store';
 import { Empty, Pill } from '../components/Ui';
 import { compareTimelineClips } from '../../../shared/timeline-policy';
@@ -335,6 +335,26 @@ export function Studio(){
   if(!project)return <section className="studio-empty"><Empty>Create or open a project to enter Studio.</Empty></section>;
 
   const openHumanTasks=[...project.humanTasks].filter(task=>task.status==='open').sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
+  const validVideoWorkflowCount=project.settings.workflowProfiles.filter(profile=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video'&&profile.validation?.structuralStatus==='valid').length;
+  const canonicalCount=project.shots.filter(shot=>Boolean(shot.canonicalRenderId)).length;
+  const guide=studioNextStep({sceneCount:project.scenes.length,shotCount:project.shots.length,validVideoWorkflowCount,readinessKnown:Boolean(readiness),readinessReady:Boolean(readiness?.readyForProduction),preflightState,openHumanTasks:openHumanTasks.length,automationRunning:Boolean(automation?.running),canonicalCount,timelineCount:project.timeline.length});
+  const runGuideAction=()=>{
+    switch(guide.action){
+      case 'story':setView('story');break;
+      case 'storyboard':setView('storyboard');break;
+      case 'settings':setView('settings');break;
+      case 'system':setView('dashboard');break;
+      case 'preflight':void runPreflight();break;
+      case 'human':setShowDock(true);setNotice('Human Tasks are shown in the bottom dock. Review each blocker before continuing.');break;
+      case 'auto':void startAutomation();break;
+      case 'timeline':setView('timeline');break;
+      case 'finishing':setView('finishing');break;
+      case 'monitor':{
+        const shotId=automation?.currentShotId;if(!shotId)break;
+        setFocusedAssetId(undefined);setFocusedNodeId(`shot:${shotId}`);selectShot(shotId);scrollToNode(`shot:${shotId}`,nodeMap,viewportRef.current,zoom);break;
+      }
+    }
+  };
   const filteredAssets=project.assets.filter(asset=>{
     const kindOk=assetKind==='all'||asset.kind===assetKind;
     const query=assetSearch.trim().toLowerCase();
@@ -369,6 +389,10 @@ export function Studio(){
         <button className="primary" title={!selectedRouteReady?'Select or validate a usable video workflow before rendering.':undefined} disabled={Boolean(automation?.running)||!selectedShot||focusedNode?.kind!=='shot'||focusedNode.shotId!==selectedShot.id||!selectedRouteReady} onClick={queueSelected}>Render selected</button>
       </div>
     </header>
+    <section className={`studio-guide ${guide.tone}`}>
+      <div><span className="eyebrow">NEXT STEP</span><strong>{guide.title}</strong><small>{guide.detail}</small></div>
+      <button className={guide.tone==='good'?'primary':'ghost'} disabled={(guide.action==='preflight'&&preflightBusy)||(guide.action==='auto'&&automationBusy)} onClick={runGuideAction}>{guide.actionLabel}</button>
+    </section>
     <section className={`studio-automation-bar ${automation?.phase||'idle'}`}>
       <div><span className="eyebrow">AUTONOMOUS PRODUCTION</span><strong>{automation?.message||'Idle · human-on-the-loop runtime ready'}</strong></div>
       <div className="studio-auto-metrics"><span><b>{automation?.completedShotIds.length??0}</b> / {sortedShots.length} canonical</span><span>Current: <b>{(automation?.currentShotId?project.shots.find(shot=>shot.id===automation.currentShotId):undefined)?.title||'—'}</b></span><span>Retries: <b>{automation?.retryCounts?Object.values(automation.retryCounts).reduce((sum,value)=>sum+value,0):0}</b></span><span>Blockers: <b>{automation?.blockedHumanTaskIds.length??0}</b></span><span>Readiness: <b>{readiness?.readyForProduction?'ready':readiness?'check':'unknown'}</b></span></div>
