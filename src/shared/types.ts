@@ -430,6 +430,9 @@ export interface TechnicalQcResult {
   fps?: number;
   hasAudio?: boolean;
   audioPeakDb?: number;
+  audioIntegratedLufs?: number;
+  maxSilenceSec?: number;
+  totalSilenceSec?: number;
   issues: string[];
 }
 
