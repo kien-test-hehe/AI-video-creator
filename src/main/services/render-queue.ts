@@ -673,7 +673,7 @@ export class RenderQueueService extends EventEmitter {
   }
 
   private baseValues(job:RenderJob):WorkflowValues{
-    const shot=job.spec!.shot;return{prompt:job.spec!.effectivePrompt,negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:shot.generation.frames,fps:shot.generation.fps,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed,filenamePrefix:`cineforge/${shot.id}/${job.id}`};
+    const shot=job.spec!.shot;return{prompt:job.spec!.effectivePrompt,negativePrompt:shot.generation.negativePrompt,width:shot.generation.width,height:shot.generation.height,resolution:`${shot.generation.width}x${shot.generation.height}`,frames:shot.generation.frames,fps:shot.generation.fps,steps:shot.generation.steps,cfg:shot.generation.cfg,seed:shot.generation.seed,includeAudio:shot.generation.includeAudio,filenamePrefix:`cineforge/${shot.id}/${job.id}`};
   }
 
   private async populateLocalReferencePaths(project:FilmProject,shot:Shot,profile:WorkflowProfile,values:WorkflowValues):Promise<void>{
