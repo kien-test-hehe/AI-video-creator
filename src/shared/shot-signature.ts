@@ -62,11 +62,13 @@ function stateRenderKey(project:FilmProject,stateId:string|undefined):unknown{
 }
 
 export function keyframeProjectInputKey(project:FilmProject,shot:Shot,role:'start'|'end',profile:WorkflowProfile|undefined):string{
+  const actualStart=role==='start'?currentGenerationState(project,shot.actualStartStateId):undefined;
+  const effectiveState=role==='start'
+    ? stateRenderKey(project,actualStart?.id??shot.plannedStartStateId)
+    : stateRenderKey(project,shot.plannedEndStateId);
   return JSON.stringify({
     shot:shotKeyframeInputKey(shot,role),
-    actualStartState:stateRenderKey(project,shot.actualStartStateId),
-    plannedStartState:stateRenderKey(project,shot.plannedStartStateId),
-    plannedEndState:stateRenderKey(project,shot.plannedEndStateId),
+    effectiveState,
     workflow:workflowExecutionKey(profile)
   });
 }
@@ -107,11 +109,12 @@ export function shotProjectRenderInputKeyForProfile(project:FilmProject,shot:Sho
   const promptAssets=[...new Set(ids)].map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({
     id:asset!.id,kind:asset!.kind,name:asset!.name,notes:asset!.notes
   })).sort((a,b)=>a.id.localeCompare(b.id));
+  const actualStart=currentGenerationState(project,shot.actualStartStateId);
   return JSON.stringify({
     shot:shotRenderInputKey(shot),
     promptAssets,
-    actualStartState:stateRenderKey(project,shot.actualStartStateId),
-    plannedStartState:stateRenderKey(project,shot.plannedStartStateId),
+    actualStartState:actualStart?stateRenderKey(project,actualStart.id):undefined,
+    plannedStartState:actualStart?undefined:stateRenderKey(project,shot.plannedStartStateId),
     plannedEndState:stateRenderKey(project,shot.plannedEndStateId),
     workflow:workflowExecutionKey(profile)
   });
