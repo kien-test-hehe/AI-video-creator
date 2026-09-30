@@ -11,6 +11,7 @@ import { Empty, Pill } from '../components/Ui';
 import { CompactStudio } from './CompactStudio';
 import { compareTimelineClips } from '../../../shared/timeline-policy';
 import { takeUseConfirmationMessage } from '../../../shared/take-policy';
+import { OBSERVED_STATE_APPROVAL_PREFIX, isObservedStateConfidenceTaskTitle } from '../../../shared/production-state';
 
 type Point={x:number;y:number};
 type StudioNodeKind='story'|'assets'|'system'|'scene'|'shot'|'workflow'|'queue'|'timeline'|'capcut';
@@ -276,9 +277,15 @@ function StudioAdvanced(){
         const task=current.humanTasks.find(item=>item.id===taskId);if(!task)throw new Error('Human task no longer exists.');
         const linkedQc=current.qcResults.find(result=>result.humanOverrideTaskId===taskId);
         if(linkedQc)throw new Error('QC review tasks must be decided PASS or FAIL; resolving/dismissing them without a verdict would leave the take permanently ambiguous.');
+        let resolution=status==='resolved'?'Reviewed and resolved explicitly in Studio.':'Dismissed explicitly in Studio.';
+        if(status==='resolved'&&isObservedStateConfidenceTaskTitle(task.title)){
+          const note=window.prompt('Approve this extracted observed final state only if the visible final frame/take supports the extracted facts. Review note:','Observed final state visually verified.')?.trim();
+          if(note==null)return;
+          if(!note)throw new Error('Observed-state approval requires a review note for the audit trail.');
+          resolution=`${OBSERVED_STATE_APPROVAL_PREFIX} ${note}`;
+        }
         const next=await window.cineforge.production.resolveHumanTask({
-          projectRoot:current.rootPath,taskId,status,
-          resolution:status==='resolved'?'Reviewed and resolved explicitly in Studio.':'Dismissed explicitly in Studio.'
+          projectRoot:current.rootPath,taskId,status,resolution
         });
         useAppStore.getState().syncRuntime(next);
         setNotice(status==='resolved'?`Resolved: ${task.title}`:`Dismissed: ${task.title}`);
@@ -449,7 +456,7 @@ function StudioAdvanced(){
         <div className="studio-timeline-strip" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-cineforge-render-output')){event.preventDefault();event.dataTransfer.dropEffect='copy';}}} onDrop={event=>{const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');if(outputId){event.preventDefault();const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}const decision=approveTimelineTake(outputId);if(!decision.allowed)return;updateProject(next=>{insertTimelineOutput(next,outputId,undefined,decision.overrideReason);});setNotice('Added rendered take to the end of the canonical timeline.');}}}>{project.timeline.length===0?<span className="muted">Drag a rendered take here, or build a cut in Timeline.</span>:[...project.timeline].sort(compareTimelineClips).map((clip,index)=>{const shot=project.shots.find(item=>item.id===clip.shotId);return <button key={clip.id} draggable onDragStart={event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-timeline-clip',clip.id);}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='move';}} onDrop={event=>{event.preventDefault();event.stopPropagation();const outputId=event.dataTransfer.getData('application/x-cineforge-render-output');if(outputId){const issue=timelineInsertIssue(project);if(issue){setError(issue);return;}const decision=approveTimelineTake(outputId);if(!decision.allowed)return;updateProject(next=>{insertTimelineOutput(next,outputId,clip.id,decision.overrideReason);});setNotice('Inserted rendered take into the canonical timeline.');return;}const sourceId=event.dataTransfer.getData('application/x-cineforge-timeline-clip');if(sourceId)updateProject(next=>{reorderTimeline(next,sourceId,clip.id);});}} onClick={()=>{if(shot){setFocusedAssetId(undefined);setFocusedNodeId(`shot:${shot.id}`);selectShot(shot.id);scrollToNode(`shot:${shot.id}`,nodeMap,viewportRef.current,zoom);}}}><span>{index+1}</span><strong>{shot?.title||'Shot'}</strong><small>{shot?`${(shot.generation.frames/shot.generation.fps).toFixed(1)}s`:'—'}</small></button>;})}</div>
       </section>
       <section className="studio-dock-block human-dock"><div className="studio-dock-head"><div><span className="eyebrow">HUMAN TASKS</span><strong>{openHumanTasks.length} open</strong></div></div>
-        <div className="studio-human-strip">{openHumanTasks.length===0?<span className="muted">No intervention required.</span>:openHumanTasks.map(task=>{const linkedQc=project.qcResults.find(result=>result.humanOverrideTaskId===task.id);return <div className="studio-human-task" key={task.id}><button className="studio-human-focus" onClick={()=>{if(task.shotId){setFocusedAssetId(undefined);setFocusedNodeId(`shot:${task.shotId}`);selectShot(task.shotId);scrollToNode(`shot:${task.shotId}`,nodeMap,viewportRef.current,zoom);}}}><strong>{task.title}</strong><small>{task.reason}</small></button><div className="studio-human-actions">{linkedQc&&linkedQc.layer!=='technical'?<><button title={`Mark ${linkedQc.layer} QC PASS`} onClick={()=>void decideHumanQc(task.id,'pass')}>✓</button><button title={`Mark ${linkedQc.layer} QC FAIL`} onClick={()=>void decideHumanQc(task.id,'fail')}>!</button></>:<><button title="Resolve after review" onClick={()=>void resolveHumanTask(task.id,'resolved')}>✓</button><button title="Dismiss task" onClick={()=>void resolveHumanTask(task.id,'dismissed')}>×</button></>}</div></div>;})}</div>
+        <div className="studio-human-strip">{openHumanTasks.length===0?<span className="muted">No intervention required.</span>:openHumanTasks.map(task=>{const linkedQc=project.qcResults.find(result=>result.humanOverrideTaskId===task.id);return <div className="studio-human-task" key={task.id}><button className="studio-human-focus" onClick={()=>{if(task.shotId){setFocusedAssetId(undefined);setFocusedNodeId(`shot:${task.shotId}`);selectShot(task.shotId);scrollToNode(`shot:${task.shotId}`,nodeMap,viewportRef.current,zoom);}}}><strong>{task.title}</strong><small>{task.reason}</small></button><div className="studio-human-actions">{linkedQc&&linkedQc.layer!=='technical'?<><button title={`Mark ${linkedQc.layer} QC PASS`} onClick={()=>void decideHumanQc(task.id,'pass')}>✓</button><button title={`Mark ${linkedQc.layer} QC FAIL`} onClick={()=>void decideHumanQc(task.id,'fail')}>!</button></>:<><button title={isObservedStateConfidenceTaskTitle(task.title)?'Approve extracted observed state':'Resolve after review'} onClick={()=>void resolveHumanTask(task.id,'resolved')}>✓</button><button title="Dismiss task" onClick={()=>void resolveHumanTask(task.id,'dismissed')}>×</button></>}</div></div>;})}</div>
       </section>
     </footer>}
   </section>;
