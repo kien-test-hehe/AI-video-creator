@@ -897,11 +897,13 @@ describe('foreground artifact input signatures',()=>{
     const trimEdit=structuredClone(base);trimEdit.timeline[0].trimInSec=.25;expect(timelineExportInputKey(trimEdit)).not.toBe(before);
     const fpsEdit=structuredClone(base);fpsEdit.settings.defaultFps=30;expect(timelineExportInputKey(fpsEdit)).not.toBe(before);
   });
-  it('changes CapCut signature when manifest-relevant story, assets, shot metadata or QC changes',()=>{
+  it('changes CapCut signature only for handoff-relevant story, assets, shot metadata or QC',()=>{
     const base=project(),before=capcutHandoffInputKey(base);
     const storageReorder=structuredClone(base);storageReorder.timeline.reverse();expect(capcutHandoffInputKey(storageReorder)).toBe(before);
     const story=structuredClone(base);story.story.notes='changed';expect(capcutHandoffInputKey(story)).not.toBe(before);
     const asset=structuredClone(base);asset.assets[0].notes='changed';expect(capcutHandoffInputKey(asset)).not.toBe(before);
+    const continuity=structuredClone(base);continuity.assets[0].continuity={identityAnchors:['same face']};expect(capcutHandoffInputKey(continuity)).not.toBe(before);
+    const unrelated=structuredClone(base);unrelated.assets.push({id:'unused',kind:'reference',name:'Unused',sourcePath:'unused.png',projectPath:'assets/unused.png',tags:[],notes:'does not belong to the cut',createdAt:'2026-01-01T00:00:00.000Z'});expect(capcutHandoffInputKey(unrelated)).toBe(before);
     const shot=structuredClone(base);shot.shots[0].dialogue='changed';expect(capcutHandoffInputKey(shot)).not.toBe(before);
     const qc=structuredClone(base);qc.renderOutputs[0].technicalQc!.warnings=['warn'];expect(capcutHandoffInputKey(qc)).not.toBe(before);
   });
@@ -3565,5 +3567,74 @@ describe('final Director/profile consistency',()=>{
     asset.continuity!.identityAnchors=['different identity anchor'];
     expect(sceneDirectorInputKey(project,scene)).not.toBe(sceneBefore);
     expect(continuityReviewInputKey(project,shot)).not.toBe(reviewBefore);
+  });
+});
+
+
+describe('final export and CapCut handoff correctness',()=>{
+  it('chooses master geometry from the best source rather than the first timeline clip',()=>{
+    const master=selectMasterVideoGeometry([
+      {width:1280,height:720,fps:24,hasAudio:true},
+      {width:1920,height:1080,fps:25,hasAudio:true},
+      {width:768,height:432,fps:30,hasAudio:false}
+    ],30);
+    expect(master).toMatchObject({width:1920,height:1080,fps:30});
+  });
+
+  it('places timeline trim seek after every FFmpeg input for accurate editorial seeking',()=>{
+    const args=buildNormalizeClipArgs(
+      '/project/renders/source.mp4','/project/cache/out.mp4',
+      {id:'clip',shotId:'shot',renderOutputId:'out',track:0,order:0,trimInSec:1.25,trimOutSec:3.5,volume:1},
+      {width:1280,height:720,fps:24,hasAudio:false,durationSec:5},
+      {width:1920,height:1080,fps:24,hasAudio:true},
+      'libx264'
+    );
+    const seek=args.indexOf('-ss'),lastInput=args.lastIndexOf('-i');
+    expect(seek).toBeGreaterThan(lastInput);
+    expect(args[seek+1]).toBe('1.25');
+    expect(args).toContain('scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24');
+  });
+
+  it('collects only assets explicitly referenced by shots that are actually in the timeline',()=>{
+    const project={
+      timeline:[{id:'clip',shotId:'used-shot',renderOutputId:'out',track:0,order:0,trimInSec:0,volume:1}],
+      shots:[
+        {id:'used-shot',characterAssetIds:['char'],propAssetIds:['prop'],referenceAssetIds:['ref'],locationAssetId:'loc',startFrameAssetId:'start',endFrameAssetId:'end',referenceVideoAssetId:'video',audioAssetId:'audio'},
+        {id:'unused-shot',characterAssetIds:['unused'],propAssetIds:[],referenceAssetIds:[]}
+      ]
+    } as unknown as FilmProject;
+    expect(capcutReferencedAssetIds(project)).toEqual(['audio','char','end','loc','prop','ref','start','video']);
+  });
+
+  it('does not let an unrelated missing asset break CapCut handoff and preserves structured continuity for relevant assets',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-capcut-scope-'));
+    try{
+      await mkdir(join(root,'renders'),{recursive:true});await mkdir(join(root,'assets'),{recursive:true});
+      const renderPath=join(root,'renders','out.mp4'),refPath=join(root,'assets','ref.png');
+      await writeFile(renderPath,'video-placeholder');await writeFile(refPath,'reference-placeholder');
+      const shot:Shot={
+        id:'shot',sceneId:'scene',index:1,title:'Shot',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'keep identity',
+        characterAssetIds:[],propAssetIds:[],referenceAssetIds:['ref'],status:'rendered',
+        generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+      };
+      const project:FilmProject={
+        schemaVersion:3,id:'handoff-scope',name:'Handoff Scope',rootPath:root,createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+        story:{title:'Film',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['shot']}],
+        assets:[
+          {id:'ref',kind:'reference',name:'Hero ref',sourcePath:'ref.png',projectPath:'assets/ref.png',tags:['hero'],notes:'visual anchor',continuity:{identityAnchors:['scar over left eyebrow'],forbiddenChanges:['no beard']},createdAt:'2026-01-01T00:00:00.000Z'},
+          {id:'unused',kind:'reference',name:'Unused missing file',sourcePath:'missing.png',projectPath:'assets/does-not-exist.png',tags:[],notes:'not used by timeline',createdAt:'2026-01-01T00:00:00.000Z'}
+        ],
+        shots:[shot],renderJobs:[],renderOutputs:[{id:'out',jobId:'orphaned',shotId:'shot',path:renderPath,filename:'out.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'}],
+        timeline:[{id:'clip',shotId:'shot',renderOutputId:'out',track:0,order:0,trimInSec:0,volume:1,approval:'human-override',approvalReason:'Human approved local handoff source.'}],
+        shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+        settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+      };
+      project.timeline[0].approvalInputKey=timelineTakeApprovalInputKey(project,'out');
+      const result=await prepareCapCutHandoff(project);
+      const manifest=JSON.parse(await readFile(result.manifestPath,'utf8'));
+      expect(manifest.assets).toHaveLength(1);
+      expect(manifest.assets[0].id).toBe('ref');
+      expect(manifest.assets[0].continuity.identityAnchors).toContain('scar over left eyebrow');
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });
