@@ -51,10 +51,10 @@ export async function assessWorkstationReadiness(project:FilmProject|undefined,m
 
   const profiles=(project?.settings.workflowProfiles??[]).filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   const validatedProfiles=profiles.filter(profile=>Boolean(profile.validation?.lastSuccessfulRenderAt));
-  if(!project)add('profiles','Production profiles','warning','Open a project to inspect production workflow qualification.');
-  else if(validatedProfiles.length)add('profiles','Production profiles','ready',`${validatedProfiles.length} video profile(s) have a recorded successful render on this workstation/project.`);
-  else if(profiles.length)add('profiles','Production profiles','warning',`${profiles.length} structurally valid video profile(s), but none has a recorded successful render yet.`,'Run one short qualification render per intended production route.');
-  else add('profiles','Production profiles','blocked','No enabled structurally valid video workflow profile is available.','Provision/import and validate at least one local video workflow.');
+  if(!project)add('profiles','Video route qualification','warning','Open a project to inspect local video-route qualification.');
+  else if(validatedProfiles.length)add('profiles','Video route qualification','ready',`${validatedProfiles.length} video profile(s) have completed a technical runtime render on this workstation/project. This proves executable routing, not creative/semantic production quality.`);
+  else if(profiles.length)add('profiles','Video route qualification','blocked',`${profiles.length} structurally valid video profile(s), but none has completed a technical runtime qualification render yet.`,'Run one short qualification render per intended production route before treating the workstation as production-ready.');
+  else add('profiles','Video route qualification','blocked','No enabled structurally valid video workflow profile is available.','Provision/import and validate at least one local video workflow.');
 
   const autoQcAvailable=directorModel.available;
   add(
