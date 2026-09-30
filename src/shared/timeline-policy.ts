@@ -92,6 +92,21 @@ export function timelineExportInputKey(project:FilmProject):string{
   });
 }
 
+export function capcutReferencedAssetIds(project:FilmProject):string[]{
+  const timelineShotIds=new Set(project.timeline.map(clip=>clip.shotId));
+  const ids=new Set<string>();
+  for(const shot of project.shots){
+    if(!timelineShotIds.has(shot.id))continue;
+    for(const id of shot.characterAssetIds)ids.add(id);
+    for(const id of shot.propAssetIds)ids.add(id);
+    for(const id of shot.referenceAssetIds??[])ids.add(id);
+    for(const id of [shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId]){
+      if(id)ids.add(id);
+    }
+  }
+  return[...ids].sort();
+}
+
 export function capcutHandoffInputKey(project:FilmProject):string{
   const outputIds=new Set(project.timeline.map(clip=>clip.renderOutputId));
   const shotIds=new Set(project.timeline.map(clip=>clip.shotId));
@@ -104,8 +119,17 @@ export function capcutHandoffInputKey(project:FilmProject):string{
       approvalStateKey:timelineTakeApprovalInputKey(project,clip.renderOutputId),
       useIssue:timelineClipUseIssue(project,clip)
     })),
-    shots:project.shots.filter(shot=>shotIds.has(shot.id)).map(shot=>({id:shot.id,title:shot.title,dialogue:shot.dialogue,continuityNotes:shot.continuityNotes})).sort((a,b)=>a.id.localeCompare(b.id)),
+    shots:project.shots.filter(shot=>shotIds.has(shot.id)).map(shot=>({
+      id:shot.id,title:shot.title,dialogue:shot.dialogue,continuityNotes:shot.continuityNotes,
+      referencedAssetIds:[...new Set([
+        ...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),
+        shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId
+      ].filter((id):id is string=>Boolean(id)))].sort()
+    })).sort((a,b)=>a.id.localeCompare(b.id)),
     outputs:project.renderOutputs.filter(output=>outputIds.has(output.id)).map(output=>({id:output.id,jobId:output.jobId,shotId:output.shotId,path:output.path,filename:output.filename,mediaType:output.mediaType,technicalQc:output.technicalQc})).sort((a,b)=>a.id.localeCompare(b.id)),
-    assets:project.assets.map(asset=>({id:asset.id,kind:asset.kind,name:asset.name,projectPath:asset.projectPath,notes:asset.notes,tags:asset.tags})).sort((a,b)=>a.id.localeCompare(b.id))
+    assets:capcutReferencedAssetIds(project)
+      .map(id=>project.assets.find(asset=>asset.id===id))
+      .filter((asset):asset is FilmProject['assets'][number]=>Boolean(asset))
+      .map(asset=>({id:asset.id,kind:asset.kind,name:asset.name,projectPath:asset.projectPath,notes:asset.notes,tags:asset.tags,continuity:asset.continuity}))
   });
 }
