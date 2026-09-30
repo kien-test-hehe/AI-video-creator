@@ -8,7 +8,7 @@ import { MODEL_DEFAULTS } from '../src/shared/defaults';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
 import { directorText } from '../src/main/services/director-service';
-import { parseVisualProblemDurations, parseVolumeDetectPeak, technicalQcStructuralIssues, technicalQcVisualFindings } from '../src/main/services/technical-qc';
+import { parseAudioProblemMetrics, parseVisualProblemDurations, parseVolumeDetectPeak, technicalAudioFindings, technicalQcStructuralIssues, technicalQcVisualFindings } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { alternateShotTitle, appendProjectText, canonicalReadyOutputForShot, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioNextStep, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
@@ -51,9 +51,9 @@ import { evaluateContinuityQc, evaluateSemanticQc, observedStateDraftFingerprint
 import { AutomationJournal } from '../src/main/services/automation-journal';
 import { assertExternalDependenciesReady, automationTaskDisposition, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
 import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../src/shared/retry-policy';
-import { videoFrameExtractionArgs } from '../src/main/services/media-analysis';
+import { qcContactFrameFractions, videoFrameExtractionArgs } from '../src/main/services/media-analysis';
 import { analyzeImagesWithLocalVision, parseLocalVisionJsonObject } from '../src/main/services/local-vision-service';
-import { directorModelListContains } from '../src/main/services/workstation-readiness';
+import { directorModelListContains, videoRouteQualification } from '../src/main/services/workstation-readiness';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -3097,5 +3097,86 @@ describe('final missing hardening regressions',()=>{
     expect(source).toMatch(/SHOT_NO_REFERENCE_VIDEO/);
     expect(source).toMatch(/SHOT_NO_INPUT_AUDIO/);
     expect(source).toMatch(/AUDIO_GENERATION_CONTROL_UNBOUND/);
+  });
+});
+
+
+describe('final QC/runtime hardening',()=>{
+  it('samples eight chronological points across short and normal takes',()=>{
+    const normal=qcContactFrameFractions(5);
+    const short=qcContactFrameFractions(.8);
+    expect(normal).toHaveLength(8);
+    expect(short).toHaveLength(8);
+    expect([...normal].sort((a,b)=>a-b)).toEqual(normal);
+    expect([...short].sort((a,b)=>a-b)).toEqual(short);
+    expect(normal[0]).toBeGreaterThan(0);
+    expect(normal.at(-1)).toBeLessThan(1);
+  });
+
+  it('does not promote temporal action phase from a single final still',()=>{
+    const shot:Shot={
+      id:'action-still',sceneId:'scene',index:1,title:'Action still',prompt:'',camera:'',action:'door opens',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+    };
+    const project={assets:[],scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:[shot.id]}]} as any as FilmProject;
+    const draft=observedStateDraftFromVisionResult(project,shot,{actionPhase:'door fully open',confidence:.9,characters:[],props:[],environment:{},camera:{}});
+    expect(draft.actionPhase).toBe('');
+  });
+
+  it('forces Human Review when still-image semantic QC cannot verify dialogue/audio intent',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-audio-semantic-review-')),frame=join(root,'frame.jpg');
+    await writeFile(frame,Buffer.from([0xff,0xd8,0xff,0xd9]));
+    const shot:Shot={
+      id:'audio-shot',sceneId:'scene',index:1,title:'Dialogue',prompt:'Hero speaks',camera:'medium',action:'speaks',dialogue:'Hello there',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}
+    };
+    const project={assets:[]} as any as FilmProject;
+    const machine={director:{baseUrl:'http://127.0.0.1:11434/v1',model:'qwen3-vl:4b',temperature:.2}} as AppMachineSettings;
+    const original=globalThis.fetch;
+    (globalThis as any).fetch=vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:'{"status":"pass","issues":[]}'}}]}),{status:200,headers:{'content-type':'application/json'}}));
+    try{
+      const result=await evaluateSemanticQc(machine,project,shot,[frame],[]);
+      expect(result.status).toBe('human-verify');
+      expect(result.issues.some(issue=>issue.code==='AUDIO_SEMANTIC_REVIEW_REQUIRED')).toBe(true);
+    }finally{(globalThis as any).fetch=original;await rm(root,{recursive:true,force:true});}
+  });
+
+  it('parses silence/loudness and blocks mostly-silent audio when a shot expects sound',()=>{
+    const metrics=parseAudioProblemMetrics([
+      '[silencedetect] silence_end: 2.00 | silence_duration: 2.00',
+      '[silencedetect] silence_end: 4.50 | silence_duration: 1.50',
+      '[Parsed_ebur128_1] Summary:',
+      '    I:         -24.3 LUFS'
+    ].join('\n'));
+    expect(metrics).toEqual({integratedLufs:-24.3,maxSilenceSec:2,totalSilenceSec:3.5});
+    const shot:Shot={
+      id:'audio-qc',sceneId:'scene',index:1,title:'Audio QC',prompt:'',camera:'',action:'',dialogue:'spoken line',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:120,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}
+    };
+    const mostlySilent=technicalAudioFindings(shot,5,{integratedLufs:-36,maxSilenceSec:4,totalSilenceSec:4.2});
+    expect(mostlySilent.issues.join(' ')).toMatch(/mostly silent/i);
+    expect(mostlySilent.warnings.join(' ')).toMatch(/too quiet/i);
+    const missing=technicalQcStructuralIssues({...shot,generation:{...shot.generation,includeAudio:false}},{durationSec:5,video:{width:768,height:432,fps:24},hasAudio:false});
+    expect(missing.join(' ')).toMatch(/expects dialogue\/audio/i);
+  });
+
+  it('does not call structural-only profiles production-ready before a technical route qualification render',()=>{
+    const project={
+      settings:{workflowProfiles:[{
+        id:'p',runtime:'wangp',purpose:'video',name:'Profile',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'workflows/p.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,
+        validation:{structuralStatus:'valid'}
+      }]}
+    } as any as FilmProject;
+    const before=videoRouteQualification(project);
+    expect(before.level).toBe('blocked');
+    expect(before.runtimeQualifiedCount).toBe(0);
+    expect(before.detail).toMatch(/none has completed a technical runtime qualification/i);
+    project.settings.workflowProfiles[0].validation!.lastSuccessfulRenderAt='2026-09-30T00:00:00.000Z';
+    const after=videoRouteQualification(project);
+    expect(after.level).toBe('ready');
+    expect(after.detail).toMatch(/not creative\/semantic production quality/i);
   });
 });
