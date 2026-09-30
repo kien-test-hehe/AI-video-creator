@@ -184,6 +184,16 @@ export function applyGeneratedKeyframeReview(project:FilmProject,task:HumanTask,
     if(info.role==='start')shot.startFrameAssetId=asset.id;else shot.endFrameAssetId=asset.id;
     asset.tags=asset.tags.filter(tag=>tag!==GENERATED_KEYFRAME_CANDIDATE_TAG&&tag!==GENERATED_KEYFRAME_REJECTED_TAG);
     if(!asset.tags.includes(GENERATED_KEYFRAME_APPROVED_TAG))asset.tags.push(GENERATED_KEYFRAME_APPROVED_TAG);
+    const now=new Date().toISOString();
+    for(const sibling of project.humanTasks){
+      if(sibling.id===task.id||sibling.status!=='open'||sibling.type!=='verify-keyframe'||sibling.shotId!==shot.id)continue;
+      const siblingAsset=sibling.relatedAssetIds.map(id=>project.assets.find(item=>item.id===id)).find(item=>item&&generatedKeyframeCandidateInfo(item));
+      const siblingInfo=siblingAsset?generatedKeyframeCandidateInfo(siblingAsset):undefined;
+      if(!siblingAsset||!siblingInfo||siblingInfo.role!==info.role)continue;
+      sibling.status='dismissed';sibling.resolvedAt=now;sibling.resolution=`Superseded because another generated ${info.role} keyframe candidate was explicitly approved.`;
+      siblingAsset.tags=siblingAsset.tags.filter(tag=>tag!==GENERATED_KEYFRAME_CANDIDATE_TAG&&tag!==GENERATED_KEYFRAME_APPROVED_TAG);
+      if(!siblingAsset.tags.includes(GENERATED_KEYFRAME_REJECTED_TAG))siblingAsset.tags.push(GENERATED_KEYFRAME_REJECTED_TAG);
+    }
     shot.latestRenderId=undefined;shot.canonicalRenderId=undefined;
     invalidateObservedFinalState(project,shot.id,`${info.role==='start'?'Start':'End'} keyframe candidate was approved by a human; prior rendered continuity state is stale.`);
     if(['draft','rendered','failed'].includes(shot.status))shot.status='ready';
