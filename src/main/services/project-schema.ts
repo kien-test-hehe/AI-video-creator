@@ -323,7 +323,7 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
   const startKinds=new Set<AssetKind>(['image','reference','keyframe','character','location']),endKinds=new Set<AssetKind>(['image','reference','keyframe']),videoKinds=new Set<AssetKind>(['video']),audioKinds=new Set<AssetKind>(['audio']);
   const rawPropIds=rawIds(source.propAssetIds);
   const legacyReferenceIds=source.referenceAssetIds==null?rawPropIds.filter(id=>assetKinds.get(id)==='reference'):[];
-  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,4,referenceKinds),...legacyReferenceIds])];if(referenceAssetIds.length>4)throw new Error('Shot reference assets exceed the 4-item safety limit.');
+  const referenceAssetIds=[...new Set([...filterIds(source.referenceAssetIds,16,referenceKinds),...legacyReferenceIds])];if(referenceAssetIds.length>16)throw new Error('Shot reference assets exceed the 16-item safety limit.');
   return {
     id: safeId(source.id),
     sceneId,
@@ -334,9 +334,9 @@ function sanitizeShot(value: unknown, sceneIds: Set<string>, assetIds: Set<strin
     action: str(source.action,'',100_000),
     dialogue: str(source.dialogue,'',100_000),
     continuityNotes: str(source.continuityNotes,'',100_000),
-    characterAssetIds: filterIds(source.characterAssetIds,4,characterKinds),
+    characterAssetIds: filterIds(source.characterAssetIds,16,characterKinds),
     locationAssetId: optionalAsset(source.locationAssetId,locationKinds),
-    propAssetIds: (()=>{const ids=rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!));if(ids.length>2)throw new Error('Shot prop/wardrobe assets exceed the 2-item safety limit.');return ids;})(),
+    propAssetIds: (()=>{const ids=rawPropIds.filter(id=>propKinds.has(assetKinds.get(id)!));if(ids.length>16)throw new Error('Shot prop/wardrobe assets exceed the 16-item safety limit.');return ids;})(),
     referenceAssetIds,
     startFrameAssetId: optionalAsset(source.startFrameAssetId,startKinds),
     endFrameAssetId: optionalAsset(source.endFrameAssetId,endKinds),
