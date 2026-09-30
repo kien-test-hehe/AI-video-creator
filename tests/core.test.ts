@@ -72,6 +72,8 @@ describe('Compact Studio source contract',()=>{
     expect(compact).toMatch(/Production timeline/);
     expect(compact).toMatch(/Generate shot/);
     expect(compact).toMatch(/Human Review/);
+    expect(compact).toMatch(/canonical stale|STALE/);
+    expect(studio).toMatch(/canonical stale/);
     expect(compact).toMatch(/jumpPreviewStart/);
     expect(compact).toMatch(/stepPreview\(-1\)/);
     expect(compact).toMatch(/togglePreviewPlayback/);
@@ -3178,5 +3180,104 @@ describe('final QC/runtime hardening',()=>{
     const after=videoRouteQualification(project);
     expect(after.level).toBe('ready');
     expect(after.detail).toMatch(/not creative\/semantic production quality/i);
+  });
+});
+
+
+describe('final correctness sweep',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:71,negativePrompt:'',includeAudio:false};
+  const makeShot=(id='sweep-shot'):Shot=>({id,sceneId:'scene',index:1,title:id,prompt:'base prompt',camera:'medium',action:'walks',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',generation:{...generation}});
+  const makeProject=():FilmProject=>({
+    schemaVersion:3,id:'final-sweep',name:'Final sweep',rootPath:'/tmp/final-sweep',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Final sweep',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'Hero walks.',shotIds:['sweep-shot']}],assets:[],shots:[makeShot()],
+    renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  });
+
+  it('never lets skipIfRendered treat a technical-fail take as completed work',()=>{
+    const project=makeProject(),shot=project.shots[0];
+    const output:RenderOutput={id:'failed-take',jobId:'orphaned',shotId:shot.id,path:'/tmp/final-sweep/renders/failed.mp4',filename:'failed.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:01.000Z',passed:false,issues:['decode failed'],warnings:[]}};
+    output.productionInputKey=shotProductionInputKey(project,shot);project.renderOutputs.push(output);shot.latestRenderId=output.id;
+    expect(renderCanSatisfySkipIfRendered(project,shot,output)).toBe(false);
+    output.technicalQc!.passed=true;output.technicalQc!.issues=[];
+    expect(renderCanSatisfySkipIfRendered(project,shot,output)).toBe(true);
+    shot.prompt='changed';
+    expect(renderCanSatisfySkipIfRendered(project,shot,output)).toBe(false);
+  });
+
+  it('downgrades local VLM HTTP/protocol failure and repeated malformed JSON to Human Review',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-vlm-final-sweep-')),frame=join(root,'frame.jpg');
+    await writeFile(frame,Buffer.from([0xff,0xd8,0xff,0xd9]));
+    const shot=makeShot();const project={assets:[]} as any as FilmProject;
+    const machine={director:{baseUrl:'http://127.0.0.1:11434/v1',model:'qwen3-vl:4b',temperature:.2}} as AppMachineSettings;
+    const original=globalThis.fetch;
+    try{
+      (globalThis as any).fetch=vi.fn(async()=>new Response('backend exploded',{status:500}));
+      const serviceFailure=await evaluateSemanticQc(machine,project,shot,[frame],[]);
+      expect(serviceFailure.status).toBe('human-verify');
+      expect(serviceFailure.issues.some(issue=>issue.code==='SEMANTIC_REVIEW_REQUIRED')).toBe(true);
+
+      (globalThis as any).fetch=vi.fn(async()=>new Response(JSON.stringify({choices:[{message:{content:'{"status":"pass"'}}]}),{status:200,headers:{'content-type':'application/json'}}));
+      const malformedTwice=await evaluateSemanticQc(machine,project,shot,[frame],[]);
+      expect(malformedTwice.status).toBe('human-verify');
+      expect(malformedTwice.issues.some(issue=>issue.code==='SEMANTIC_REVIEW_REQUIRED')).toBe(true);
+    }finally{(globalThis as any).fetch=original;await rm(root,{recursive:true,force:true});}
+  });
+
+  it('repairs malformed Director JSON once and preserves up to the project asset-reference limit',async()=>{
+    const assets:Asset[]=[
+      ...Array.from({length:6},(_,i)=>({id:'char-'+(i+1),kind:'character' as const,name:'Hero '+(i+1),sourcePath:'c.png',projectPath:'assets/c'+i+'.png',tags:['hero'],notes:'',createdAt:'2026-01-01T00:00:00.000Z'})),
+      ...Array.from({length:3},(_,i)=>({id:'prop-'+(i+1),kind:'prop' as const,name:'Prop '+(i+1),sourcePath:'p.png',projectPath:'assets/p'+i+'.png',tags:['prop'],notes:'',createdAt:'2026-01-01T00:00:00.000Z'})),
+      ...Array.from({length:5},(_,i)=>({id:'ref-'+(i+1),kind:'reference' as const,name:'Ref '+(i+1),sourcePath:'r.png',projectPath:'assets/r'+i+'.png',tags:['ref'],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}))
+    ];
+    const scene={id:'scene',index:1,heading:'INT. ROOM',body:'All heroes and props are in the room.',shotIds:[]} as FilmProject['scenes'][number];
+    const project=makeProject();project.scenes=[scene];project.shots=[];project.assets=assets;project.settings.workflowProfiles=[{id:'wf',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid'}}];
+    const machine={director:{baseUrl:'http://127.0.0.1:11434/v1',model:'director',temperature:.5}} as AppMachineSettings;
+    const valid=JSON.stringify({shots:[{title:'Ensemble',prompt:'Everyone together',camera:'wide',action:'stand',dialogue:'',continuityNotes:'',quality:'balanced',preferredModel:'ltx-2.5-fast',characterAssetIds:assets.filter(a=>a.kind==='character').map(a=>a.id),referenceAssetIds:assets.filter(a=>a.kind==='reference').map(a=>a.id),propAssetIds:assets.filter(a=>a.kind==='prop').map(a=>a.id)}]});
+    let calls=0;const original=globalThis.fetch;
+    (globalThis as any).fetch=vi.fn(async(_input:any,init?:RequestInit)=>{
+      calls++;const content=calls===1?'{"shots":[':valid;
+      if(calls===2)expect(String(init?.body)).toMatch(/previous response was not parseable JSON/i);
+      return new Response(JSON.stringify({choices:[{message:{content}}]}),{status:200,headers:{'content-type':'application/json'}});
+    });
+    try{
+      const drafts=await planSceneWithLocalDirector(project,scene,machine);
+      expect(calls).toBe(2);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0].characterAssetIds).toHaveLength(6);
+      expect(drafts[0].propAssetIds).toHaveLength(3);
+      expect(drafts[0].referenceAssetIds).toHaveLength(5);
+      expect(parseDirectorJsonObject('{"ok":true}')).toEqual({ok:true});
+    }finally{(globalThis as any).fetch=original;}
+  });
+
+  it('keeps scene/location/prop evidence in semantic QC even when many characters are attached',()=>{
+    const shot=makeShot();shot.characterAssetIds=['c1','c2','c3','c4','c5'];shot.locationAssetId='loc';shot.propAssetIds=['prop'];shot.referenceAssetIds=['ref'];
+    const ids=semanticReferenceAssetIds(shot);
+    expect(ids).toHaveLength(4);
+    expect(ids).toEqual(expect.arrayContaining(['c1','c2','loc','prop']));
+    expect(ids).not.toEqual(['c1','c2','c3','c4']);
+  });
+
+  it('routes to a compatible validated profile instead of a newer profile that cannot bind attached inputs',()=>{
+    const project=makeProject(),shot=project.shots[0];shot.generation.modelFamily='custom';shot.generation.mode='i2v';shot.startFrameAssetId='start';
+    const compatible:WorkflowProfile={id:'compatible',runtime:'comfyui',purpose:'video',name:'Compatible',modelFamily:'custom',mode:'i2v',workflowPath:'workflows/a.json',workflowFormat:'api',bindings:[{key:'startImage',selector:{nodeId:'1'},input:'image'}],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-01T00:00:00.000Z'}};
+    const incompatible:WorkflowProfile={id:'newer-bad',runtime:'comfyui',purpose:'video',name:'Newer bad',modelFamily:'custom',mode:'i2v',workflowPath:'workflows/b.json',workflowFormat:'api',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-02-01T00:00:00.000Z'}};
+    project.settings.workflowProfiles=[incompatible,compatible];
+    expect(profileShotBindingErrors(incompatible,shot).join(' ')).toMatch(/start frame.*startImage/i);
+    expect(routeWorkflow(project,shot).id).toBe('compatible');
+    expect(()=>routeWorkflow(project,shot,'newer-bad')).toThrow(/start frame.*startImage/i);
+  });
+
+  it('invalidates Director proposals when scene shots change and keeps Storyboard proposals human-approved',async()=>{
+    const project=makeProject(),scene=project.scenes[0];
+    const before=sceneDirectorInputKey(project,scene);
+    project.shots[0].prompt='edited after proposal';
+    expect(sceneDirectorInputKey(project,scene)).not.toBe(before);
+    const source=await readFile(join(process.cwd(),'src','renderer','src','views','Storyboard.tsx'),'utf8');
+    expect(source).toMatch(/directorProposals/);
+    expect(source).toMatch(/Nothing has been added to the project yet/);
+    expect(source).toMatch(/Apply proposal/);
+    expect(source).toMatch(/Director proposal is ready\. Review it before applying any shots/);
   });
 });
