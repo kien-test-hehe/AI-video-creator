@@ -17,7 +17,6 @@ import { planShotReferences } from './reference-plan';
 import { currentGenerationState, keyframeProjectInputKey } from '../../shared/shot-signature';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease, type KeyframeLease } from './keyframe-lease';
-import { invalidateObservedFinalState } from '../../shared/production-state';
 
 export function keyframePrompt(project:FilmProject,shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
@@ -142,12 +141,20 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
       const targetShot=p.shots.find(s=>s.id===shot.id),targetProfile=p.settings.workflowProfiles.find(item=>item.id===profile.id);
       if(!targetShot||!targetProfile||keyframeProjectInputKey(p,targetShot,request.role,targetProfile)!==inputSignature)throw new Error('The shot or keyframe workflow changed before the generated frame could be attached.');
       if(p.assets.length>=100_000)throw new Error('Keyframe attachment would exceed the 100000-asset project safety limit.');
-      p.assets.push(asset);
-      if(request.role==='start')targetShot.startFrameAssetId=asset.id;else targetShot.endFrameAssetId=asset.id;
-      targetShot.latestRenderId=undefined;
-      targetShot.canonicalRenderId=undefined;
-      invalidateObservedFinalState(p,targetShot.id,`${request.role==='start'?'Start':'End'} keyframe changed; prior rendered continuity state is stale.`);
-      if(['draft','rendered','failed'].includes(targetShot.status))targetShot.status='ready';
+      p.assets.push({...asset,tags:[...asset.tags,'candidate','human-review-required']});
+      if(p.humanTasks.length>=100_000)throw new Error('Generated keyframe review would exceed the 100000-human-task project safety limit.');
+      p.humanTasks.push({
+        id:randomUUID(),
+        type:'verify-keyframe',
+        status:'open',
+        shotId:targetShot.id,
+        title:`Review generated ${request.role} keyframe`,
+        reason:`A locally generated ${request.role} keyframe is a candidate, not an automatically trusted conditioning frame. Review identity, location, wardrobe/props, composition and continuity before attaching it to the shot.`,
+        recommendedAction:`Preview “${asset.name}” and attach it as the ${request.role} frame only if it is correct; otherwise dismiss this candidate and generate/import another.`,
+        relatedAssetIds:[asset.id],
+        relatedRenderOutputIds:[],
+        createdAt:new Date().toISOString()
+      });
     });
   }catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
 }
