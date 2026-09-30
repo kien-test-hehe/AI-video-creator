@@ -437,37 +437,9 @@ export class ProductionRuntimeService extends EventEmitter{
   private async reconcilePreparationTasks(shot:Shot):Promise<void>{
     const project=this.projects.getCurrent();if(!project)return;
     const now=new Date().toISOString();
-    const currentOutput=(outputId:string)=>{
-      const output=project.renderOutputs.find(item=>item.id===outputId&&item.shotId===shot.id&&item.mediaType==='video');
-      if(!output)return false;
-      const current=currentProductionInputKeyForOutput(project,shot,output),recorded=renderOutputProductionInputKey(project,output);
-      return Boolean(current&&recorded===current);
-    };
-    const currentActual=shot.actualStartStateId?project.shotStates.find(state=>state.id===shot.actualStartStateId):undefined;
-    const currentBackendFailure=project.renderJobs.some(job=>
-      job.shotId===shot.id&&['failed','orphaned'].includes(job.status)&&failedRenderJobMatchesCurrentInputs(project,shot,job)
-    );
-    const disposition=(task:FilmProject['humanTasks'][number]):'resolved'|'dismissed'|undefined=>{
-      if(task.title==='Start keyframe required'||task.title==='Automatic start keyframe failed')return shot.startFrameAssetId?'resolved':undefined;
-      if(task.title==='End keyframe required'||task.title==='Automatic end keyframe failed')return shot.endFrameAssetId?'resolved':undefined;
-      if(task.title==='Reference video required')return shot.referenceVideoAssetId?'resolved':undefined;
-      if(task.title==='Resolve multi-source continuity'){
-        if(!requiresHumanContinuityMerge(project,shot.id)||(currentActual?.status==='current'&&currentActual.source==='human'))return'resolved';
-        return undefined;
-      }
-      if(task.title==='Workflow input mismatch')return'dismissed';
-      if(task.title==='Render failure needs correction'||task.title==='Backend retries exhausted')return currentBackendFailure?undefined:'dismissed';
-      const outputScopedAutomation=
-        task.title==='Automatic visual retries exhausted'||
-        task.title==='Semantic QC needs corrective review'||
-        task.title==='Continuity QC needs corrective review'||
-        task.title.startsWith(OBSERVED_STATE_CONFIDENCE_TASK_PREFIX);
-      if(outputScopedAutomation&&task.relatedRenderOutputIds.length&& !task.relatedRenderOutputIds.some(currentOutput))return'dismissed';
-      return undefined;
-    };
     const closable=project.humanTasks
       .filter(task=>task.status==='open'&&task.shotId===shot.id)
-      .map(task=>({task,disposition:disposition(task)}))
+      .map(task=>({task,disposition:automationTaskDisposition(project,shot,task)}))
       .filter((item):item is {task:FilmProject['humanTasks'][number];disposition:'resolved'|'dismissed'}=>Boolean(item.disposition));
     if(!closable.length)return;
     const byId=new Map(closable.map(item=>[item.task.id,item.disposition] as const));
@@ -522,6 +494,46 @@ export class ProductionRuntimeService extends EventEmitter{
     const snapshot=this.snapshot(),targetShotIds=[...this.targetShotIds],maxAutoRetries=this.maxAutoRetries,buildTimeline=this.buildTimeline;
     this.journalTail=this.journalTail.then(()=>this.journal.write(project,{schemaVersion:1,projectId:project.id,projectRoot:project.rootPath,targetShotIds,maxAutoRetries,buildTimeline,status:snapshot})).catch(error=>{console.warn('Could not persist autonomous production journal:',error);});
   }
+}
+
+export function automationTaskDisposition(
+  project:FilmProject,
+  shot:Shot,
+  task:FilmProject['humanTasks'][number]
+):'resolved'|'dismissed'|undefined{
+  if(task.status!=='open'||task.shotId!==shot.id)return undefined;
+  if(task.title==='Start keyframe required'||task.title==='Automatic start keyframe failed')return shot.startFrameAssetId?'resolved':undefined;
+  if(task.title==='End keyframe required'||task.title==='Automatic end keyframe failed')return shot.endFrameAssetId?'resolved':undefined;
+  if(task.title==='Reference video required')return shot.referenceVideoAssetId?'resolved':undefined;
+  const currentActual=shot.actualStartStateId?project.shotStates.find(state=>state.id===shot.actualStartStateId):undefined;
+  if(task.title==='Resolve multi-source continuity'){
+    if(!requiresHumanContinuityMerge(project,shot.id)||(currentActual?.status==='current'&&currentActual.source==='human'))return'resolved';
+    return undefined;
+  }
+  // This task is a cached preflight result. Dismiss it before rerunning preflight so a
+  // fixed workflow can advance, while an unfixed workflow immediately creates a fresh blocker.
+  if(task.title==='Workflow input mismatch')return'dismissed';
+  if(task.title==='Render failure needs correction'||task.title==='Backend retries exhausted'){
+    const currentBackendFailure=project.renderJobs.some(job=>
+      job.shotId===shot.id&&['failed','orphaned'].includes(job.status)&&failedRenderJobMatchesCurrentInputs(project,shot,job)
+    );
+    return currentBackendFailure?undefined:'dismissed';
+  }
+  const outputScopedAutomation=
+    task.title==='Automatic visual retries exhausted'||
+    task.title==='Semantic QC needs corrective review'||
+    task.title==='Continuity QC needs corrective review'||
+    task.title.startsWith(OBSERVED_STATE_CONFIDENCE_TASK_PREFIX);
+  if(outputScopedAutomation&&task.relatedRenderOutputIds.length){
+    const hasCurrentOutput=task.relatedRenderOutputIds.some(outputId=>{
+      const output=project.renderOutputs.find(item=>item.id===outputId&&item.shotId===shot.id&&item.mediaType==='video');
+      if(!output)return false;
+      const current=currentProductionInputKeyForOutput(project,shot,output),recorded=renderOutputProductionInputKey(project,output);
+      return Boolean(current&&recorded===current);
+    });
+    if(!hasCurrentOutput)return'dismissed';
+  }
+  return undefined;
 }
 
 export function assertExternalDependenciesReady(project:FilmProject,targetShotIds:ReadonlySet<string>):void{
