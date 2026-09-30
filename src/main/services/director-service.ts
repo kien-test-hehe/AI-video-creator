@@ -4,6 +4,11 @@ import { readResponseJsonLimited, readResponseTextLimited } from './http-respons
 import { continuityPredecessorShots } from '../../shared/director-signature';
 
 interface ChatResponse{choices?:Array<{message?:{content?:string}}>}
+
+export function boundedDirectorAssetIds(value:unknown,allowed:Set<string>,max=16):string[]{
+  if(!Array.isArray(value))return[];
+  return [...new Set(value.map(String).filter(id=>allowed.has(id)))].slice(0,max);
+}
 function parseJsonObject(text:string):any{const cleaned=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');const first=cleaned.indexOf('{'),last=cleaned.lastIndexOf('}');if(first<0||last<first)throw new Error('Local director did not return JSON.');return JSON.parse(cleaned.slice(first,last+1));}
 
 export async function planSceneWithLocalDirector(project:FilmProject,scene:Scene,machine:AppMachineSettings):Promise<DirectorShotDraft[]>{
@@ -29,9 +34,9 @@ export async function planSceneWithLocalDirector(project:FilmProject,scene:Scene
   const characterIds=idsFor('character'),locationIds=idsFor('location'),referenceIds=idsFor('reference'),propIds=idsFor('prop','wardrobe');
   const validModels=new Set(availableModels);
   return parsed.shots.slice(0,12).map((s:any,i:number)=>{
-    const chars=Array.isArray(s.characterAssetIds)?s.characterAssetIds.map(String).filter((id:string)=>characterIds.has(id)).slice(0,4):[];
-    const refs=Array.isArray(s.referenceAssetIds)?s.referenceAssetIds.map(String).filter((id:string)=>referenceIds.has(id)).slice(0,4):[];
-    const props=Array.isArray(s.propAssetIds)?s.propAssetIds.map(String).filter((id:string)=>propIds.has(id)).slice(0,2):[];
+    const chars=boundedDirectorAssetIds(s.characterAssetIds,characterIds,16);
+    const refs=boundedDirectorAssetIds(s.referenceAssetIds,referenceIds,16);
+    const props=boundedDirectorAssetIds(s.propAssetIds,propIds,16);
     const location=typeof s.locationAssetId==='string'&&locationIds.has(s.locationAssetId)?s.locationAssetId:undefined;
     return{title:directorText(s.title,`Shot ${scene.index}.${i+1}`,2000),prompt:directorText(s.prompt,scene.body,200_000),camera:directorText(s.camera,'',20_000),action:directorText(s.action,'',100_000),dialogue:directorText(s.dialogue,'',100_000),continuityNotes:directorText(s.continuityNotes,'',100_000),quality:['preview','balanced','hero'].includes(s.quality)?s.quality:'balanced',preferredModel:validModels.has(s.preferredModel)?s.preferredModel:undefined,characterAssetIds:chars,locationAssetId:location,referenceAssetIds:refs,propAssetIds:props} as DirectorShotDraft;
   });
