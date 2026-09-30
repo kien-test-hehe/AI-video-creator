@@ -3,7 +3,7 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AutomationRunRequest, AutomationStatus, FilmProject, HumanTaskType, QcLayer, RenderOutput, Shot } from '../../shared/types';
-import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, productionShotOrder, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
+import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, productionShotOrder, renderOutputProductionInputKey, shotProductionInputKey, shotQcInputKey } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
 import { RenderQueueService } from './render-queue';
@@ -18,6 +18,7 @@ import { AutomationJournal } from './automation-journal';
 import { KeyframeLeaseStore } from './keyframe-lease';
 import { generateKeyframe } from './keyframe-service';
 import { provisionRecommendedWanGpProfiles } from './wangp-catalog-service';
+import { qcFailureAutoRetryDecision, qcFailureSummary, renderFailureAutoRetryDecision } from '../../shared/retry-policy';
 
 const ACTIVE_RENDER=new Set(['queued','preparing','uploading','submitted','running','recovering','stalled','downloading']);
 
@@ -165,9 +166,20 @@ export class ProductionRuntimeService extends EventEmitter{
           if(human.length){this.setStatus({phase:'waiting-human',message:`QC for ${shot.title} needs human review.`,blockedHumanTaskIds:human.map(task=>task.id)});break;}
           const failed=latestCurrentFailure(fresh,currentShotId,currentOutput.id);
           if(failed){
-            if(await this.retryShot(freshShot??shot,failed)){break;}
-            await this.ensureHumanTask(freshShot??shot,'manual-qc','Automatic retries exhausted',`Shot “${shot.title}” still fails ${failed.layer} QC after ${this.status.retryCounts[currentShotId]??0} automatic retries.`, 'Review the failed take, adjust references/prompt/previz if needed, then render again.');
-            const after=this.projects.getCurrent();this.setStatus({phase:'waiting-human',message:`Automatic retries exhausted for ${shot.title}.`,blockedHumanTaskIds:after?.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId).map(task=>task.id)??[]});break;
+            const retryDecision=qcFailureAutoRetryDecision(failed);
+            if(retryDecision.action==='retry'&&await this.retryShot(freshShot??shot,failed)){break;}
+            const exhausted=retryDecision.action==='retry';
+            const title=exhausted?'Automatic visual retries exhausted':`${failed.layer[0].toUpperCase()+failed.layer.slice(1)} QC needs corrective review`;
+            const reason=exhausted
+              ? `Shot “${shot.title}” still fails visual QC after ${this.status.retryCounts[currentShotId]??0} bounded stochastic retries. ${qcFailureSummary(failed)}`
+              : `${retryDecision.reason} ${qcFailureSummary(failed)}`;
+            const action=failed.layer==='semantic'
+              ? 'Correct the prompt, required assets/references, staging or shot intent, then render a new take.'
+              : failed.layer==='continuity'
+                ? 'Correct the incoming continuity contract/reference, staging, prop/wardrobe state or explicit camera intent, then render a new take.'
+                : 'Inspect the failed take and adjust generation/reference strategy before another render.';
+            await this.ensureHumanTask(freshShot??shot,'manual-qc',title,reason,action,[currentOutput.id]);
+            const after=this.projects.getCurrent();this.setStatus({phase:'waiting-human',message:`${title} for ${shot.title}.`,blockedHumanTaskIds:after?.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId).map(task=>task.id)??[]});break;
           }
           this.setStatus({phase:'waiting-human',message:`${shot.title} is not canonical-ready and needs review.`});break;
         }
@@ -189,13 +201,26 @@ export class ProductionRuntimeService extends EventEmitter{
           this.setStatus({phase:'waiting-human',message:`Prepared inputs for ${shot.title} do not match its video workflow.`,blockedHumanTaskIds:fresh?.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId).map(task=>task.id)??[]});break;
         }
 
-        const failedJob=[...project.renderJobs].filter(job=>job.shotId===currentShotId&&['failed','orphaned'].includes(job.status)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0];
+        const failedJob=[...project.renderJobs]
+          .filter(job=>job.shotId===currentShotId&&['failed','orphaned'].includes(job.status)&&failedRenderJobMatchesCurrentInputs(project,shot,job))
+          .sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0];
         if(failedJob){
+          const decision=renderFailureAutoRetryDecision(failedJob);
           const count=this.status.retryCounts[currentShotId]??0;
-          if(count<this.maxAutoRetries){
-            this.status.retryCounts[currentShotId]=count+1;this.setStatus({phase:'retrying',message:`Retrying failed render for ${shot.title} (${count+1}/${this.maxAutoRetries}).`});
+          if(decision.action==='retry'&&count<this.maxAutoRetries){
+            this.status.retryCounts[currentShotId]=count+1;this.setStatus({phase:'retrying',message:`Retrying transient render failure for ${shot.title} (${count+1}/${this.maxAutoRetries}).`});
             await this.queue.retry(failedJob.id);break;
           }
+          const exhausted=decision.action==='retry';
+          await this.ensureHumanTask(
+            shot,'route-unsupported',
+            exhausted?'Backend retries exhausted':'Render failure needs correction',
+            `${decision.reason} ${failedJob.error||failedJob.message||'No backend error detail was recorded.'}`,
+            exhausted
+              ? 'Inspect the local runtime/backend health and the failed immutable job before resuming AUTO RUN.'
+              : 'Fix the reported model/workflow/runtime/resource problem, validate the route again if needed, then resume AUTO RUN.'
+          );
+          const after=this.projects.getCurrent();this.setStatus({phase:'waiting-human',message:`${exhausted?'Backend retries exhausted':'Render failure needs correction'} for ${shot.title}.`,blockedHumanTaskIds:after?.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId).map(task=>task.id)??[]});break;
         }
 
         this.setStatus({phase:'waiting-render',message:`Queueing ${shot.title}.`});
@@ -273,15 +298,20 @@ export class ProductionRuntimeService extends EventEmitter{
     if(layer==='visual')evaluation=await evaluateVisualQc(this.settings.get(),shot,frames.contactFrames);
     else if(layer==='semantic')evaluation=await evaluateSemanticQc(this.settings.get(),project,shot,frames.contactFrames);
     else{
-      const incoming=project.shotDependencies.filter(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0);
-      let previousPath:string|undefined;
-      if(incoming.length===1){
-        const prior=project.shots.find(item=>item.id===incoming[0].fromShotId);
+      const incoming=project.shotDependencies
+        .filter(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0)
+        .sort((a,b)=>a.id.localeCompare(b.id));
+      const comparisons=[];
+      for(const edge of incoming){
+        const prior=project.shots.find(item=>item.id===edge.fromShotId);
         const state=prior?.observedFinalStateId?project.shotStates.find(item=>item.id===prior.observedFinalStateId&&item.status==='current'):undefined;
         const asset=state?.frameAssetId?project.assets.find(item=>item.id===state.frameAssetId):undefined;
-        if(asset)previousPath=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`observed final frame for ${prior?.title||'previous shot'}`).catch(()=>undefined);
+        const previousFinalPath=asset
+          ? await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`observed final frame for ${prior?.title||edge.fromShotId}`).catch(()=>undefined)
+          : undefined;
+        comparisons.push({edge,previousFinalPath});
       }
-      evaluation=await evaluateContinuityQc(this.settings.get(),project,shot,previousPath,frames.firstFrame);
+      evaluation=await evaluateContinuityQc(this.settings.get(),project,shot,comparisons,frames.firstFrame);
     }
     const fresh=this.projects.getCurrent();if(!fresh)return;
     const freshKey=shotQcInputKey(fresh,shotId,outputId,layer);
@@ -300,7 +330,7 @@ export class ProductionRuntimeService extends EventEmitter{
     return id;
   }
 
-  private async retryShot(shot:Shot,failure:{layer:string}):Promise<boolean>{
+  private async retryShot(shot:Shot,failure:{layer:'visual'|'semantic'|'continuity';issues:FilmProject['qcResults'][number]['issues']}):Promise<boolean>{
     const count=this.status.retryCounts[shot.id]??0;
     if(count>=this.maxAutoRetries)return false;
     this.status.retryCounts[shot.id]=count+1;
@@ -435,7 +465,7 @@ export class ProductionRuntimeService extends EventEmitter{
 export function assertExternalDependenciesReady(project:FilmProject,targetShotIds:ReadonlySet<string>):void{
   const blockers:string[]=[];
   for(const edge of project.shotDependencies){
-    if(edge.relation==='parallel'||!targetShotIds.has(edge.toShotId)||targetShotIds.has(edge.fromShotId))continue;
+    if(edge.relation==='parallel'||edge.strength!=='hard'||!targetShotIds.has(edge.toShotId)||targetShotIds.has(edge.fromShotId))continue;
     const upstream=project.shots.find(shot=>shot.id===edge.fromShotId);
     const ready=Boolean(upstream?.canonicalRenderId&&canonicalTakeReadiness(project,upstream.id,upstream.canonicalRenderId).ready);
     if(!ready)blockers.push(`${edge.fromShotId} → ${edge.toShotId}`);
@@ -474,11 +504,20 @@ function hasCurrentQcPass(project:FilmProject,shotId:string,outputId:string,laye
   return result?.status==='pass';
 }
 
-function latestCurrentFailure(project:FilmProject,shotId:string,outputId:string):{layer:string}|undefined{
+function latestCurrentFailure(project:FilmProject,shotId:string,outputId:string):{layer:'visual'|'semantic'|'continuity';issues:FilmProject['qcResults'][number]['issues']}|undefined{
   for(const layer of ['visual','semantic','continuity'] as const){
     const key=shotQcInputKey(project,shotId,outputId,layer);
     const result=project.qcResults.filter(item=>item.shotId===shotId&&item.renderOutputId===outputId&&item.layer===layer&&item.inputKey===key).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||b.id.localeCompare(a.id))[0];
-    if(result?.status==='fail')return{layer};
+    if(result?.status==='fail')return{layer,issues:result.issues};
   }
   return undefined;
+}
+
+export function failedRenderJobMatchesCurrentInputs(project:FilmProject,shot:Shot,job:FilmProject['renderJobs'][number]):boolean{
+  if(!job.spec)return true;
+  const currentProfile=project.settings.workflowProfiles.find(profile=>
+    profile.id===job.spec!.workflowProfile.id&&profile.enabled&&(profile.purpose??'video')==='video'&&profile.validation?.structuralStatus==='valid'
+  );
+  if(!currentProfile)return false;
+  return Boolean(job.spec.productionInputKey&&job.spec.productionInputKey===shotProductionInputKey(project,shot,currentProfile));
 }
