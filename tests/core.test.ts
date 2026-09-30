@@ -2808,3 +2808,19 @@ describe('catalog and profile routing hardening',()=>{
     expect(routeWorkflow(project,shot).id).toBe('a');
   });
 });
+
+
+describe('workflow audio binding schema round trip',()=>{
+  it('preserves includeAudio workflow bindings through project schema load',()=>{
+    const raw={
+      schemaVersion:3,id:'audio-bind',name:'Audio binding',rootPath:'/tmp/audio-bind',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'Audio binding',logline:'',script:'',notes:''},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[{
+        id:'wf-audio',runtime:'wangp',purpose:'video',name:'Audio WF',modelFamily:'custom',mode:'t2v',workflowPath:'/tmp/audio-bind/workflows/a.json',workflowFormat:'wangp-settings',enabled:false,
+        bindings:[{key:'includeAudio',jsonPath:'generate_audio',transform:'boolean',required:false}]
+      }]}
+    };
+    const loaded=loadPortableProject(raw,'/tmp/audio-bind').project;
+    expect(loaded.settings.workflowProfiles[0].bindings[0].key).toBe('includeAudio');
+  });
+});
