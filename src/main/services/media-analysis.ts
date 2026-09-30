@@ -18,7 +18,7 @@ export async function probeVideoDuration(machine:AppMachineSettings,input:string
 export async function extractVideoFrame(machine:AppMachineSettings,input:string,output:string,timeSec:number):Promise<string>{
   await mkdir(dirname(output),{recursive:true});
   await rm(output,{force:true}).catch(()=>undefined);
-  const args=['-hide_banner','-loglevel','error','-y','-ss',Math.max(0,timeSec).toFixed(3),'-i',input,'-frames:v','1','-q:v','2',output];
+  const args=['-hide_banner','-loglevel','error','-y','-i',input,'-ss',Math.max(0,timeSec).toFixed(3),'-frames:v','1','-q:v','2',output];
   await execFileAsync(machine.ffmpeg.path,args,{timeout:60_000,maxBuffer:4*1024*1024});
   return output;
 }
@@ -28,7 +28,7 @@ export async function sampleVideoFrames(machine:AppMachineSettings,input:string,
   await mkdir(outputDir,{recursive:true});
   const safeEnd=Math.max(0.01,durationSec-Math.min(0.08,Math.max(0.03,durationSec*0.01)));
   const firstFrame=join(outputDir,'first.jpg');
-  await extractVideoFrame(machine,input,firstFrame,Math.min(0.06,Math.max(0,durationSec*0.01)));
+  await extractVideoFrame(machine,input,firstFrame,0);
   const offsets=durationSec<1?[0.28,0.16,0.08,0.03]:[0.65,0.4,0.2,0.08];
   const finalCandidates:string[]=[];
   for(let index=0;index<offsets.length;index++){
@@ -37,7 +37,7 @@ export async function sampleVideoFrames(machine:AppMachineSettings,input:string,
     finalCandidates.push(path);
   }
   const finalFrame=finalCandidates[Math.max(0,finalCandidates.length-2)]||firstFrame;
-  const fractions=durationSec<1?[0.2,0.55,0.85]:[0.08,0.35,0.65,0.9];
+  const fractions=durationSec<1?[0.06,0.18,0.32,0.46,0.6,0.74,0.87,0.96]:[0.04,0.16,0.29,0.42,0.56,0.7,0.84,0.96];
   const contactFrames:string[]=[];
   for(let index=0;index<fractions.length;index++){
     const path=join(outputDir,`sample-${index+1}.jpg`);
