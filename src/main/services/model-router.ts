@@ -1,4 +1,4 @@
-import type { FilmProject, Shot, WorkflowProfile } from '../../shared/types';
+import type { FilmProject, Shot, WorkflowBindingKey, WorkflowProfile } from '../../shared/types';
 import { chooseModelForShot } from '../../shared/routing';
 import { profileCompatibilityErrors } from './profile-validation';
 
@@ -49,14 +49,14 @@ function assertUsableProfile(profile: WorkflowProfile, shot: Shot): void {
 
 export function profileShotBindingErrors(profile:WorkflowProfile,shot:Shot):string[]{
   const keys=new Set(profile.bindings.map(binding=>binding.key));
-  const required:Array<[string|undefined,string,string]>= [
+  const required:Array<[string|undefined,WorkflowBindingKey,string]>= [
     [shot.startFrameAssetId,'startImage','start frame'],
     [shot.endFrameAssetId,'endImage','end frame'],
     [shot.referenceVideoAssetId,'inputVideo','motion/reference video'],
     [shot.audioAssetId,'inputAudio','input audio']
   ];
   return required
-    .filter(([assetId,key])=>Boolean(assetId)&&!keys.has(key as any))
+    .filter(([assetId,key])=>Boolean(assetId)&&!keys.has(key))
     .map(([,key,label])=>`Shot has a ${label}, but this profile has no ${key} binding.`);
 }
 
