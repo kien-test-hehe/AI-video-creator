@@ -34,12 +34,32 @@ export function Storyboard(){
       const signature=sceneDirectorInputKey(initial,initialScene);
       const drafts=await window.cineforge.director.planScene(sceneId);
       const current=useAppStore.getState().project,currentScene=current?.scenes.find(scene=>scene.id===sceneId);
-      if(!current||!currentScene||sceneDirectorInputKey(current,currentScene)!==signature){setNotice('Director result was discarded because the story, scene, assets, or validated model routes changed while planning.');return;}
-      if(current.shots.length+drafts.length>100_000)throw new Error('Director result would exceed the 100000-shot project safety limit.');
+      if(!current||!currentScene||sceneDirectorInputKey(current,currentScene)!==signature){
+        setDirectorProposals(items=>{const next={...items};delete next[sceneId];return next;});
+        setNotice('Director result was discarded because the story, scene, shots, assets, or validated model routes changed while planning.');
+        return;
+      }
+      if(!drafts.length)throw new Error('Director returned no shot drafts.');
+      setDirectorProposals(items=>({...items,[sceneId]:{signature,drafts}}));
+      setNotice('Director proposal is ready. Review it before applying any shots.');
+    }catch(e){setError(e instanceof Error?e.message:String(e));}finally{setPlanningSceneId(undefined);setBusy(false);}
+  };
+
+  const applyDirectorProposal=(sceneId:string)=>{
+    const proposal=directorProposals[sceneId];if(!proposal)return;
+    try{
+      const current=useAppStore.getState().project,currentScene=current?.scenes.find(scene=>scene.id===sceneId);
+      if(!current||!currentScene||sceneDirectorInputKey(current,currentScene)!==proposal.signature){
+        setDirectorProposals(items=>{const next={...items};delete next[sceneId];return next;});
+        setNotice('Director proposal became stale because the scene, shots, assets, or routes changed. Generate a fresh proposal.');
+        return;
+      }
+      if(current.shots.length+proposal.drafts.length>100_000)throw new Error('Director proposal would exceed the 100000-shot project safety limit.');
       updateProject(p=>{
-        const scene=p.scenes.find(s=>s.id===sceneId);if(!scene||sceneDirectorInputKey(p,scene)!==signature)return;
+        const scene=p.scenes.find(s=>s.id===sceneId);
+        if(!scene||sceneDirectorInputKey(p,scene)!==proposal.signature)throw new Error('Director proposal became stale before it could be applied.');
         let index=p.shots.filter(s=>s.sceneId===sceneId).length,added=0;
-        for(const draft of drafts){
+        for(const draft of proposal.drafts){
           const requested=draft.preferredModel as ModelFamily|undefined;
           const route=validatedVideoRouteForModel(p,requested)??validatedVideoRouteForModel(p,PRIMARY_VIDEO_MODEL)??p.settings.workflowProfiles.find(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
           const validatedModel=route?.modelFamily;
@@ -52,11 +72,16 @@ export function Storyboard(){
           const shot:Shot={id,sceneId,index,title:draft.title||('Shot '+scene.index+'.'+index),prompt:draft.prompt,camera:draft.camera,action:draft.action,dialogue:draft.dialogue,continuityNotes:draft.continuityNotes,characterAssetIds,locationAssetId,propAssetIds,referenceAssetIds,status:'draft',generation:{modelFamily:validatedModel,mode:route.mode,quality:draft.quality,width:d.width||768,height:d.height||432,frames:d.frames||97,fps:d.fps||24,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??false,workflowProfileId:route.id}};
           p.shots.push(shot);scene.shotIds.push(id);
         }
-        if(!added)throw new Error('Director returned no shot compatible with the currently validated local video routes.');
+        if(!added)throw new Error('Director proposal contains no shot compatible with the currently validated local video routes.');
         rebuildDefaultSequentialDependencies(p,[sceneId]);
       });
-      setNotice('Local Director shot drafts were applied to the unchanged scene.');
-    }catch(e){setError(e instanceof Error?e.message:String(e));}finally{setPlanningSceneId(undefined);setBusy(false);}
+      setDirectorProposals(items=>{const next={...items};delete next[sceneId];return next;});
+      setNotice('Director proposal applied. The new shots remain editable drafts.');
+    }catch(e){setError(e instanceof Error?e.message:String(e));}
+  };
+
+  const dismissDirectorProposal=(sceneId:string)=>{
+    setDirectorProposals(items=>{const next={...items};delete next[sceneId];return next;});
   };
 
   const startShotDrag=(event:DragEvent,shotId:string)=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-cineforge-shot',shotId);};
