@@ -43,9 +43,10 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
-import { canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, latestShotQcResult, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
+import { DEFAULT_CONTINUITY_FIELDS, OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, latestShotQcResult, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 import { advisePreviz } from '../src/main/services/previz-service';
+import { observedStateDraftFromVisionResult } from '../src/main/services/automatic-qc-service';
 import { AutomationJournal } from '../src/main/services/automation-journal';
 
 const api: ApiWorkflow = {
@@ -2128,5 +2129,82 @@ describe('directional continuity canonical gate',()=>{
     expect(bBefore.blockers.join(' ')).toMatch(/continuity QC is missing/i);
     project.qcResults.push({id:'b-continuity',shotId:'b',renderOutputId:'out-b',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,'b','out-b','continuity'),createdAt:'2026-01-01T00:00:02.000Z'});
     expect(canonicalTakeReadiness(project,'b','out-b')).toMatchObject({ready:true});
+  });
+});
+
+
+describe('observed-state truth hardening',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const shot:Shot={
+    id:'shot-observed',sceneId:'scene',index:1,title:'Observed truth',prompt:'',camera:'planned dolly',action:'planned door opening',dialogue:'planned line',continuityNotes:'',
+    characterAssetIds:['char-1'],locationAssetId:'loc-1',propAssetIds:[],referenceAssetIds:[],status:'ready',generation
+  };
+  const project={
+    assets:[
+      {id:'char-1',kind:'character',name:'Hero',sourcePath:'hero.png',projectPath:'assets/character/hero.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'loc-1',kind:'location',name:'Room',sourcePath:'room.png',projectPath:'assets/location/room.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}
+    ],
+    scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['shot-observed']}]
+  } as any as FilmProject;
+
+  it('does not promote planned location/action or an invented confidence when the VLM omits them',()=>{
+    const draft=observedStateDraftFromVisionResult(project,shot,{environment:{lighting:'warm'},camera:{},characters:[],props:[]});
+    expect(draft.environment.locationAssetId).toBeUndefined();
+    expect(draft.actionPhase).toBe('');
+    expect(draft.confidence).toBe(0);
+    expect(draft.environment.lighting).toBe('warm');
+  });
+
+  it('records a location/action only when the VLM explicitly returns observed values',()=>{
+    const draft=observedStateDraftFromVisionResult(project,shot,{environment:{locationAssetId:'loc-1'},actionPhase:'door visibly open',confidence:.82,characters:[],props:[]});
+    expect(draft.environment.locationAssetId).toBe('loc-1');
+    expect(draft.actionPhase).toBe('door visibly open');
+    expect(draft.confidence).toBe(.82);
+    const wrong=observedStateDraftFromVisionResult(project,shot,{environment:{locationAssetId:'unknown-location'},actionPhase:'',confidence:.5,characters:[],props:[]});
+    expect(wrong.environment.locationAssetId).toBeUndefined();
+  });
+
+  it('does not treat a generic resolved human task as approval of low-confidence observed state',()=>{
+    const base={
+      shotId:'shot-observed',type:'manual-qc' as const,title:'Observed final state confidence · Observed truth',status:'resolved' as const,
+      relatedRenderOutputIds:['out-1']
+    };
+    expect(isApprovedObservedStateReview({...base,resolution:'Reviewed and resolved explicitly in Studio.'},'shot-observed',base.title,'out-1')).toBe(false);
+    expect(isApprovedObservedStateReview({...base,resolution:`${OBSERVED_STATE_APPROVAL_PREFIX} final frame checked`},'shot-observed',base.title,'out-1')).toBe(true);
+    expect(isApprovedObservedStateReview({...base,resolution:`${OBSERVED_STATE_APPROVAL_PREFIX} final frame checked`},'shot-observed',base.title,'out-2')).toBe(false);
+  });
+});
+
+describe('field-scoped continuity frame propagation',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const makeProject=(propagate:any[]):FilmProject=>{
+    const a:Shot={id:'a',sceneId:'scene',index:1,title:'A',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',generation:{...generation},observedFinalStateId:'final-a'};
+    const b:Shot={id:'b',sceneId:'scene',index:2,title:'B',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:2}};
+    return{
+      schemaVersion:3,id:'p',name:'p',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'p',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['a','b']}],assets:[],shots:[a,b],renderJobs:[],renderOutputs:[],timeline:[],
+      shotStates:[{id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',frameAssetId:'frame-a',characters:[],props:[],environment:{lighting:'warm'},camera:{shotSize:'wide'},actionPhase:'done',dialogueState:'silent',confidence:.9,createdAt:'2026-01-01T00:00:01.000Z'}],
+      shotDependencies:[{id:'edge',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate,createdAt:'2026-01-01T00:00:00.000Z'}],
+      qcResults:[],humanTasks:[],cutRevisions:[],settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    };
+  };
+
+  it('does not attach the upstream final frame for a partial continuity contract',()=>{
+    const project=makeProject(['lighting']);
+    propagateObservedFinalState(project,'a');
+    const target=project.shots.find(shot=>shot.id==='b')!;
+    const state=project.shotStates.find(item=>item.id===target.actualStartStateId)!;
+    expect(state.environment.lighting).toBe('warm');
+    expect(state.frameAssetId).toBeUndefined();
+    expect(target.startFrameAssetId).toBeUndefined();
+  });
+
+  it('still carries the frame when the dependency explicitly propagates the complete visual-frame contract',()=>{
+    const project=makeProject([...DEFAULT_CONTINUITY_FIELDS]);
+    propagateObservedFinalState(project,'a');
+    const target=project.shots.find(shot=>shot.id==='b')!;
+    const state=project.shotStates.find(item=>item.id===target.actualStartStateId)!;
+    expect(state.frameAssetId).toBe('frame-a');
+    expect(target.startFrameAssetId).toBe('frame-a');
   });
 });
