@@ -1822,7 +1822,7 @@ describe('production topology and destructive mutation regression guards',()=>{
 
   it('includes current structured start state in the effective render prompt and signature',()=>{
     const a=shot('a',1),project={
-      shots:[a],assets:[],shotStates:[{id:'actual-a',shotId:'a',role:'actual-start',source:'generated',status:'unreviewed',characters:[],props:[],environment:{lighting:'blue moonlight'},camera:{screenDirection:'left-to-right'},actionPhase:'mid reach',dialogueState:'silent',createdAt:'2026-01-01T00:00:00.000Z'}],
+      shots:[a],assets:[],shotStates:[{id:'actual-a',shotId:'a',role:'actual-start',source:'generated',status:'current',characters:[],props:[],environment:{lighting:'blue moonlight'},camera:{screenDirection:'left-to-right'},actionPhase:'mid reach',dialogueState:'silent',createdAt:'2026-01-01T00:00:00.000Z'}],
       settings:{workflowProfiles:[]}
     } as unknown as FilmProject;
     a.actualStartStateId='actual-a';
