@@ -2,6 +2,18 @@ import type { Shot, WorkflowCapabilities, WorkflowProfile } from './types';
 
 const GENERIC_KEYS=['referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const;
 
+export interface WorkflowCapabilityShot {
+  generation:{modelFamily:string;mode:string;includeAudio?:boolean};
+  startFrameAssetId?:string;
+  endFrameAssetId?:string;
+  audioAssetId?:string;
+  referenceVideoAssetId?:string;
+  characterAssetIds?:string[];
+  locationAssetId?:string;
+  propAssetIds?:string[];
+  referenceAssetIds?:string[];
+}
+
 export interface EffectiveWorkflowCapabilities {
   maxGenericReferences:number;
   supportsStartImage:boolean;
@@ -28,7 +40,7 @@ export function effectiveWorkflowCapabilities(profile:Pick<WorkflowProfile,'bind
 }
 
 
-export function workflowCapabilityErrors(profile:WorkflowProfile,shot:Shot):string[]{
+export function workflowCapabilityErrors(profile:WorkflowProfile,shot:WorkflowCapabilityShot):string[]{
   const errors:string[]=[],caps=effectiveWorkflowCapabilities(profile),keys=new Set(profile.bindings.map(binding=>binding.key));
   if(profile.modelFamily!==shot.generation.modelFamily)errors.push(`Profile model family ${profile.modelFamily} does not match shot model ${shot.generation.modelFamily}.`);
   if(profile.mode!==shot.generation.mode)errors.push(`Profile mode ${profile.mode} does not match shot mode ${shot.generation.mode}.`);
@@ -44,18 +56,18 @@ export function workflowCapabilityErrors(profile:WorkflowProfile,shot:Shot):stri
   if((shot.generation.mode==='v2v'||Boolean(shot.referenceVideoAssetId))&&!caps.supportsInputVideo){
     errors.push('Shot requires an input-video binding but this workflow profile cannot accept input video.');
   }
-  if(shot.generation.includeAudio&&!caps.supportsGeneratedAudio){
+  if(Boolean(shot.generation.includeAudio)&&!caps.supportsGeneratedAudio){
     errors.push('Shot requests generated audio but this workflow profile does not declare or bind generated-audio support.');
   }
 
   const genericCandidates:string[]=[];
   const characterKeys=['characterImage1','characterImage2','characterImage3','characterImage4'] as const;
-  for(const[index,id]of shot.characterAssetIds.entries()){
+  for(const[index,id]of (shot.characterAssetIds??[]).entries()){
     if(index>=characterKeys.length||!keys.has(characterKeys[index]))genericCandidates.push(id);
   }
   if(shot.locationAssetId&&!keys.has('locationImage'))genericCandidates.push(shot.locationAssetId);
   const propKeys=['propImage1','propImage2'] as const;
-  for(const[index,id]of shot.propAssetIds.entries()){
+  for(const[index,id]of (shot.propAssetIds??[]).entries()){
     if(index>=propKeys.length||!keys.has(propKeys[index]))genericCandidates.push(id);
   }
   genericCandidates.push(...(shot.referenceAssetIds??[]));
