@@ -16,7 +16,7 @@ import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
-import { continuityPredecessorShots, continuityReviewInputKey, directorDraftIncludeAudio, filterDirectorAssetIds, resolveDirectorDraftRoute, resolveDirectorProposalRoutes, sceneDirectorInputKey, validatedVideoRouteForDirectorDraft, validatedVideoRouteForModel } from '../src/shared/director-signature';
+import { continuityPredecessorShots, continuityReviewInputKey, directorDraftIncludeAudio, directorDraftRequiresAudio, directorProfileCanServeDraft, filterDirectorAssetIds, resolveDirectorDraftRoute, resolveDirectorProposalRoutes, sceneDirectorInputKey, validatedVideoRouteForDirectorDraft, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestCurrentPassingVideoTake, latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
@@ -3498,6 +3498,54 @@ describe('final Director/profile consistency',()=>{
     expect(source).toMatch(/resolveDirectorProposalRoutes\(current,proposal\.drafts\)/);
     expect(source).toMatch(/const resolved=resolveDirectorProposalRoutes\(p,proposal\.drafts\)/);
     expect(source).not.toMatch(/if\(!validatedModel\|\|!route\)continue/);
+  });
+
+  it('does not let a disabled, invalid or incompatible pinned workflow masquerade as render provenance',()=>{
+    const project=projectBase(),shot=project.shots[0];
+    const pinned=profile('pinned','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'}],{supportsStartImage:true});
+    shot.generation.workflowProfileId=pinned.id;project.settings.workflowProfiles=[pinned];
+    const valid=shotProjectRenderInputKey(project,shot);
+    pinned.enabled=false;
+    expect(shotProjectRenderInputKey(project,shot)).not.toBe(valid);
+    pinned.enabled=true;pinned.validation={structuralStatus:'invalid'};
+    expect(shotProjectRenderInputKey(project,shot)).not.toBe(valid);
+    pinned.validation={structuralStatus:'valid'};pinned.capabilities={supportsStartImage:false};
+    expect(shotProjectRenderInputKey(project,shot)).not.toBe(valid);
+  });
+
+  it('makes structured asset continuity part of immutable render provenance',()=>{
+    const project=projectBase(),shot=project.shots[0];
+    project.settings.workflowProfiles=[profile('route','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'}],{supportsStartImage:true})];
+    const asset:Asset={id:'hero-render',kind:'character',name:'Hero',sourcePath:'hero.png',projectPath:'assets/hero.png',tags:[],notes:'same notes',continuity:{identityAnchors:['scar left brow']},createdAt:'2026-01-01T00:00:00.000Z'};
+    project.assets=[asset];shot.characterAssetIds=[asset.id];
+    const before=shotProjectRenderInputKey(project,shot);
+    asset.continuity={identityAnchors:['scar right brow']};
+    expect(shotProjectRenderInputKey(project,shot)).not.toBe(before);
+  });
+
+  it('does not route Director proposals through V2V or IA2V profiles that require inputs the proposal cannot carry',()=>{
+    const project=projectBase();
+    const v2v=profile('v2v','wan-2.2-5b',[{key:'inputVideo',jsonPath:'video'}],{supportsInputVideo:true});
+    v2v.mode='v2v';
+    const ia2v=profile('ia2v','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'},{key:'inputAudio',jsonPath:'audio'}],{supportsStartImage:true,supportsInputAudio:true});
+    ia2v.mode='ia2v';
+    project.settings.workflowProfiles=[v2v,ia2v];
+    expect(directorProfileCanServeDraft(v2v)).toBe(false);
+    expect(directorProfileCanServeDraft(ia2v)).toBe(false);
+    expect(resolveDirectorDraftRoute(project,draft({preferredModel:'wan-2.2-5b'}))).toBeUndefined();
+  });
+
+  it('requires generated audio for dialogue but lets silent drafts use a silent compatible route',()=>{
+    const project=projectBase();
+    const silent=profile('ltx-silent','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'}],{supportsStartImage:true,supportsGeneratedAudio:false});
+    project.settings.workflowProfiles=[silent];
+    const silentDraft=draft({dialogue:''});
+    expect(directorDraftRequiresAudio(silentDraft)).toBe(false);
+    expect(directorDraftIncludeAudio(silentDraft,'ltx-2.5-fast',silent)).toBe(false);
+    expect(resolveDirectorDraftRoute(project,silentDraft)?.route.id).toBe('ltx-silent');
+    const dialogue=draft({dialogue:'Speak this line.'});
+    expect(directorDraftRequiresAudio(dialogue)).toBe(true);
+    expect(resolveDirectorDraftRoute(project,dialogue)).toBeUndefined();
   });
 
   it('makes structured asset continuity part of Director planning and review provenance',()=>{
