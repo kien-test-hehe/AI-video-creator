@@ -40,30 +40,26 @@ CineForge is a desktop application, not a hosted web service. The packaged Elect
 
 ## Unified Studio UX
 
-CineForge opens into **Studio**, a filmmaking control surface inspired by the useful interaction model of node-based tools without exposing users to raw diffusion graph complexity.
+CineForge opens into a **Compact Studio** designed like a modern desktop editor rather than a diffusion control cockpit. The full node/graph workspace is still preserved as **Flow / Advanced** for power users and debugging; it is no longer the first thing a new user has to understand.
 
-Studio keeps the production state visible at once:
+The default Studio keeps the production loop obvious:
 
-- left asset library with search/filter/import, in-place metadata/continuity editing and drag sources;
-- center pan/zoom pipeline graph: Story / Assets / System → Scenes → Shots → Workflow Profiles → Queue → Timeline → CapCut;
-- draggable visual node layout with lock, cursor-anchored zoom, fit, focus, auto-layout and minimap; node position is presentation only and never changes film order;
-- single-click inspect-in-place for story, assets, system/preflight, scenes, shots, workflows, queue, timeline and CapCut; double-click opens the detailed workspace;
-- shot nodes that expose status, model/mode, dedicated character/location/generic-reference/prop coverage, keyframes and truthful workflow-route readiness;
-- validated video workflows can be dragged onto shot nodes; invalid/disabled/mismatched explicit routes remain visible as blocked instead of silently falling back;
-- right shot inspector for prompt, camera, model/mode, workflow, W/H/frames/FPS/steps/CFG/seed, negative prompt, audio policy, continuity review, keyframe generation and role-specific drag/drop;
-- bottom Queue dock with every job plus cancel/retry controls and shot focus;
-- bottom Timeline dock with every canonical clip, drag-to-reorder and rendered-take → timeline insertion;
-- System / Preflight node plus GPU/VRAM/WanGP/ComfyUI/CapCut/Queue HUD;
-- one-click Preflight, Render selected and Render all;
-- **AUTO RUN** production control with pause/resume/stop, current shot, retry count, human blockers and canonical progress;
-- per-shot production-state inspector for actual-start / observed-final state, visual / semantic / continuity QC, open Human Tasks and actual generated final frame;
-- continuity dependency edges directly on the Studio graph, plus incoming/outgoing propagated fields in the shot inspector;
-- automatic previz advisor with explicit human override, Blender detection and a generated previz manifest for shots whose camera/blocking/geometry make 3D reference worthwhile;
-- Dashboard workstation-readiness checklist that explains exactly what blocks production and what is only a warning.
+- compact tool rail for Media / Cast / Places / Shots / AI / Review / Audio;
+- context library on the left;
+- large selected-shot preview/stage in the center;
+- selection-driven inspector on the right;
+- persistent production timeline at the bottom;
+- one compact app bar for Open / New / Local status / Queue / AUTO / Export;
+- asset → shot drag/drop using the same role-aware assignment rules as the detailed views;
+- candidate-take preview, canonical state, stale-canonical visibility and Human Review controls;
+- explicit PASS/FAIL or observed-state approval notes where human judgment is required;
+- AUTO RUN pause/resume/stop with blocker, retry and canonical progress visibility.
 
-Generic visual references are stored separately from props/wardrobe. The project schema enforces asset-kind roles and migrates older projects where generic references were previously carried in the prop slot. Schema v3 also stores structured shot states, continuity dependencies, layered QC history, human-review tasks and canonical-take provenance.
+**Flow / Advanced** retains the complete production graph, workflow routing, dependency edges, preflight/system detail, production-state/provenance inspection, queue controls and low-level shot/workflow binding tools. Compact Studio and Advanced Flow are two presentations of the same canonical project/runtime state; there is no second hidden project model.
 
-The detailed Story, Assets, Storyboard, Shot Workshop, Queue, Timeline, CapCut and Settings views remain available from the icon rail. The graph is therefore an **overview/control workspace**, not a second hidden project model.
+The detailed Story, Assets, Storyboard, Shot Workshop, Queue, Timeline, Finishing and Settings views remain available. AI Director output is staged as a proposal before project mutation, so the user can review the proposed shot batch instead of silently appending AI output to the canonical project.
+
+Generic visual references are stored separately from props/wardrobe. Schema v3 stores structured shot states, continuity dependencies, layered QC history, human-review tasks, canonical-take provenance and cut revisions. Only current reviewed/approved state may condition generation; stale or unreviewed state is excluded from render/keyframe provenance.
 
 ## Architecture
 
@@ -156,7 +152,7 @@ Connected unknown/subgraph UI nodes are never silently flattened.
 
 ## Autonomous production
 
-AUTO RUN is a main-process state machine, not a renderer-side macro. For each target shot it:
+AUTO RUN is a main-process state machine, not a renderer-side macro. It schedules non-parallel dependencies in production order (hard dependencies block; soft dependencies guide ordering) and processes each target shot through:
 
 ```text
 preflight
@@ -171,11 +167,11 @@ preflight
 → state propagation
 → canonical take gate
 → bounded retry or Human Review
-→ next shot
-→ canonical timeline
+→ next dependency-ready shot
+→ build a canonical timeline only when the timeline is empty
 ```
 
-Visual/semantic/continuity checks use the configured loopback multimodal model. If local vision is unavailable or uncertain, CineForge records `human-verify` and creates a Human Task rather than inventing a PASS. Human QC decisions require PASS/FAIL plus a review note. Low-confidence extracted final state also requires human approval before it may become continuity truth.
+Visual/semantic/continuity checks use the configured loopback multimodal model. If local vision is unavailable or uncertain, CineForge records `human-verify` and creates a Human Task rather than inventing a PASS. Human QC decisions require PASS/FAIL plus a review note. Low-confidence extracted final state approval is bound to the exact extracted draft fingerprint before it may become continuity truth. Multi-source continuity never uses last-writer-wins propagation; ambiguous converging state requires an explicit human-resolved start state.
 
 AUTO RUN owns production while active. Manual edits/generation/export are blocked until it is paused, preventing two GPU workflows from fighting over a 16 GB card. State is journaled under `.cineforge/`, so restart recovery re-evaluates the current project instead of forgetting the run.
 
@@ -195,7 +191,7 @@ This keeps Blender in the intended human-on-the-loop role while CineForge owns d
 
 ## Technical QC
 
-Generated video is inspected before it can become the preferred take:
+Generated video is inspected before it can become the preferred take. Runtime qualification means the route executed successfully; it is deliberately not presented as proof of creative/semantic quality:
 
 - video/audio stream presence;
 - expected duration;
@@ -209,7 +205,7 @@ A video route that produces no video or fails technical QC becomes a failed job,
 
 ## CapCut
 
-**Finishing → Prepare CapCut handoff** validates the current canonical timeline and writes:
+**Finishing → Prepare CapCut handoff** validates the current approved timeline and writes only timeline-relevant support assets (including structured continuity metadata):
 
 ```text
 handoff/capcut/<timestamp>-<uuid>/
@@ -219,7 +215,7 @@ handoff/capcut/<timestamp>-<uuid>/
 
 The task asks the official CapCut × Codex workflow to preserve media/order/trims/dialogue while using CapCut for captions, typography, transitions, tracking/reframe, effects and final polish. New projects are **Free / No Pro by default**. Pro is an explicit project toggle, and CapCut AI-credit generation remains a separate opt-in.
 
-This is a handoff contract, not brittle coordinate-click GUI automation.
+This is a handoff contract, not brittle coordinate-click GUI automation. The local master exporter normalizes all clips to a deterministic master geometry chosen from the dominant source orientation and best available resolution, rather than inheriting the first clip's dimensions.
 
 ## Target workstation
 
