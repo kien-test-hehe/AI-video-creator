@@ -4,10 +4,10 @@ import type {
 import { shotProjectRenderInputKey, shotProjectRenderInputKeyForProfile } from './shot-signature';
 
 export const DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
-  'character','wardrobe','prop','location','lighting','action','camera','dialogue'
+  'character','wardrobe','prop','location','lighting','action','dialogue'
 ];
 const LEGACY_DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
-  'character','wardrobe','prop','location','lighting','action','dialogue'
+  'character','wardrobe','prop','location','lighting','action','camera','dialogue'
 ];
 const FULL_FRAME_CONTINUITY_FIELDS:ContinuityField[]=[
   'character','wardrobe','prop','location','lighting','action','camera'
@@ -51,27 +51,55 @@ function editorialShotCompare(project:Pick<FilmProject,'scenes'>,a:Shot,b:Shot):
 export function productionShotOrder(project:Pick<FilmProject,'shots'|'scenes'|'shotDependencies'>):Shot[]{
   const shots=[...project.shots].sort((a,b)=>editorialShotCompare(project,a,b));
   const byId=new Map(shots.map(shot=>[shot.id,shot] as const));
-  const indegree=new Map<string,number>(shots.map(shot=>[shot.id,0]));
-  const outgoing=new Map<string,string[]>();
+
+  // Validate the complete non-parallel graph first. Even soft edges describe production
+  // intent and a cycle is ambiguous enough that CineForge should not silently guess.
+  const allIndegree=new Map<string,number>(shots.map(shot=>[shot.id,0]));
+  const allOutgoing=new Map<string,string[]>();
   for(const edge of project.shotDependencies){
     if(edge.relation==='parallel'||!byId.has(edge.fromShotId)||!byId.has(edge.toShotId))continue;
-    indegree.set(edge.toShotId,(indegree.get(edge.toShotId)??0)+1);
-    const list=outgoing.get(edge.fromShotId)??[];list.push(edge.toShotId);outgoing.set(edge.fromShotId,list);
+    allIndegree.set(edge.toShotId,(allIndegree.get(edge.toShotId)??0)+1);
+    const list=allOutgoing.get(edge.fromShotId)??[];list.push(edge.toShotId);allOutgoing.set(edge.fromShotId,list);
   }
-  const ready=shots.filter(shot=>(indegree.get(shot.id)??0)===0);
-  const result:Shot[]=[];
+  const cycleReady=shots.filter(shot=>(allIndegree.get(shot.id)??0)===0);
+  let visited=0;
+  while(cycleReady.length){
+    const shot=cycleReady.shift()!;visited++;
+    for(const targetId of allOutgoing.get(shot.id)??[]){
+      const next=(allIndegree.get(targetId)??0)-1;allIndegree.set(targetId,next);
+      if(next===0){const target=byId.get(targetId);if(target)cycleReady.push(target);}
+    }
+  }
+  if(visited!==shots.length){
+    const blocked=shots.filter(shot=>(allIndegree.get(shot.id)??0)>0).map(shot=>shot.id).slice(0,16);
+    throw new Error(`Shot dependency graph contains a cycle involving: ${blocked.join(', ')||'unknown shots'}.`);
+  }
+
+  const hardIndegree=new Map<string,number>(shots.map(shot=>[shot.id,0]));
+  const hardOutgoing=new Map<string,string[]>();
+  const softPredecessors=new Map<string,Set<string>>();
+  for(const edge of project.shotDependencies){
+    if(edge.relation==='parallel'||!byId.has(edge.fromShotId)||!byId.has(edge.toShotId))continue;
+    if(edge.strength==='hard'){
+      hardIndegree.set(edge.toShotId,(hardIndegree.get(edge.toShotId)??0)+1);
+      const list=hardOutgoing.get(edge.fromShotId)??[];list.push(edge.toShotId);hardOutgoing.set(edge.fromShotId,list);
+    }else{
+      const set=softPredecessors.get(edge.toShotId)??new Set<string>();set.add(edge.fromShotId);softPredecessors.set(edge.toShotId,set);
+    }
+  }
+
+  const ready=shots.filter(shot=>(hardIndegree.get(shot.id)??0)===0);
+  const emitted=new Set<string>(),result:Shot[]=[];
+  const unresolvedSoft=(shot:Shot)=>[...(softPredecessors.get(shot.id)??[])].filter(id=>!emitted.has(id)).length;
   while(ready.length){
-    ready.sort((a,b)=>editorialShotCompare(project,a,b));
-    const shot=ready.shift()!;result.push(shot);
-    for(const targetId of outgoing.get(shot.id)??[]){
-      const next=(indegree.get(targetId)??0)-1;indegree.set(targetId,next);
+    ready.sort((a,b)=>unresolvedSoft(a)-unresolvedSoft(b)||editorialShotCompare(project,a,b));
+    const shot=ready.shift()!;result.push(shot);emitted.add(shot.id);
+    for(const targetId of hardOutgoing.get(shot.id)??[]){
+      const next=(hardIndegree.get(targetId)??0)-1;hardIndegree.set(targetId,next);
       if(next===0){const target=byId.get(targetId);if(target)ready.push(target);}
     }
   }
-  if(result.length!==shots.length){
-    const blocked=shots.filter(shot=>(indegree.get(shot.id)??0)>0).map(shot=>shot.id).slice(0,16);
-    throw new Error(`Shot dependency graph contains a cycle involving: ${blocked.join(', ')||'unknown shots'}.`);
-  }
+  if(result.length!==shots.length)throw new Error('Hard shot dependency scheduling could not resolve every shot.');
   return result;
 }
 
