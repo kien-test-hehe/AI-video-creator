@@ -3024,6 +3024,24 @@ describe('final missing hardening regressions',()=>{
     expect(keyframeProjectInputKey(project,shot,'start',undefined)).not.toBe(keyframeKey);
   });
 
+  it('refuses to resolve a generated keyframe review at main-process authority until that exact candidate is attached',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-keyframe-review-authority-'));
+    const service=new ProjectService();
+    try{
+      await service.createAt(root,'Keyframe review authority');
+      await service.mutate(project=>{
+        project.scenes=[{id:'scene',index:1,heading:'',body:'',shotIds:['shot']}];
+        project.assets=[{id:'candidate',kind:'keyframe',name:'Candidate',sourcePath:'candidate.png',projectPath:'assets/keyframe/candidate.png',tags:['candidate'],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];
+        project.shots=[makeShot()];
+        project.humanTasks=[{id:'task',type:'verify-keyframe',status:'open',shotId:'shot',title:'Review generated start keyframe',reason:'review candidate',relatedAssetIds:['candidate'],relatedRenderOutputIds:[],createdAt:'2026-01-01T00:00:00.000Z'}];
+      });
+      await expect(resolveHumanTask(service,{projectRoot:root,taskId:'task',status:'resolved',resolution:'looks good'})).rejects.toThrow(/exact candidate is attached/i);
+      await service.mutate(project=>{project.shots[0].startFrameAssetId='candidate';});
+      const resolved=await resolveHumanTask(service,{projectRoot:root,taskId:'task',status:'resolved',resolution:'candidate reviewed and attached'});
+      expect(resolved.humanTasks.find(task=>task.id==='task')?.status).toBe('resolved');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
   it('keeps a generated keyframe review tied to that exact candidate',()=>{
     const project=makeProject(),shot=project.shots[0];
     const task={id:'task',type:'verify-keyframe' as const,status:'open' as const,shotId:shot.id,title:'Review generated start keyframe',reason:'review',relatedAssetIds:['candidate'],relatedRenderOutputIds:[],createdAt:'2026-01-01T00:00:00.000Z'};
