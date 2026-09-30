@@ -3015,6 +3015,13 @@ describe('final missing hardening regressions',()=>{
     expect(prompt).toContain('ACTUAL_MARKER');
     expect(prompt).not.toContain('PLANNED_MARKER');
     expect(prompt).toMatch(/authoritative actual start state overrides/i);
+    const renderKey=shotProjectRenderInputKey(project,shot),keyframeKey=keyframeProjectInputKey(project,shot,'start',undefined);
+    project.shotStates.find(state=>state.id==='planned')!.environment.notes='PLANNED_CHANGED_BUT_UNUSED';
+    expect(shotProjectRenderInputKey(project,shot)).toBe(renderKey);
+    expect(keyframeProjectInputKey(project,shot,'start',undefined)).toBe(keyframeKey);
+    project.shotStates.find(state=>state.id==='actual')!.environment.notes='ACTUAL_CHANGED';
+    expect(shotProjectRenderInputKey(project,shot)).not.toBe(renderKey);
+    expect(keyframeProjectInputKey(project,shot,'start',undefined)).not.toBe(keyframeKey);
   });
 
   it('keeps a generated keyframe review tied to that exact candidate',()=>{
