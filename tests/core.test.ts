@@ -2970,6 +2970,14 @@ describe('final missing hardening regressions',()=>{
     expect(selectPreferredTechnicalVideo([noisy,cleanFar,cleanNear],shot)?.id).toBe('clean-near');
   });
 
+  it('allows shot assignment beyond dedicated character/prop slots so generic routing can serve the overflow',()=>{
+    const shot=makeShot();
+    for(let i=1;i<=6;i++)expect(autoAssignAssetToShot(shot,{id:`c${i}`,kind:'character',name:`C${i}`,sourcePath:'x',projectPath:`assets/c${i}.png`,tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'})).toMatchObject({ok:true});
+    for(let i=1;i<=3;i++)expect(autoAssignAssetToShot(shot,{id:`p${i}`,kind:'prop',name:`P${i}`,sourcePath:'x',projectPath:`assets/p${i}.png`,tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'})).toMatchObject({ok:true});
+    expect(shot.characterAssetIds).toHaveLength(6);
+    expect(shot.propAssetIds).toHaveLength(3);
+  });
+
   it('routes all extra characters and props into generic reference arrays without silently dropping them',()=>{
     const shot=makeShot();shot.characterAssetIds=['c1','c2','c3','c4','c5','c6'];shot.propAssetIds=['p1','p2','p3'];shot.locationAssetId='loc';shot.referenceAssetIds=['r1','r2'];
     const profile={id:'wf',runtime:'comfyui',purpose:'video',name:'WF',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/wf.json',workflowFormat:'api',bindings:[{key:'characterImage1',selector:{nodeId:'1'},input:'a'},{key:'propImage1',selector:{nodeId:'2'},input:'b'},{key:'referenceImages',selector:{nodeId:'3'},input:'refs'}],enabled:true} as WorkflowProfile;
