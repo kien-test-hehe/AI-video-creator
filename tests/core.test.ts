@@ -2317,6 +2317,7 @@ describe('next-five production hardening',()=>{
     project.shotStates=[{id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',frameAssetId:'frame',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'}];
     const loaded=loadPortableProject(project,'/tmp/next-five').project;
     expect(loaded.shots.find(item=>item.id==='b')?.startFrameAssetId).toBeUndefined();
-    expect(loaded.shots.find(item=>item.id==='b')?.actualStartStateId).toBe('start-b');
+    expect(loaded.shots.find(item=>item.id==='b')?.actualStartStateId).toBeUndefined();
+    expect(loaded.shotStates.find(item=>item.id==='start-b')?.status).toBe('stale');
   });
 });
