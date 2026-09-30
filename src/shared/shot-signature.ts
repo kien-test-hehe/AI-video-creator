@@ -1,4 +1,5 @@
 import type { FilmProject, RenderJobSpec, Shot, WorkflowProfile } from './types';
+import { workflowCapabilityErrors } from './workflow-capabilities';
 
 export function shotRenderInputKey(shot:Shot):string{
   return JSON.stringify({
@@ -84,6 +85,7 @@ export function workflowExecutionKey(profile:WorkflowProfile|undefined):string{
     workflowPath:profile.workflowPath,
     workflowFormat:profile.workflowFormat,
     bindings:profile.bindings,
+    capabilities:profile.capabilities,
     enabled:profile.enabled,
     modelFingerprint:profile.modelFingerprint
   });
@@ -101,7 +103,15 @@ export function canRefreshProfileValidationFromRender(profile:WorkflowProfile|un
 function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile|undefined{
   if(shot.generation.workflowProfileId)return project.settings.workflowProfiles.find(profile=>profile.id===shot.generation.workflowProfileId);
   const candidates=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&Boolean(profile.workflowPath));
-  return candidates.find(profile=>profile.validation?.structuralStatus==='valid')??candidates[0];
+  const compatible=candidates
+    .filter(profile=>profile.validation?.structuralStatus==='valid'&&workflowCapabilityErrors(profile,shot).length===0)
+    .sort((a,b)=>
+      Number(Boolean(b.validation?.lastSuccessfulRenderAt))-Number(Boolean(a.validation?.lastSuccessfulRenderAt))||
+      (b.validation?.successfulRenderCount??0)-(a.validation?.successfulRenderCount??0)||
+      (b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||
+      a.id.localeCompare(b.id)
+    );
+  return compatible[0]??candidates.find(profile=>profile.validation?.structuralStatus==='valid')??candidates[0];
 }
 
 export function shotProjectRenderInputKeyForProfile(project:FilmProject,shot:Shot,profile:WorkflowProfile|undefined):string{
