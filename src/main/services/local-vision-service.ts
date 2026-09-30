@@ -80,7 +80,7 @@ export async function analyzeImagesWithLocalVision(machine:AppMachineSettings,in
     if(!repairedText)throw new Error('Local visual evaluator JSON repair returned no message content.');
     try{return parseLocalVisionJsonObject(repairedText);}
     catch(secondError){
-      throw new Error(`Local visual evaluator returned malformed JSON twice. First: ${firstError instanceof Error?firstError.message:String(firstError)}. Repair: ${secondError instanceof Error?secondError.message:String(secondError)}`);
+      throw new LocalVisionUnavailableError(`Local visual evaluator returned malformed JSON twice. First: ${firstError instanceof Error?firstError.message:String(firstError)}. Repair: ${secondError instanceof Error?secondError.message:String(secondError)}`);
     }
   }
 }
