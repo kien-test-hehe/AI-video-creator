@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
-import type { AppMachineSettings, Asset, FilmProject, KeyframeRequest, Shot, WorkflowProfile } from '../../shared/types';
+import type { AppMachineSettings, Asset, FilmProject, HumanTask, KeyframeRequest, Shot, WorkflowProfile } from '../../shared/types';
 import { ProjectService } from './project-service';
 import { ComfyClient, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts } from './comfy-client';
 import { compileProfile, type WorkflowValues } from './workflow-engine';
@@ -17,7 +17,35 @@ import { planShotReferences } from './reference-plan';
 import { currentGenerationState, keyframeProjectInputKey } from '../../shared/shot-signature';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease, type KeyframeLease } from './keyframe-lease';
-import { invalidateObservedFinalState } from '../../shared/production-state';
+import { generatedKeyframeCandidateTags } from '../../shared/keyframe-review';
+import { createHumanTaskRecord } from './production-state-service';
+
+export function registerGeneratedKeyframeCandidate(
+  project:FilmProject,
+  shotId:string,
+  role:'start'|'end',
+  profileId:string,
+  inputSignature:string,
+  asset:Asset
+):HumanTask{
+  const targetShot=project.shots.find(shot=>shot.id===shotId);
+  const targetProfile=project.settings.workflowProfiles.find(item=>item.id===profileId);
+  if(!targetShot||!targetProfile)throw new Error('Shot or image workflow disappeared before generated keyframe candidate registration.');
+  if(keyframeProjectInputKey(project,targetShot,role,targetProfile)!==inputSignature)throw new Error('The shot or keyframe workflow changed before the generated frame could be registered.');
+  if(project.assets.length>=100_000)throw new Error('Keyframe attachment would exceed the 100000-asset project safety limit.');
+  asset.tags=[...new Set([...asset.tags,...generatedKeyframeCandidateTags(role,profileId,inputSignature)])];
+  asset.notes=`${asset.notes} Awaiting explicit Human Review before this keyframe may replace the shot ${role} frame.`.slice(0,20_000);
+  project.assets.push(asset);
+  return createHumanTaskRecord(project,{
+    projectRoot:project.rootPath,
+    type:'verify-keyframe',
+    shotId:targetShot.id,
+    title:`Approve generated ${role} keyframe · ${targetShot.title}`,
+    reason:`A local AI image workflow generated a ${role} keyframe candidate. It has not been attached to the shot because identity, location, composition and continuity must be reviewed by a human first.`,
+    recommendedAction:'Inspect the candidate image. Approve it only if identity, location, composition and continuity are correct; otherwise dismiss it and generate/import another keyframe.',
+    relatedAssetIds:[asset.id]
+  });
+}
 
 export function keyframePrompt(project:FilmProject,shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
@@ -136,19 +164,9 @@ export async function generateKeyframe(projects:ProjectService,machine:AppMachin
   const keyframeAssetDir=await ensureSafeDirectory(join(project.rootPath,'assets'),join(project.rootPath,'assets','keyframe'),'generated keyframe directory');
   const target=await assertSafeWritePath(keyframeAssetDir,join(project.rootPath,relativePath),'generated keyframe');
   await copyFile(generatedPath,target);await rm(generatedPath,{force:true}).catch(()=>undefined);
-  const asset:Asset={id:assetId,kind:'keyframe',name:`${shot.title} ${request.role} keyframe`.slice(0,1000),sourcePath:`generated-${request.role}${extension}`,projectPath:relativePath,tags:['generated','keyframe',request.role,profile.modelFamily],notes:`Generated locally with profile ${profile.name}.`,createdAt:new Date().toISOString()};
+  const asset:Asset={id:assetId,kind:'keyframe',name:`${shot.title} ${request.role} keyframe candidate`.slice(0,1000),sourcePath:`generated-${request.role}${extension}`,projectPath:relativePath,tags:['generated','keyframe',request.role,profile.modelFamily],notes:`Generated locally with profile ${profile.name}.`,createdAt:new Date().toISOString()};
   try{
-    return await projects.mutate(p=>{
-      const targetShot=p.shots.find(s=>s.id===shot.id),targetProfile=p.settings.workflowProfiles.find(item=>item.id===profile.id);
-      if(!targetShot||!targetProfile||keyframeProjectInputKey(p,targetShot,request.role,targetProfile)!==inputSignature)throw new Error('The shot or keyframe workflow changed before the generated frame could be attached.');
-      if(p.assets.length>=100_000)throw new Error('Keyframe attachment would exceed the 100000-asset project safety limit.');
-      p.assets.push(asset);
-      if(request.role==='start')targetShot.startFrameAssetId=asset.id;else targetShot.endFrameAssetId=asset.id;
-      targetShot.latestRenderId=undefined;
-      targetShot.canonicalRenderId=undefined;
-      invalidateObservedFinalState(p,targetShot.id,`${request.role==='start'?'Start':'End'} keyframe changed; prior rendered continuity state is stale.`);
-      if(['draft','rendered','failed'].includes(targetShot.status))targetShot.status='ready';
-    });
+    return await projects.mutate(p=>{registerGeneratedKeyframeCandidate(p,shot.id,request.role,profile.id,inputSignature,asset);});
   }catch(error){await rm(target,{force:true}).catch(()=>undefined);throw error;}
 }
 
