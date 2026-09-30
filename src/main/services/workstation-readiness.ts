@@ -26,8 +26,8 @@ export async function assessWorkstationReadiness(project:FilmProject|undefined,m
   const profiles=(project?.settings.workflowProfiles??[]).filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
   const validatedProfiles=profiles.filter(profile=>Boolean(profile.validation?.lastSuccessfulRenderAt));
   if(!project)add('profiles','Production profiles','warning','Open a project to inspect production workflow qualification.');
-  else if(validatedProfiles.length)add('profiles','Production profiles','ready',`${validatedProfiles.length} video profile(s) have a recorded successful render on this workstation/project.`);
-  else if(profiles.length)add('profiles','Production profiles','warning',`${profiles.length} structurally valid video profile(s), but none has a recorded successful render yet.`,'Run one short qualification render per intended production route.');
+  else if(validatedProfiles.length)add('profiles','Production profiles','warning',`${validatedProfiles.length} video profile(s) have a recorded technically successful runtime render. This is runtime qualification, not proof of visual/semantic production quality.`,`Run a short visual + semantic qualification take for each intended production route before unattended batches.`);
+  else if(profiles.length)add('profiles','Production profiles','warning',`${profiles.length} structurally valid video profile(s), but none has a recorded technically successful runtime render yet.`,'Run one short runtime qualification render per intended production route.');
   else add('profiles','Production profiles','blocked','No enabled structurally valid video workflow profile is available.','Provision/import and validate at least one local video workflow.');
 
   const autoQcAvailable=Boolean(machine.director.model.trim());
