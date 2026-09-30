@@ -226,7 +226,7 @@ export interface WorkflowValidation {
 }
 
 export interface WorkflowNodeSelector { nodeId?:string;classType?:string;titleIncludes?:string; }
-export type WorkflowBindingKey='prompt'|'negativePrompt'|'width'|'height'|'resolution'|'frames'|'fps'|'steps'|'cfg'|'seed'|'startImage'|'endImage'|'locationImage'|'characterImage1'|'characterImage2'|'characterImage3'|'characterImage4'|'propImage1'|'propImage2'|'referenceImages'|'referenceImage1'|'referenceImage2'|'referenceImage3'|'referenceImage4'|'inputAudio'|'inputVideo'|'filenamePrefix';
+export type WorkflowBindingKey='prompt'|'negativePrompt'|'width'|'height'|'resolution'|'frames'|'fps'|'steps'|'cfg'|'seed'|'startImage'|'endImage'|'locationImage'|'characterImage1'|'characterImage2'|'characterImage3'|'characterImage4'|'propImage1'|'propImage2'|'referenceImages'|'referenceImage1'|'referenceImage2'|'referenceImage3'|'referenceImage4'|'inputAudio'|'inputVideo'|'includeAudio'|'filenamePrefix';
 export interface WorkflowBinding { key:WorkflowBindingKey;selector?:WorkflowNodeSelector;input?:string;jsonPath?:string;transform?:'identity'|'integer'|'float'|'boolean'|'string';required?:boolean; }
 export interface WorkflowProfile {
   id:UUID;
