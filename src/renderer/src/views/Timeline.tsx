@@ -3,7 +3,7 @@ import type { TimelineClip } from '../../../shared/types';
 import { useAppStore } from '../store';
 import { Card, Empty, Page, Pill } from '../components/Ui';
 import { projectMediaUrl } from '../media';
-import { insertTimelineOutput, reorderTimeline, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
+import { canonicalReadyOutputForShot, insertTimelineOutput, reorderTimeline, timelineInsertIssue, timelineTakeApprovalIssue } from '../studio-logic';
 import { compareTimelineClips } from '../../../shared/timeline-policy';
 
 export function Timeline(){
@@ -56,7 +56,7 @@ export function Timeline(){
     });
     const skipped:string[]=[];
     const selected=ordered.map(shot=>{
-      const canonical=shot.canonicalRenderId?project.renderOutputs.find(output=>output.id===shot.canonicalRenderId&&output.shotId===shot.id&&output.mediaType==='video'):undefined;
+      const canonical=canonicalReadyOutputForShot(project,shot);
       if(!canonical)skipped.push(shot.title);
       return{shot,output:canonical};
     }).filter((item):item is {shot:(typeof project.shots)[number];output:(typeof project.renderOutputs)[number]}=>Boolean(item.output));
