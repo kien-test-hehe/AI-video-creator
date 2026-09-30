@@ -74,9 +74,18 @@ export async function evaluateSemanticQc(
     const legend=refs.map((ref,index)=>`Image ${takeFrames.length+index+1}: REFERENCE · ${text(ref.label,500)}`).join('\n');
     const contract=`TITLE: ${text(shot.title,500)}\nPROMPT: ${text(shot.prompt,8000)}\nCAMERA: ${text(shot.camera,2000)}\nACTION: ${text(shot.action,4000)}\nDIALOGUE/AUDIO INTENT: ${text(shot.dialogue,3000)}\nCONTINUITY NOTES: ${text(shot.continuityNotes,4000)}\nASSET BIBLE: ${text(JSON.stringify(assetContract),20_000)}`;
     const raw=await analyzeImagesWithLocalVision(machine,
-      `Images 1-${takeFrames.length} are chronological frames from the GENERATED TAKE. Any later images are visual REFERENCES, not additional video frames.\n${legend||'No visual reference images were supplied.'}\nThe generated take must satisfy this shot contract:\n${contract}\nJudge only evidence visible in the generated frames. When a matching visual reference is supplied, compare stable identity, wardrobe/prop identity, location identity and other persistent visual anchors against it; do not require identical pose, framing or lighting unless the contract requires them. Check broad action progression and composition/camera intent. If motion/action or identity cannot be established from the available evidence, use human-verify rather than guessing. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","expected":"...","observed":"..."}],"note":"..."}.`,
+      `Images 1-${takeFrames.length} are chronological frames from the GENERATED TAKE. Any later images are visual REFERENCES, not additional video frames.\n${legend||'No visual reference images were supplied.'}\nThe generated take must satisfy this shot contract:\n${contract}\nJudge only evidence visible in the generated frames. When a matching visual reference is supplied, compare stable identity, wardrobe/prop identity, location identity and other persistent visual anchors against it; do not require identical pose, framing or lighting unless the contract requires them. Check broad action progression and composition/camera intent. If motion/action or identity cannot be established from the available evidence, use human-verify rather than guessing. Do NOT approve dialogue, spoken words, voice identity, lip-sync or other audio semantics from still images. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","expected":"...","observed":"..."}],"note":"..."}.`,
       [...takeFrames,...refs.map(ref=>ref.path)]);
-    return normalizeEvaluation(raw,'Shot intent cannot be verified confidently from sampled frames and references.');
+    const evaluation=normalizeEvaluation(raw,'Shot intent cannot be verified confidently from sampled frames and references.');
+    const needsAudioReview=Boolean(shot.dialogue.trim()||shot.generation.includeAudio||shot.audioAssetId);
+    if(needsAudioReview&&evaluation.status==='pass'){
+      return{
+        status:'human-verify',
+        issues:[...evaluation.issues,{code:'AUDIO_SEMANTIC_REVIEW_REQUIRED',severity:'warning',message:'This shot contains dialogue/audio intent, but semantic Auto QC is image-based and cannot verify spoken content, voice identity, lip-sync or audio timing. Human Review is required.'}],
+        note:evaluation.note
+      };
+    }
+    return evaluation;
   }catch(error){if(error instanceof LocalVisionUnavailableError)return unavailable(error,'SEMANTIC_REVIEW_REQUIRED');throw error;}
 }
 
@@ -161,7 +170,7 @@ export function observedStateDraftFromVisionResult(project:FilmProject,shot:Shot
       lensMm:Number.isFinite(Number(raw?.camera?.lensMm))&&Number(raw.camera.lensMm)>0?Number(raw.camera.lensMm):undefined,
       notes:text(raw?.camera?.notes,3000)||undefined
     },
-    actionPhase:text(raw?.actionPhase,3000),
+    actionPhase:'',
     dialogueState:'unknown',
     confidence:Number.isFinite(confidence)?Math.max(0,Math.min(1,confidence)):0
   };
@@ -176,7 +185,7 @@ export async function extractObservedStateDraft(machine:AppMachineSettings,proje
   const location=shot.locationAssetId?project.assets.find(asset=>asset.id===shot.locationAssetId):undefined;
   try{
     const raw=await analyzeImagesWithLocalVision(machine,
-      `This is the stable final frame of generated shot "${text(shot.title,300)}". Known characters: ${JSON.stringify(knownCharacters)}. Known props: ${JSON.stringify(knownProps)}. Known wardrobes: ${JSON.stringify(knownWardrobes)}. Known location: ${JSON.stringify(location?{id:location.id,name:location.name}:null)}. Return strict JSON {"characters":[{"characterAssetId":"known-id-or-empty","label":"...","visible":true,"screenPosition":"left|center|right|offscreen|unknown","pose":"...","facing":"...","gaze":"...","expression":"...","wardrobeAssetId":"known-wardrobe-id-or-empty","heldPropAssetIds":["known-prop-id"],"notes":"..."}],"props":[{"propAssetId":"known-id-or-empty","label":"...","holderCharacterAssetId":"known-character-id-or-empty","position":"...","state":"...","notes":"..."}],"environment":{"locationAssetId":"known-location-id-or-empty","timeOfDay":"...","lighting":"...","weather":"...","notes":"..."},"camera":{"shotSize":"...","angle":"...","screenDirection":"...","lensMm":0,"notes":"..."},"actionPhase":"what action state is visibly true at this final frame","dialogueState":"unknown","confidence":0.0}. Use only supplied ids; omit uncertain ids. A single still frame cannot establish camera movement or dialogue/audio state, so never infer those from this image.`,[finalFramePath]);
+      `This is the stable final frame of generated shot "${text(shot.title,300)}". Known characters: ${JSON.stringify(knownCharacters)}. Known props: ${JSON.stringify(knownProps)}. Known wardrobes: ${JSON.stringify(knownWardrobes)}. Known location: ${JSON.stringify(location?{id:location.id,name:location.name}:null)}. Return strict JSON {"characters":[{"characterAssetId":"known-id-or-empty","label":"...","visible":true,"screenPosition":"left|center|right|offscreen|unknown","pose":"...","facing":"...","gaze":"...","expression":"...","wardrobeAssetId":"known-wardrobe-id-or-empty","heldPropAssetIds":["known-prop-id"],"notes":"..."}],"props":[{"propAssetId":"known-id-or-empty","label":"...","holderCharacterAssetId":"known-character-id-or-empty","position":"...","state":"...","notes":"..."}],"environment":{"locationAssetId":"known-location-id-or-empty","timeOfDay":"...","lighting":"...","weather":"...","notes":"..."},"camera":{"shotSize":"...","angle":"...","screenDirection":"...","lensMm":0,"notes":"..."},"actionPhase":"","dialogueState":"unknown","confidence":0.0}. Use only supplied ids; omit uncertain ids. A single still frame cannot establish temporal action phase, camera movement or dialogue/audio state, so leave actionPhase empty and never infer those from this image.`,[finalFramePath]);
     return observedStateDraftFromVisionResult(project,shot,raw);
   }catch(error){
     if(!(error instanceof LocalVisionUnavailableError))throw error;
