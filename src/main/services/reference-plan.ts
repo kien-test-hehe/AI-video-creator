@@ -1,4 +1,5 @@
 import type { Shot, WorkflowBindingKey, WorkflowProfile } from '../../shared/types';
+import { effectiveWorkflowCapabilities } from '../../shared/workflow-capabilities';
 
 const CHARACTER_KEYS=['characterImage1','characterImage2','characterImage3','characterImage4'] as const;
 const PROP_KEYS=['propImage1','propImage2'] as const;
@@ -40,7 +41,8 @@ export function planShotReferences(shot:Shot,profile:WorkflowProfile):ShotRefere
   const uniqueCandidates=[...new Set(genericCandidates)];
   const genericArray=keys.has('referenceImages');
   const genericBindingKeys=genericArray?[]:GENERIC_KEYS.filter(key=>keys.has(key));
-  const genericCapacity=genericArray?16:genericBindingKeys.length;
+  const capabilities=effectiveWorkflowCapabilities(profile);
+  const genericCapacity=genericArray?capabilities.maxGenericReferences:Math.min(capabilities.maxGenericReferences,genericBindingKeys.length);
   const genericIds=uniqueCandidates.slice(0,genericCapacity);
   const unservedIds=uniqueCandidates.slice(genericCapacity);
 
