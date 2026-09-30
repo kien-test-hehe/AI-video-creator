@@ -263,13 +263,13 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
     if(existing?.status==='current'&&existing.source==='human')continue;
     const startFrameOwnedByExisting=Boolean(existing?.frameAssetId&&existing.source!=='human'&&target.startFrameAssetId===existing.frameAssetId);
     if(target.startFrameAssetId&&!startFrameOwnedByExisting)continue;
-    if(existing?.derivedFromStateId===sourceState.id&&existing.status!=='stale')continue;
-    if(existing&&existing.status!=='stale')invalidateStateCascade(project,[existing.id],`Superseded by propagated state from ${sourceShotId}.`);
 
     const fields=new Set(edge.propagate);
     const selected=selectFields(sourceState,fields);
     const frameAssetId=shouldPropagateContinuityFrame(fields)?sourceState.frameAssetId:undefined;
     const id=productionFingerprint('state',`${edge.id}:${sourceState.id}:${shotStateContentKey({...sourceState,...selected,frameAssetId,shotId:target.id,role:'actual-start',source:'generated',derivedFromStateId:sourceState.id})}`);
+    if(existing?.id===id&&existing.status!=='stale')continue;
+    if(existing&&existing.status!=='stale')invalidateStateCascade(project,[existing.id],`Superseded by propagated state from ${sourceShotId}.`);
     const propagated:ShotState={
       id,
       shotId:target.id,
