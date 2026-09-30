@@ -2306,4 +2306,17 @@ describe('next-five production hardening',()=>{
     ];
     expect(()=>loadPortableProject(project,'/tmp/next-five')).toThrow(/dependency graph contains a cycle/i);
   });
+
+  it('clears a legacy start-frame link when it came from an unreviewed propagated state',()=>{
+    const project=projectBase() as any;
+    project.assets=[{id:'frame',kind:'keyframe',name:'Frame',sourcePath:'frame.jpg',projectPath:'assets/keyframe/frame.jpg',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];
+    project.shots[1].startFrameAssetId='frame';
+    project.shots[1].actualStartStateId='start-b';
+    project.shots[1].latestRenderId=undefined;
+    project.shots[1].canonicalRenderId=undefined;
+    project.shotStates=[{id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',frameAssetId:'frame',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'}];
+    const loaded=loadPortableProject(project,'/tmp/next-five').project;
+    expect(loaded.shots.find(item=>item.id==='b')?.startFrameAssetId).toBeUndefined();
+    expect(loaded.shots.find(item=>item.id==='b')?.actualStartStateId).toBe('start-b');
+  });
 });
