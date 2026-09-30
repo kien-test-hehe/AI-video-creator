@@ -18,26 +18,33 @@ export interface ShotReferencePlan {
 
 export function planShotReferences(shot:Shot,profile:WorkflowProfile):ShotReferencePlan{
   const keys=new Set(profile.bindings.map(binding=>binding.key));
-  const genericCandidates:string[]=[];
+  const genericCharacters:string[]=[],genericProps:string[]=[];
   const characterIds:Array<string|undefined>=[];
   const propIds:Array<string|undefined>=[];
 
   for(const[index,id]of shot.characterAssetIds.entries()){
     if(index<CHARACTER_KEYS.length&&keys.has(CHARACTER_KEYS[index]))characterIds[index]=id;
-    else genericCandidates.push(id);
+    else genericCharacters.push(id);
   }
 
   const locationId=shot.locationAssetId&&keys.has('locationImage')?shot.locationAssetId:undefined;
-  if(shot.locationAssetId&&!locationId)genericCandidates.push(shot.locationAssetId);
+  const genericLocation=shot.locationAssetId&&!locationId?shot.locationAssetId:undefined;
 
   for(const[index,id]of shot.propAssetIds.entries()){
     if(index<PROP_KEYS.length&&keys.has(PROP_KEYS[index]))propIds[index]=id;
-    else genericCandidates.push(id);
+    else genericProps.push(id);
   }
 
-  for(const id of shot.referenceAssetIds??[])genericCandidates.push(id);
-
-  const uniqueCandidates=[...new Set(genericCandidates)];
+  const genericReferences=shot.referenceAssetIds??[];
+  const priority=[
+    ...genericCharacters.slice(0,2),
+    genericLocation,
+    genericProps[0]??genericReferences[0],
+    ...genericCharacters.slice(2),
+    ...genericProps.slice(1),
+    ...genericReferences
+  ].filter((id):id is string=>Boolean(id));
+  const uniqueCandidates=[...new Set(priority)];
   const genericArray=keys.has('referenceImages');
   const genericBindingKeys=genericArray?[]:GENERIC_KEYS.filter(key=>keys.has(key));
   const genericCapacity=genericArray?16:genericBindingKeys.length;
