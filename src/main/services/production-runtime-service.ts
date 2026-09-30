@@ -10,7 +10,7 @@ import { RenderQueueService } from './render-queue';
 import { preflightProject } from './preflight-service';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath } from './path-safety';
 import { sampleVideoFrames, type SampledVideoFrames } from './media-analysis';
-import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, observedStateDraftFingerprint, selectStableFinalFrame } from './automatic-qc-service';
+import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, observedStateDraftFingerprint, observedStateReviewTitle, selectStableFinalFrame } from './automatic-qc-service';
 import { createHumanTask, recordObservedFinalState, recordShotQc } from './production-state-service';
 import { ensurePrevizPlan } from './previz-service';
 import { releaseLocalVisionModel } from './local-vision-service';
@@ -278,7 +278,7 @@ export class ProductionRuntimeService extends EventEmitter{
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
       const draft=await extractObservedStateDraft(this.settings.get(),project,shot,stableFinalFrame);
       const draftFingerprint=observedStateDraftFingerprint(draft);
-      const confidenceReviewTitle=`${OBSERVED_STATE_CONFIDENCE_TASK_PREFIX}${shot.title} · ${draftFingerprint}`;
+      const confidenceReviewTitle=observedStateReviewTitle(shot.title,draft);
       const confidenceApproved=project.humanTasks.some(task=>isApprovedObservedStateReview(task,shotId,confidenceReviewTitle,outputId));
       if(draft.confidence<0.6&&!confidenceApproved){
         await this.ensureHumanTask(
