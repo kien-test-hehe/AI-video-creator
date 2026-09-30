@@ -97,19 +97,31 @@ export function invalidateChangedRoutes(project:FilmProject,before:Map<string,st
 export function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:GenerationMode}>{
   const video=catalog.filter(e=>e.mainOutput.includes('video')||e.outputs.includes('video')).sort((a,b)=>a.modelType.localeCompare(b.modelType));
   const image=catalog.filter(e=>e.mainOutput.includes('image')||e.outputs.includes('image')).sort((a,b)=>a.modelType.localeCompare(b.modelType));
-  const namedGeneral=maxBy(video,e=>score(e,[['ltx2_25_22B_distilled_nvfp4',100],['ltx2_25',70],['LTX-2.5',60],['LTX 2.5',60]]));
-  const general=namedGeneral??video.find(entry=>preferredVideoMode(entry)!=='t2v')??video[0];
+  const generalCandidates=video.filter(entry=>['t2v','i2v'].includes(preferredGeneralVideoMode(entry)));
+  const namedGeneral=maxBy(generalCandidates,e=>score(e,[['ltx2_25_22B_distilled_nvfp4',100],['ltx2_25',70],['LTX-2.5',60],['LTX 2.5',60]]));
+  const general=namedGeneral??generalCandidates.sort((a,b)=>generalModeRank(preferredGeneralVideoMode(a))-generalModeRank(preferredGeneralVideoMode(b))||a.modelType.localeCompare(b.modelType))[0]??video[0];
   const hero=maxBy(video,e=>score(e,[['hunyuan_1_5',90],['Hunyuan Video 1.5',80],['HunyuanVideo-1.5',80]]));
   const motion=maxBy(video,e=>score(e,[['Wan2.2 TextImage2video 5B',100],['ti2v_2_2',95],['Wan2.2',50],['5B',20]]));
   const namedKeyframe=maxBy(image,e=>score(e,[['Qwen Image 2.1',100],['qwen_image_2',95],['Qwen Image Edit Plus',90],['Krea 2 Identity',85],['Krea 2',70],['Z-Image',60]]));
   const keyframe=namedKeyframe??image[0];
   const out:Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:GenerationMode}>=[];
-  if(general)out.push({entry:general,role:'general',purpose:'video',mode:preferredVideoMode(general)});
+  if(general)out.push({entry:general,role:'general',purpose:'video',mode:preferredGeneralVideoMode(general)});
   if(hero&&hero.modelType!==general?.modelType)out.push({entry:hero,role:'hero',purpose:'video',mode:preferredVideoMode(hero)});
   if(motion&&motion.modelType!==general?.modelType&&motion.modelType!==hero?.modelType)out.push({entry:motion,role:'motion',purpose:'video',mode:preferredVideoMode(motion)});
   if(keyframe)out.push({entry:keyframe,role:'keyframe',purpose:'image',mode:preferredImageMode(keyframe)});
   return out;
 }
+
+export function preferredGeneralVideoMode(entry:WanGpCatalogEntry):Extract<GenerationMode,'t2v'|'i2v'|'flf2v'|'ia2v'|'v2v'>{
+  const caps=entry.capabilities??{},inputs=new Set(entry.inputs.map(value=>value.toLowerCase()));
+  // General profiles should not require specialized media inputs when a plain
+  // text/image route is advertised by the same catalog entry.
+  if(caps.text_to_video||caps.text2video)return't2v';
+  if(caps.image_to_video||caps.image2video||inputs.has('image'))return'i2v';
+  if(!inputs.has('audio')&&!inputs.has('video')&&!inputs.has('end_image'))return't2v';
+  return preferredVideoMode(entry);
+}
+function generalModeRank(mode:GenerationMode):number{return mode==='t2v'?0:mode==='i2v'?1:2;}
 
 export function preferredVideoMode(entry:WanGpCatalogEntry):Extract<GenerationMode,'t2v'|'i2v'|'flf2v'|'ia2v'|'v2v'>{
   const caps=entry.capabilities??{},inputs=new Set(entry.inputs.map(value=>value.toLowerCase()));
