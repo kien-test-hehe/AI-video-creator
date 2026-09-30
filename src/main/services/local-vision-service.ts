@@ -15,11 +15,13 @@ function mimeFor(path:string):string{
   return'image/jpeg';
 }
 
-function parseJsonObject(text:string):any{
+export function parseLocalVisionJsonObject(text:string):Record<string,unknown>{
   const cleaned=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
   const first=cleaned.indexOf('{'),last=cleaned.lastIndexOf('}');
-  if(first<0||last<first)throw new Error('Local visual evaluator did not return JSON.');
-  return JSON.parse(cleaned.slice(first,last+1));
+  if(first<0||last<first)throw new Error('Local visual evaluator did not return a JSON object.');
+  const parsed=JSON.parse(cleaned.slice(first,last+1));
+  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Local visual evaluator must return one top-level JSON object.');
+  return parsed as Record<string,unknown>;
 }
 
 export async function analyzeImagesWithLocalVision(machine:AppMachineSettings,instruction:string,imagePaths:string[]):Promise<any>{
@@ -49,7 +51,38 @@ export async function analyzeImagesWithLocalVision(machine:AppMachineSettings,in
   const payload=await readResponseJsonLimited<ChatResponse>(res,'Local visual evaluator response',8*1024*1024);
   const text=payload.choices?.[0]?.message?.content;
   if(!text)throw new Error('Local visual evaluator returned no message content.');
-  return parseJsonObject(text);
+  try{return parseLocalVisionJsonObject(text);}
+  catch(firstError){
+    let repair:Response;
+    try{
+      repair=await fetchLocalUrl(url,{
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({
+          model:cfg.model,
+          temperature:0,
+          messages:[
+            {role:'system',content:'You repair CineForge local visual QC JSON. Return exactly one valid JSON object and no markdown or commentary.'},
+            {role:'user',content},
+            {role:'assistant',content:text.slice(0,16_000)},
+            {role:'user',content:'Your previous answer was not valid strict JSON. Repair only syntax and object shape without inventing new observations. Return exactly one JSON object.'}
+          ]
+        }),
+        signal:AbortSignal.timeout(180_000)
+      });
+    }catch(error){throw new LocalVisionUnavailableError(`Local visual evaluator JSON repair request failed: ${error instanceof Error?error.message:String(error)}`);}
+    if(!repair.ok){
+      const detail=(await readResponseTextLimited(repair,'Local visual evaluator JSON repair error',1024*1024)).slice(0,1200);
+      throw new Error(`Local visual evaluator JSON repair HTTP ${repair.status}: ${detail}`);
+    }
+    const repairedPayload=await readResponseJsonLimited<ChatResponse>(repair,'Local visual evaluator JSON repair response',8*1024*1024);
+    const repairedText=repairedPayload.choices?.[0]?.message?.content;
+    if(!repairedText)throw new Error('Local visual evaluator JSON repair returned no message content.');
+    try{return parseLocalVisionJsonObject(repairedText);}
+    catch(secondError){
+      throw new Error(`Local visual evaluator returned malformed JSON twice. First: ${firstError instanceof Error?firstError.message:String(firstError)}. Repair: ${secondError instanceof Error?secondError.message:String(secondError)}`);
+    }
+  }
 }
 
 export async function releaseLocalVisionModel(machine:AppMachineSettings):Promise<void>{
