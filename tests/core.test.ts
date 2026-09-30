@@ -9,7 +9,7 @@ import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
 import { DIRECTOR_PREDECESSOR_CONTEXT_LIMIT, boundedDirectorAssetIds, directorAssetContinuityContext, directorText, parseDirectorJsonObject, planSceneWithLocalDirector } from '../src/main/services/director-service';
 import { parseAudioProblemMetrics, parseVisualProblemDurations, parseVolumeDetectPeak, technicalAudioFindings, technicalQcStructuralIssues, technicalQcVisualFindings } from '../src/main/services/technical-qc';
-import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
+import type { AppMachineSettings, Asset, DirectorShotDraft, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { alternateShotTitle, appendProjectText, canonicalReadyOutputForShot, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioNextStep, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
