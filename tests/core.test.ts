@@ -2697,3 +2697,85 @@ describe('destructive mutation and human-task integrity next-five',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
+
+
+describe('final audit hardening regressions',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const makeShot=(id='shot'):Shot=>({id,sceneId:'scene',index:1,title:id,prompt:'base',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation}});
+  const makeProject=():FilmProject=>({schemaVersion:3,id:'final-audit',name:'Final audit',rootPath:'/tmp/final-audit',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',story:{title:'Final audit',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['shot']}],assets:[],shots:[makeShot()],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}});
+
+  it('uses tighter duration tolerance for technical QC',()=>{
+    const shot=makeShot();
+    expect(technicalQcStructuralIssues(shot,{durationSec:4.3,video:{width:768,height:432,fps:24},hasAudio:false})).toEqual([]);
+    expect(technicalQcStructuralIssues(shot,{durationSec:4.55,video:{width:768,height:432,fps:24},hasAudio:false}).join(' ')).toMatch(/differs materially/i);
+  });
+
+  it('parses one strict VLM object and rejects array-shaped output',()=>{
+    expect(parseLocalVisionJsonObject('{"status":"pass"}')).toEqual({status:'pass'});
+    expect(()=>parseLocalVisionJsonObject('[{"status":"pass"}]')).toThrow(/JSON object|top-level/i);
+    expect(()=>parseLocalVisionJsonObject('not json')).toThrow(/JSON object/i);
+  });
+
+  it('does not invent temporal camera movement from a single observed final frame',()=>{
+    const project=makeProject(),shot=project.shots[0];
+    const draft=observedStateDraftFromVisionResult(project,shot,{characters:[],props:[],camera:{movement:'fast dolly in'},confidence:.8});
+    expect(draft.camera.movement).toBeUndefined();
+  });
+
+  it('prefers the cleanest technically passing output instead of backend array order',()=>{
+    const shot=makeShot();
+    const output=(id:string,warnings:string[],durationSec:number,createdAt:string):RenderOutput=>({id,jobId:'job',shotId:shot.id,path:'/tmp/'+id+'.mp4',filename:id+'.mp4',mediaType:'video',createdAt,technicalQc:{checkedAt:createdAt,passed:true,issues:[],warnings,durationSec,width:768,height:432,fps:24,hasAudio:false}});
+    const noisy=output('noisy',['warning'],4.04,'2026-01-01T00:00:01.000Z');
+    const cleanFar=output('clean-far',[],4.3,'2026-01-01T00:00:02.000Z');
+    const cleanNear=output('clean-near',[],4.05,'2026-01-01T00:00:03.000Z');
+    expect(selectPreferredTechnicalVideo([noisy,cleanFar,cleanNear],shot)?.id).toBe('clean-near');
+  });
+
+  it('routes all extra characters and props into generic reference arrays without silently dropping them',()=>{
+    const shot=makeShot();shot.characterAssetIds=['c1','c2','c3','c4','c5','c6'];shot.propAssetIds=['p1','p2','p3'];shot.locationAssetId='loc';shot.referenceAssetIds=['r1','r2'];
+    const profile={id:'wf',runtime:'comfyui',purpose:'video',name:'WF',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/wf.json',workflowFormat:'api',bindings:[{key:'characterImage1',selector:{nodeId:'1'},input:'a'},{key:'propImage1',selector:{nodeId:'2'},input:'b'},{key:'referenceImages',selector:{nodeId:'3'},input:'refs'}],enabled:true} as WorkflowProfile;
+    const plan=planShotReferences(shot,profile);
+    expect(plan.characterIds[0]).toBe('c1');
+    expect(plan.propIds[0]).toBe('p1');
+    expect(plan.genericCapacity).toBe(16);
+    expect(plan.genericIds).toEqual(expect.arrayContaining(['c2','c3','c4','c5','c6','loc','p2','p3','r1','r2']));
+    expect(plan.unservedIds).toEqual([]);
+  });
+
+  it('supports includeAudio as a real workflow binding',()=>{
+    const workflow:ApiWorkflow={'1':{class_type:'VideoNode',inputs:{generate_audio:false}}};
+    const bindings=suggestBindings(workflow);
+    expect(bindings.some(binding=>binding.key==='includeAudio')).toBe(true);
+    const values:any={prompt:'x',negativePrompt:'',width:768,height:432,frames:97,fps:24,seed:1,includeAudio:true,filenamePrefix:'x'};
+    expect((applyBindings(workflow,bindings,values)['1'].inputs as any).generate_audio).toBe(true);
+  });
+
+  it('uses deterministic validated-model fallback independent of Set insertion order',()=>{
+    const shot=makeShot();shot.generation.modelFamily='framepack';
+    const a=chooseModelForShot(shot,{validatedModels:new Set(['custom','wan-2.2-5b'])});
+    const b=chooseModelForShot(shot,{validatedModels:new Set(['wan-2.2-5b','custom'])});
+    expect(a).toBe('wan-2.2-5b');expect(b).toBe(a);
+  });
+
+  it('omits planned start conditioning whenever an authoritative actual start exists',()=>{
+    const project=makeProject(),shot=project.shots[0];
+    shot.actualStartStateId='actual';shot.plannedStartStateId='planned';
+    project.shotStates=[
+      {id:'actual',shotId:shot.id,role:'actual-start',source:'human',status:'current',characters:[],props:[],environment:{notes:'ACTUAL_MARKER'},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+      {id:'planned',shotId:shot.id,role:'planned-start',source:'planned',status:'current',characters:[],props:[],environment:{notes:'PLANNED_MARKER'},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'}
+    ];
+    const prompt=buildRenderPrompt(project,shot);
+    expect(prompt).toContain('ACTUAL_MARKER');
+    expect(prompt).not.toContain('PLANNED_MARKER');
+    expect(prompt).toMatch(/authoritative actual start state overrides/i);
+  });
+
+  it('keeps generated keyframe review open until that exact candidate is attached',()=>{
+    const project=makeProject(),shot=project.shots[0];
+    project.assets.push({id:'candidate',kind:'keyframe',name:'Candidate',sourcePath:'candidate.png',projectPath:'assets/keyframe/candidate.png',tags:['candidate'],notes:'',createdAt:'2026-01-01T00:00:00.000Z'});
+    const task={id:'task',type:'verify-keyframe' as const,status:'open' as const,shotId:shot.id,title:'Review generated start keyframe',reason:'review',relatedAssetIds:['candidate'],relatedRenderOutputIds:[],createdAt:'2026-01-01T00:00:00.000Z'};
+    expect(automationTaskDisposition(project,shot,task)).toBeUndefined();
+    shot.startFrameAssetId='candidate';
+    expect(automationTaskDisposition(project,shot,task)).toBe('resolved');
+  });
+});
