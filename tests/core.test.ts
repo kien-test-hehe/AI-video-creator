@@ -30,7 +30,7 @@ import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, record
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe, keyframePrompt } from '../src/main/services/keyframe-service';
-import { invalidateChangedRoutes, pickRecommended, preferredVideoMode, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
+import { catalogWorkflowCapabilities, invalidateChangedRoutes, pickRecommended, preferredVideoMode, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
@@ -54,6 +54,7 @@ import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../s
 import { qcContactFrameFractions, videoFrameExtractionArgs } from '../src/main/services/media-analysis';
 import { analyzeImagesWithLocalVision, parseLocalVisionJsonObject } from '../src/main/services/local-vision-service';
 import { directorModelListContains, videoRouteQualification } from '../src/main/services/workstation-readiness';
+import { effectiveWorkflowCapabilities, workflowCapabilityErrors } from '../src/shared/workflow-capabilities';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1258,7 +1259,7 @@ describe('render admission serialization',()=>{
 });
 describe('main-process workflow routing authority',()=>{
   const shot:Shot={id:'route-shot',sceneId:'scene',index:1,title:'Route',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}};
-  const profile=(id:string,status:'valid'|'invalid'|'unvalidated'):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:`/tmp/${id}.json`,workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:status}});
+  const profile=(id:string,status:'valid'|'invalid'|'unvalidated'):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:`/tmp/${id}.json`,workflowFormat:'wangp-settings',bindings:[{key:'startImage',jsonPath:'image'}],enabled:true,validation:{structuralStatus:status}});
   it('refuses explicit and automatic production routes unless validation is valid',()=>{
     const invalid=profile('invalid','invalid'),unvalidated=profile('unvalidated','unvalidated'),valid=profile('valid','valid');
     const explicit=structuredClone(shot);explicit.generation.workflowProfileId='unvalidated';
@@ -3178,5 +3179,84 @@ describe('final QC/runtime hardening',()=>{
     const after=videoRouteQualification(project);
     expect(after.level).toBe('ready');
     expect(after.detail).toMatch(/not creative\/semantic production quality/i);
+  });
+});
+
+
+describe('workflow capability contract',()=>{
+  const shotBase=():Shot=>({
+    id:'cap-shot',sceneId:'scene',index:1,title:'Capabilities',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:['c1','c2','c3'],locationAssetId:'loc',propAssetIds:['p1','p2'],referenceAssetIds:['r1','r2'],
+    status:'ready',
+    generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+  });
+  const profile=(id:string,bindings:WorkflowProfile['bindings'],capabilities?:WorkflowProfile['capabilities']):WorkflowProfile=>({
+    id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:`workflows/${id}.json`,workflowFormat:'wangp-settings',
+    bindings,capabilities,enabled:true,validation:{structuralStatus:'valid'}
+  });
+
+  it('treats referenceImages arrays conservatively unless the profile declares a larger capacity',()=>{
+    const base=profile('base',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'image_refs'}]);
+    expect(effectiveWorkflowCapabilities(base).maxGenericReferences).toBe(4);
+    const expanded={...base,capabilities:{maxGenericReferences:12}};
+    expect(effectiveWorkflowCapabilities(expanded).maxGenericReferences).toBe(12);
+  });
+
+  it('makes the reference planner honor declared capacity instead of assuming sixteen',()=>{
+    const shot=shotBase();
+    const conservative=profile('conservative',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'image_refs'}]);
+    const small=planShotReferences(shot,conservative);
+    expect(small.genericCapacity).toBe(4);
+    expect(small.unservedIds.length).toBeGreaterThan(0);
+    const expanded=profile('expanded',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'image_refs'}],{maxGenericReferences:16});
+    expect(planShotReferences(shot,expanded).unservedIds).toEqual([]);
+  });
+
+  it('rejects profiles that cannot satisfy required media inputs or reference capacity',()=>{
+    const shot=shotBase();shot.audioAssetId='audio';shot.generation.includeAudio=true;
+    const weak=profile('weak',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}],{maxGenericReferences:2});
+    const issues=workflowCapabilityErrors(weak,shot).join(' ');
+    expect(issues).toMatch(/input-audio/i);
+    expect(issues).toMatch(/generated audio/i);
+    expect(issues).toMatch(/reference capacity/i);
+    const capable=profile('capable',[
+      {key:'startImage',jsonPath:'image'},{key:'inputAudio',jsonPath:'audio'},{key:'includeAudio',jsonPath:'generate_audio'},{key:'referenceImages',jsonPath:'refs'}
+    ],{maxGenericReferences:16});
+    expect(workflowCapabilityErrors(capable,shot)).toEqual([]);
+  });
+
+  it('auto-routes around a structurally valid but capability-incompatible profile',()=>{
+    const shot=shotBase();
+    const incompatible=profile('a-incompatible',[]);
+    const compatible=profile('b-compatible',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}],{maxGenericReferences:16});
+    const project={settings:{workflowProfiles:[incompatible,compatible]}} as unknown as FilmProject;
+    expect(routeWorkflow(project,shot).id).toBe('b-compatible');
+  });
+
+  it('treats capability edits as execution changes that invalidate trusted validation/provenance',()=>{
+    const base=profile('profile',[{key:'startImage',jsonPath:'image'}],{maxGenericReferences:4});
+    base.validation={structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime'};
+    const edited=structuredClone(base);edited.capabilities={maxGenericReferences:8};
+    expect(workflowExecutionKey(edited)).not.toBe(workflowExecutionKey(base));
+    expect(preserveTrustedProfileValidation(base,edited).validation?.structuralStatus).toBe('unvalidated');
+  });
+
+  it('derives managed WanGP media capabilities from catalog metadata and bindings',()=>{
+    const entry={modelType:'x',name:'x',mainOutput:['video','audio'],outputs:['video','audio'],inputs:['image','audio'],capabilities:{image_audio_to_video:true}} as any;
+    const caps=catalogWorkflowCapabilities(entry,[{key:'startImage',jsonPath:'image'},{key:'inputAudio',jsonPath:'audio'}]);
+    expect(caps).toMatchObject({supportsStartImage:true,supportsInputAudio:true,supportsGeneratedAudio:true});
+  });
+
+  it('round-trips bounded workflow capability metadata through project loading',()=>{
+    const raw:any={
+      schemaVersion:3,id:'p',name:'p',rootPath:'/tmp/p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'p',logline:'',script:'',notes:''},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[{
+        id:'wf',runtime:'wangp',purpose:'video',name:'wf',modelFamily:'custom',mode:'t2v',workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:false,
+        capabilities:{maxGenericReferences:12,supportsInputAudio:true,supportsGeneratedAudio:false}
+      }]}
+    };
+    const loaded=loadPortableProject(raw,'/tmp/p').project.settings.workflowProfiles.find(item=>item.id==='wf');
+    expect(loaded?.capabilities).toMatchObject({maxGenericReferences:12,supportsInputAudio:true,supportsGeneratedAudio:false});
   });
 });
