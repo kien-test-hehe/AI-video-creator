@@ -1,6 +1,6 @@
 import { useState, type DragEvent } from 'react';
 import { MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../../shared/defaults';
-import type { ModelFamily, Shot } from '../../../shared/types';
+import type { DirectorShotDraft, ModelFamily, Shot } from '../../../shared/types';
 import { filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../../../shared/director-signature';
 import { useAppStore } from '../store';
 import { autoAssignAssetToShot } from '../asset-assignment';
@@ -10,6 +10,7 @@ import { rebuildDefaultSequentialDependencies } from '../../../shared/production
 export function Storyboard(){
   const{project,updateProject,selectShot,setView,setNotice,setError,setBusy}=useAppStore();
   const[planningSceneId,setPlanningSceneId]=useState<string>();
+  const[directorProposals,setDirectorProposals]=useState<Record<string,{signature:string;drafts:DirectorShotDraft[]}>>({});
   if(!project)return <Page title="Storyboard"><Empty>Open a project first.</Empty></Page>;
 
   const addShot=(sceneId:string)=>{
