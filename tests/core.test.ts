@@ -3403,6 +3403,7 @@ describe('final audit integration hardening',()=>{
 });
 
 
+// Final consistency regressions intentionally exercise shared routing contracts end-to-end.
 describe('final Director/profile consistency',()=>{
   const baseShot=():Shot=>({
     id:'director-shot',sceneId:'scene',index:1,title:'Director shot',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',
