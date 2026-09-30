@@ -1,6 +1,6 @@
 import type { Asset, DirectorShotDraft, FilmProject, ModelFamily, Scene, Shot, WorkflowProfile } from './types';
 import { MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from './defaults';
-import { workflowCapabilityErrors } from './workflow-capabilities';
+import { effectiveWorkflowCapabilities, workflowCapabilityErrors } from './workflow-capabilities';
 import { shotRenderInputKey } from './shot-signature';
 
 export function sceneDirectorInputKey(project:FilmProject,scene:Scene):string{
@@ -79,17 +79,26 @@ export function filterDirectorAssetIds(project:FilmProject,kind:'character'|'loc
   return [...new Set(ids)].filter(id=>{const asset=project.assets.find(item=>item.id===id);return Boolean(asset&&allowed.has(asset.kind));});
 }
 
-export function directorDraftIncludeAudio(draft:DirectorShotDraft,model:ModelFamily):boolean{
-  return Boolean(draft.dialogue?.trim())||Boolean(MODEL_DEFAULTS[model].includeAudio);
+export function directorProfileCanServeDraft(profile:WorkflowProfile):boolean{
+  return profile.mode==='t2v'||profile.mode==='i2v'||profile.mode==='flf2v';
+}
+
+export function directorDraftRequiresAudio(draft:DirectorShotDraft):boolean{
+  return Boolean(draft.dialogue?.trim());
+}
+
+export function directorDraftIncludeAudio(draft:DirectorShotDraft,model:ModelFamily,profile?:WorkflowProfile):boolean{
+  if(directorDraftRequiresAudio(draft))return true;
+  if(!MODEL_DEFAULTS[model].includeAudio)return false;
+  return profile?effectiveWorkflowCapabilities(profile).supportsGeneratedAudio:false;
 }
 
 export function validatedVideoRouteForDirectorDraft(project:FilmProject,model:ModelFamily|undefined,draft:DirectorShotDraft){
   if(!model)return undefined;
-  const includeAudio=directorDraftIncludeAudio(draft,model);
   return project.settings.workflowProfiles
-    .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&profile.modelFamily===model)
+    .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&profile.modelFamily===model&&directorProfileCanServeDraft(profile))
     .filter(profile=>workflowCapabilityErrors(profile,{
-      generation:{modelFamily:model,mode:profile.mode,includeAudio},
+      generation:{modelFamily:model,mode:profile.mode,includeAudio:directorDraftIncludeAudio(draft,model,profile)},
       characterAssetIds:draft.characterAssetIds??[],
       locationAssetId:draft.locationAssetId,
       propAssetIds:draft.propAssetIds??[],
@@ -121,7 +130,7 @@ export function resolveDirectorDraftRoute(project:FilmProject,draft:DirectorShot
   for(const model of otherModels)push(model);
   for(const model of models){
     const route=validatedVideoRouteForDirectorDraft(project,model,draft);
-    if(route)return{draft,route,includeAudio:directorDraftIncludeAudio(draft,model)};
+    if(route)return{draft,route,includeAudio:directorDraftIncludeAudio(draft,model,route)};
   }
   return undefined;
 }
