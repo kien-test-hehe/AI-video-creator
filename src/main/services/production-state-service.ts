@@ -130,6 +130,7 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
   return projects.mutate(project=>{
     assertProject(project,request.projectRoot);
     const task=project.humanTasks.find(item=>item.id===request.taskId);if(!task)throw new Error('Human task not found.');
+    if(task.status!=='open')throw new Error(`Human task is already ${task.status} and cannot be resolved again.`);
     if(!['resolved','dismissed'].includes(request.status))throw new Error('Human task can only be resolved or dismissed.');
     let linkedQc:ShotQcResult|undefined;
     for(const result of project.qcResults){
@@ -178,7 +179,9 @@ function createHumanTaskRecord(project:FilmProject,request:CreateHumanTaskReques
   if(request.shotId&&!project.shots.some(item=>item.id===request.shotId))throw new Error('Human task references an unknown shot.');
   const relatedAssetIds=dedupeBounded(request.relatedAssetIds??[],64,'human task assets').map(id=>requireAsset(project,id,undefined,'human task asset').id);
   const relatedRenderOutputIds=dedupeBounded(request.relatedRenderOutputIds??[],64,'human task render outputs').map(id=>{
-    const output=project.renderOutputs.find(item=>item.id===id);if(!output)throw new Error(`Human task references unknown render output: ${id}`);return output.id;
+    const output=project.renderOutputs.find(item=>item.id===id);if(!output)throw new Error(`Human task references unknown render output: ${id}`);
+    if(request.shotId&&output.shotId!==request.shotId)throw new Error(`Human task for shot ${request.shotId} cannot reference render output ${id} from shot ${output.shotId}.`);
+    return output.id;
   });
   const task:HumanTask={
     id:randomUUID(),type:request.type,status:'open',shotId:request.shotId,
