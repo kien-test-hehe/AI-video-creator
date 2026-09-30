@@ -189,14 +189,15 @@ export class ProjectService {
         const retainedActualId=retainedState(currentShot.actualStartStateId)?.id;
         if(manualStartFrameChanged){
           const prior=retainedActualId?incoming.shotStates.find(state=>state.id===retainedActualId):undefined;
+          const trustedPrior=prior?.status==='current'?prior:undefined;
           if(prior)invalidateStateCascade(incoming,[prior.id],'Start frame was manually changed; prior propagated start state is stale.');
           if(shot.startFrameAssetId){
             const now=new Date().toISOString(),humanState:FilmProject['shotStates'][number]={
               id:randomUUID(),shotId:shot.id,role:'actual-start' as const,source:'human' as const,status:'current' as const,
               frameAssetId:shot.startFrameAssetId,
-              characters:structuredClone(prior?.characters??[]),props:structuredClone(prior?.props??[]),
-              environment:structuredClone(prior?.environment??{}),camera:structuredClone(prior?.camera??{}),
-              actionPhase:prior?.actionPhase??'',dialogueState:prior?.dialogueState??'',confidence:prior?.confidence,createdAt:now
+              characters:structuredClone(trustedPrior?.characters??[]),props:structuredClone(trustedPrior?.props??[]),
+              environment:structuredClone(trustedPrior?.environment??{}),camera:structuredClone(trustedPrior?.camera??{}),
+              actionPhase:trustedPrior?.actionPhase??'',dialogueState:trustedPrior?.dialogueState??'',confidence:trustedPrior?.confidence,createdAt:now
             };
             humanState.fingerprint=shotStateFingerprint(humanState);
             incoming.shotStates.push(humanState);shot.actualStartStateId=humanState.id;
@@ -349,7 +350,9 @@ export class ProjectService {
       project.timeline=project.timeline.filter(clip=>clip.renderOutputId!==outputId);
       project.qcResults=project.qcResults.filter(result=>result.renderOutputId!==outputId);
       for(const task of project.humanTasks){
-        if(task.status!=='open'||!task.relatedRenderOutputIds.includes(outputId))continue;
+        if(!task.relatedRenderOutputIds.includes(outputId))continue;
+        task.relatedRenderOutputIds=task.relatedRenderOutputIds.filter(id=>id!==outputId);
+        if(task.status!=='open')continue;
         task.status='dismissed';task.resolvedAt=new Date().toISOString();task.resolution=`Automatically dismissed because render output ${outputId} was deleted.`;
       }
       const outputStateIds=project.shotStates.filter(state=>state.sourceRenderOutputId===outputId).map(state=>state.id);
