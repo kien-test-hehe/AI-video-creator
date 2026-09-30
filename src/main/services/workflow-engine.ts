@@ -32,6 +32,7 @@ export interface WorkflowValues {
   referenceImage4?: string;
   inputAudio?: string;
   inputVideo?: string;
+  includeAudio?: boolean;
   filenamePrefix: string;
 }
 
@@ -128,6 +129,7 @@ const INPUT_NAME_HINTS: Record<WorkflowBindingKey, string[]> = {
   referenceImage4: ['reference_image_4', 'reference4', 'ref_image_4'],
   inputAudio: ['audio', 'input_audio', 'audio_guide'],
   inputVideo: ['video', 'input_video', 'video_guide'],
+  includeAudio: ['include_audio','generate_audio','enable_audio','audio_enabled'],
   filenamePrefix: ['filename_prefix', 'filename', 'prefix']
 };
 
@@ -145,6 +147,7 @@ export function suggestBindings(workflow: ApiWorkflow): WorkflowBinding[] {
         if (!hints.some(h => lower === h || lower.includes(h))) continue;
         if (key === 'prompt' && (/negative/.test(titleLower) || /negative/.test(lower))) continue;
         if (key === 'negativePrompt' && !/negative/.test(titleLower) && !/negative/.test(lower) && lower === 'text') continue;
+        if (key === 'inputAudio' && /(?:include|generate|enable|enabled).*audio|audio.*(?:enable|enabled)/.test(lower)) continue;
         if(suggestions.length>=WORKFLOW_BINDING_LIMIT)throw new Error(`Suggested workflow bindings exceed the ${WORKFLOW_BINDING_LIMIT}-binding project safety limit. Simplify the workflow or configure bindings manually.`);
         if(id.length>WORKFLOW_BINDING_NODE_ID_LIMIT)throw new Error(`ComfyUI node id for suggested ${key} binding exceeds the ${WORKFLOW_BINDING_NODE_ID_LIMIT}-character project safety limit. Export a workflow with stable shorter node ids or configure a compatible workflow.`);
         if(input.length>WORKFLOW_BINDING_INPUT_LIMIT)throw new Error(`ComfyUI input name for suggested ${key} binding exceeds the ${WORKFLOW_BINDING_INPUT_LIMIT}-character project safety limit.`);

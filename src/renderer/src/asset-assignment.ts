@@ -5,7 +5,7 @@ export interface AutoAssetAssignment { ok:boolean; role:string; message:string; 
 export function autoAssignAssetToShot(shot:Shot,asset:Asset):AutoAssetAssignment{
   if(asset.kind==='character'){
     if(shot.characterAssetIds.includes(asset.id))return{ok:true,role:'character',message:'Character is already assigned.'};
-    if(shot.characterAssetIds.length>=4)return{ok:false,role:'character',message:'This shot already has the maximum of 4 character references.'};
+    if(shot.characterAssetIds.length>=16)return{ok:false,role:'character',message:'This shot already has the 16-character safety limit.'};
     shot.characterAssetIds.push(asset.id);markReady(shot);return{ok:true,role:'character',message:'Assigned as a character continuity reference.'};
   }
   if(asset.kind==='location'){
@@ -14,12 +14,12 @@ export function autoAssignAssetToShot(shot:Shot,asset:Asset):AutoAssetAssignment
   if(asset.kind==='reference'){
     const refs=shot.referenceAssetIds??(shot.referenceAssetIds=[]);
     if(refs.includes(asset.id))return{ok:true,role:'visual reference',message:'Visual reference is already assigned.'};
-    if(refs.length>=4)return{ok:false,role:'visual reference',message:'This shot already has the maximum of 4 generic visual references. Use Start/End for temporal keyframes or remove an existing reference.'};
+    if(refs.length>=16)return{ok:false,role:'visual reference',message:'This shot already has the 16-reference safety limit. Use Start/End for temporal keyframes or remove an existing reference.'};
     refs.push(asset.id);markReady(shot);return{ok:true,role:'visual reference',message:'Assigned as a generic visual reference.'};
   }
   if(['prop','wardrobe'].includes(asset.kind)){
     if(shot.propAssetIds.includes(asset.id))return{ok:true,role:'prop / wardrobe',message:'Prop / wardrobe reference is already assigned.'};
-    if(shot.propAssetIds.length>=2)return{ok:false,role:'prop / wardrobe',message:'This shot already has the maximum of 2 prop / wardrobe references.'};
+    if(shot.propAssetIds.length>=16)return{ok:false,role:'prop / wardrobe',message:'This shot already has the 16 prop / wardrobe safety limit.'};
     shot.propAssetIds.push(asset.id);markReady(shot);return{ok:true,role:'prop / wardrobe',message:'Assigned as a prop / wardrobe continuity reference.'};
   }
   if(asset.kind==='image'||asset.kind==='keyframe'){

@@ -12,7 +12,7 @@ const IMPORT_PURPOSES:WorkflowPurpose[]=['video','image'];
 const VIDEO_MODES:GenerationMode[]=['t2v','i2v','flf2v','ia2v','v2v'];
 const IMAGE_MODES:GenerationMode[]=['t2i','i2i'];
 const modesForPurpose=(purpose:WorkflowPurpose):GenerationMode[]=>purpose==='video'?VIDEO_MODES:purpose==='image'?IMAGE_MODES:MODES;
-const BINDING_KEYS:WorkflowBindingKey[]=['prompt','negativePrompt','width','height','resolution','frames','fps','steps','cfg','seed','startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImages','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo','filenamePrefix'];
+const BINDING_KEYS:WorkflowBindingKey[]=['prompt','negativePrompt','width','height','resolution','frames','fps','steps','cfg','seed','startImage','endImage','locationImage','characterImage1','characterImage2','characterImage3','characterImage4','propImage1','propImage2','referenceImages','referenceImage1','referenceImage2','referenceImage3','referenceImage4','inputAudio','inputVideo','includeAudio','filenamePrefix'];
 
 export function Settings(){
   const{project,machine,updateProject,updateMachine,setProject,setError,setNotice,setBusy}=useAppStore();

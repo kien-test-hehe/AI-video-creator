@@ -145,6 +145,12 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
       const verdictIsAfterReview=Boolean(verdict&&verdict.id!==linkedQc.id&&verdict.createdAt>=linkedQc.createdAt);
       if(!verdictIsAfterReview||!verdict||!['pass','fail'].includes(verdict.status))throw new Error('QC review tasks require a current PASS or FAIL verdict before they can be closed.');
     }
+    if(request.status==='resolved'&&task.type==='verify-keyframe'&&task.shotId&&/^Review generated (start|end) keyframe$/.test(task.title)){
+      const shot=project.shots.find(item=>item.id===task.shotId);if(!shot)throw new Error('Generated keyframe review references a missing shot.');
+      const expectedRole=task.title.includes(' start ')?'start':'end';
+      const selectedId=expectedRole==='start'?shot.startFrameAssetId:shot.endFrameAssetId;
+      if(!selectedId||!task.relatedAssetIds.includes(selectedId))throw new Error(`Generated ${expectedRole} keyframe review can only be resolved after that exact candidate is attached to the ${expectedRole} frame slot. Dismiss the task if you intentionally chose another frame.`);
+    }
     task.status=request.status;
     task.resolution=requireString(request.resolution,20_000,'human task resolution');
     task.resolvedAt=new Date().toISOString();

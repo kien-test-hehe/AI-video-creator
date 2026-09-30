@@ -20,27 +20,27 @@ export function planShotReferences(shot:Shot,profile:WorkflowProfile):ShotRefere
   const keys=new Set(profile.bindings.map(binding=>binding.key));
   const genericCandidates:string[]=[];
   const characterIds:Array<string|undefined>=[];
+  const propIds:Array<string|undefined>=[];
 
-  shot.characterAssetIds.slice(0,4).forEach((id,index)=>{
-    if(keys.has(CHARACTER_KEYS[index]))characterIds[index]=id;
+  for(const[index,id]of shot.characterAssetIds.entries()){
+    if(index<CHARACTER_KEYS.length&&keys.has(CHARACTER_KEYS[index]))characterIds[index]=id;
     else genericCandidates.push(id);
-  });
+  }
 
   const locationId=shot.locationAssetId&&keys.has('locationImage')?shot.locationAssetId:undefined;
   if(shot.locationAssetId&&!locationId)genericCandidates.push(shot.locationAssetId);
 
-  for(const id of shot.referenceAssetIds??[])genericCandidates.push(id);
-
-  const propIds:Array<string|undefined>=[];
-  shot.propAssetIds.slice(0,2).forEach((id,index)=>{
-    if(keys.has(PROP_KEYS[index]))propIds[index]=id;
+  for(const[index,id]of shot.propAssetIds.entries()){
+    if(index<PROP_KEYS.length&&keys.has(PROP_KEYS[index]))propIds[index]=id;
     else genericCandidates.push(id);
-  });
+  }
+
+  for(const id of shot.referenceAssetIds??[])genericCandidates.push(id);
 
   const uniqueCandidates=[...new Set(genericCandidates)];
   const genericArray=keys.has('referenceImages');
   const genericBindingKeys=genericArray?[]:GENERIC_KEYS.filter(key=>keys.has(key));
-  const genericCapacity=genericArray?4:genericBindingKeys.length;
+  const genericCapacity=genericArray?16:genericBindingKeys.length;
   const genericIds=uniqueCandidates.slice(0,genericCapacity);
   const unservedIds=uniqueCandidates.slice(genericCapacity);
 

@@ -20,7 +20,8 @@ export function chooseModelForShot(
     const selected=candidates.find(model=>validated.has(model));
     if(selected)return selected;
     if(validated.has(shot.generation.modelFamily))return shot.generation.modelFamily;
-    return [...validated][0]??shot.generation.modelFamily;
+    const deterministicFallback:ModelFamily[]=['ltx-2.5-fast','wan-2.2-5b','hunyuan-video-1.5','ltx-2.3','framepack','custom'];
+    return deterministicFallback.find(model=>validated.has(model))??shot.generation.modelFamily;
   }
   return candidates[0];
 }
