@@ -32,6 +32,7 @@ export interface WorkflowValues {
   referenceImage4?: string;
   inputAudio?: string;
   inputVideo?: string;
+  includeAudio?: boolean;
   filenamePrefix: string;
 }
 
@@ -128,6 +129,7 @@ const INPUT_NAME_HINTS: Record<WorkflowBindingKey, string[]> = {
   referenceImage4: ['reference_image_4', 'reference4', 'ref_image_4'],
   inputAudio: ['audio', 'input_audio', 'audio_guide'],
   inputVideo: ['video', 'input_video', 'video_guide'],
+  includeAudio: ['include_audio','generate_audio','enable_audio','audio_enabled'],
   filenamePrefix: ['filename_prefix', 'filename', 'prefix']
 };
 
