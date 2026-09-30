@@ -505,6 +505,16 @@ export function automationTaskDisposition(
   if(task.status!=='open'||task.shotId!==shot.id)return undefined;
   if(task.title==='Start keyframe required'||task.title==='Automatic start keyframe failed')return shot.startFrameAssetId?'resolved':undefined;
   if(task.title==='End keyframe required'||task.title==='Automatic end keyframe failed')return shot.endFrameAssetId?'resolved':undefined;
+  if(task.title==='Review generated start keyframe'){
+    if(task.relatedAssetIds.some(id=>shot.startFrameAssetId===id))return'resolved';
+    if(!task.relatedAssetIds.some(id=>project.assets.some(asset=>asset.id===id)))return'dismissed';
+    return undefined;
+  }
+  if(task.title==='Review generated end keyframe'){
+    if(task.relatedAssetIds.some(id=>shot.endFrameAssetId===id))return'resolved';
+    if(!task.relatedAssetIds.some(id=>project.assets.some(asset=>asset.id===id)))return'dismissed';
+    return undefined;
+  }
   if(task.title==='Reference video required')return shot.referenceVideoAssetId?'resolved':undefined;
   const currentActual=shot.actualStartStateId?project.shotStates.find(state=>state.id===shot.actualStartStateId):undefined;
   if(task.title==='Resolve multi-source continuity'){
