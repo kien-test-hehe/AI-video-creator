@@ -9,10 +9,15 @@ export function sceneDirectorInputKey(project:FilmProject,scene:Scene):string{
   const availableModels=[...new Set(project.settings.workflowProfiles
     .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid')
     .map(profile=>profile.modelFamily))].sort();
+  const existingShots=project.shots
+    .filter(shot=>shot.sceneId===scene.id)
+    .sort((a,b)=>a.index-b.index||a.id.localeCompare(b.id))
+    .map(shot=>({id:shot.id,index:shot.index,input:shotRenderInputKey(shot)}));
   return JSON.stringify({
     projectId:project.id,
     story:{title:project.story.title,logline:project.story.logline,notes:project.story.notes},
     scene:{id:scene.id,index:scene.index,heading:scene.heading,body:scene.body,location:scene.location,timeOfDay:scene.timeOfDay},
+    existingShots,
     assets:relevant,
     availableModels
   });
