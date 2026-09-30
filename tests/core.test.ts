@@ -7,7 +7,7 @@ import { chooseModelForShot } from '../src/shared/routing';
 import { MODEL_DEFAULTS } from '../src/shared/defaults';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
-import { boundedDirectorAssetIds, directorText } from '../src/main/services/director-service';
+import { boundedDirectorAssetIds, directorText, parseDirectorJsonObject, planSceneWithLocalDirector } from '../src/main/services/director-service';
 import { parseAudioProblemMetrics, parseVisualProblemDurations, parseVolumeDetectPeak, technicalAudioFindings, technicalQcStructuralIssues, technicalQcVisualFindings } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
@@ -30,7 +30,7 @@ import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, record
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe, keyframePrompt } from '../src/main/services/keyframe-service';
-import { invalidateChangedRoutes, pickRecommended, preferredGeneralVideoMode, preferredVideoMode, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
+import { catalogWorkflowCapabilities, invalidateChangedRoutes, pickRecommended, preferredGeneralVideoMode, preferredVideoMode, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
@@ -38,7 +38,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited, stringifyJsonLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
-import { buildRenderPrompt, selectPreferredTechnicalVideo } from '../src/main/services/render-queue';
+import { buildRenderPrompt, renderCanSatisfySkipIfRendered, selectPreferredTechnicalVideo } from '../src/main/services/render-queue';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
 import { loadPortableProject } from '../src/main/services/project-schema';
@@ -54,6 +54,7 @@ import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../s
 import { qcContactFrameFractions, videoFrameExtractionArgs } from '../src/main/services/media-analysis';
 import { analyzeImagesWithLocalVision, LocalVisionUnavailableError, parseLocalVisionJsonObject } from '../src/main/services/local-vision-service';
 import { directorModelListContains, videoRouteQualification } from '../src/main/services/workstation-readiness';
+import { effectiveWorkflowCapabilities, workflowCapabilityErrors } from '../src/shared/workflow-capabilities';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -2980,11 +2981,11 @@ describe('final missing hardening regressions',()=>{
 
   it('routes all extra characters and props into generic reference arrays without silently dropping them',()=>{
     const shot=makeShot();shot.characterAssetIds=['c1','c2','c3','c4','c5','c6'];shot.propAssetIds=['p1','p2','p3'];shot.locationAssetId='loc';shot.referenceAssetIds=['r1','r2'];
-    const profile={id:'wf',runtime:'comfyui',purpose:'video',name:'WF',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/wf.json',workflowFormat:'api',bindings:[{key:'characterImage1',selector:{nodeId:'1'},input:'a'},{key:'propImage1',selector:{nodeId:'2'},input:'b'},{key:'referenceImages',selector:{nodeId:'3'},input:'refs'}],enabled:true} as WorkflowProfile;
+    const profile={id:'wf',runtime:'comfyui',purpose:'video',name:'WF',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/wf.json',workflowFormat:'api',bindings:[{key:'characterImage1',selector:{nodeId:'1'},input:'a'},{key:'propImage1',selector:{nodeId:'2'},input:'b'},{key:'referenceImages',selector:{nodeId:'3'},input:'refs'}],capabilities:{maxGenericReferences:16},enabled:true} as WorkflowProfile;
     const plan=planShotReferences(shot,profile);
     expect(plan.characterIds[0]).toBe('c1');
     expect(plan.propIds[0]).toBe('p1');
-    expect(plan.genericCapacity).toBe(plan.genericDemand);
+    expect(plan.genericCapacity).toBe(16);
     expect(plan.genericIds).toEqual(expect.arrayContaining(['c2','c3','c4','c5','c6','loc','p2','p3','r1','r2']));
     expect(plan.unservedIds).toEqual([]);
   });
@@ -3230,7 +3231,7 @@ describe('final reference/routing correctness hardening',()=>{
       propAssetIds:Array.from({length:16},(_,i)=>'p'+i),referenceAssetIds:Array.from({length:16},(_,i)=>'r'+i),
       status:'ready',generation:{modelFamily:'custom',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
     };
-    const profile={id:'refs',runtime:'comfyui',purpose:'video',name:'Refs',modelFamily:'custom',mode:'i2v',workflowPath:'x',workflowFormat:'api',enabled:true,bindings:[{key:'referenceImages',selector:{nodeId:'1'},input:'refs'}]} as WorkflowProfile;
+    const profile={id:'refs',runtime:'comfyui',purpose:'video',name:'Refs',modelFamily:'custom',mode:'i2v',workflowPath:'x',workflowFormat:'api',enabled:true,bindings:[{key:'referenceImages',selector:{nodeId:'1'},input:'refs'}],capabilities:{maxGenericReferences:49}} as WorkflowProfile;
     const plan=planShotReferences(shot,profile);
     expect(plan.genericDemand).toBe(49);
     expect(plan.genericCapacity).toBe(49);
@@ -3250,5 +3251,139 @@ describe('final reference/routing correctness hardening',()=>{
     const general=picks.find(item=>item.role==='general');
     expect(general?.entry.modelType).toBe('c-text');
     expect(general?.mode).toBe('t2v');
+  });
+});
+
+
+describe('final audit integration hardening',()=>{
+  const shotBase=():Shot=>({
+    id:'cap-shot',sceneId:'scene',index:1,title:'Capabilities',prompt:'base prompt',camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:['c1','c2','c3'],locationAssetId:'loc',propAssetIds:['p1','p2'],referenceAssetIds:['r1','r2'],
+    status:'ready',
+    generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+  });
+  const profile=(id:string,bindings:WorkflowProfile['bindings'],capabilities?:WorkflowProfile['capabilities']):WorkflowProfile=>({
+    id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:`workflows/${id}.json`,workflowFormat:'wangp-settings',
+    bindings,capabilities,enabled:true,validation:{structuralStatus:'valid'}
+  });
+
+  it('treats undeclared reference arrays conservatively and honors an explicit bounded capacity',()=>{
+    const base=profile('base',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'image_refs'}]);
+    expect(effectiveWorkflowCapabilities(base).maxGenericReferences).toBe(4);
+    expect(planShotReferences(shotBase(),base).unservedIds.length).toBeGreaterThan(0);
+    const expanded=profile('expanded',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'image_refs'}],{maxGenericReferences:16});
+    expect(effectiveWorkflowCapabilities(expanded).maxGenericReferences).toBe(16);
+    expect(planShotReferences(shotBase(),expanded).unservedIds).toEqual([]);
+  });
+
+  it('rejects profiles that cannot satisfy media, audio or reference requirements',()=>{
+    const shot=shotBase();shot.audioAssetId='audio';shot.generation.includeAudio=true;
+    const weak=profile('weak',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}],{maxGenericReferences:2});
+    const errors=workflowCapabilityErrors(weak,shot).join(' ');
+    expect(errors).toMatch(/input-audio/i);
+    expect(errors).toMatch(/generated audio/i);
+    expect(errors).toMatch(/reference capacity/i);
+    const capable=profile('capable',[
+      {key:'startImage',jsonPath:'image'},{key:'inputAudio',jsonPath:'audio'},{key:'includeAudio',jsonPath:'generate_audio'},{key:'referenceImages',jsonPath:'refs'}
+    ],{maxGenericReferences:16});
+    expect(workflowCapabilityErrors(capable,shot)).toEqual([]);
+  });
+
+  it('auto-routes around a structurally valid but incompatible workflow',()=>{
+    const shot=shotBase();
+    const incompatible=profile('newer-incompatible',[]);
+    incompatible.validation!.lastSuccessfulRenderAt='2026-09-30T00:00:00.000Z';
+    const compatible=profile('older-compatible',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}],{maxGenericReferences:16});
+    compatible.validation!.lastSuccessfulRenderAt='2026-09-01T00:00:00.000Z';
+    const project={settings:{workflowProfiles:[incompatible,compatible]}} as unknown as FilmProject;
+    expect(routeWorkflow(project,shot).id).toBe('older-compatible');
+    expect(()=>routeWorkflow(project,shot,'newer-incompatible')).toThrow(/start-image|reference capacity/i);
+  });
+
+  it('treats workflow capability edits as execution/provenance changes',()=>{
+    const base=profile('profile',[{key:'startImage',jsonPath:'image'}],{maxGenericReferences:4});
+    base.validation={structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime'};
+    const edited=structuredClone(base);edited.capabilities={maxGenericReferences:8};
+    expect(workflowExecutionKey(edited)).not.toBe(workflowExecutionKey(base));
+    expect(preserveTrustedProfileValidation(base,edited).validation?.structuralStatus).toBe('unvalidated');
+  });
+
+  it('round-trips bounded capability metadata through project loading',()=>{
+    const raw:any={
+      schemaVersion:3,id:'cap-project',name:'p',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'p',logline:'',script:'',notes:''},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[{
+        id:'wf-cap',runtime:'wangp',purpose:'video',name:'wf',modelFamily:'custom',mode:'t2v',workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:false,
+        capabilities:{maxGenericReferences:12,supportsInputAudio:true,supportsGeneratedAudio:false}
+      }]}
+    };
+    const loaded=loadPortableProject(raw,'/tmp/cap-project').project.settings.workflowProfiles.find(item=>item.id==='wf-cap');
+    expect(loaded?.capabilities).toMatchObject({maxGenericReferences:12,supportsInputAudio:true,supportsGeneratedAudio:false});
+  });
+
+  it('derives managed WanGP media capabilities from catalog evidence',()=>{
+    const caps=catalogWorkflowCapabilities(
+      {modelType:'x',name:'x',mainOutput:['video','audio'],outputs:['video','audio'],inputs:['image','audio'],capabilities:{image_audio_to_video:true}},
+      [{key:'startImage',jsonPath:'image'},{key:'inputAudio',jsonPath:'audio'}]
+    );
+    expect(caps).toMatchObject({supportsStartImage:true,supportsInputAudio:true,supportsGeneratedAudio:true});
+  });
+
+  it('never lets skipIfRendered treat a technical-fail or stale take as completed work',()=>{
+    const shot=shotBase(),project={
+      schemaVersion:3,id:'skip',name:'skip',rootPath:'/tmp/skip',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'skip',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:[shot.id]}],assets:[],shots:[shot],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject;
+    const output:RenderOutput={id:'take',jobId:'orphaned',shotId:shot.id,path:'/tmp/skip/take.mp4',filename:'take.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:00.000Z',passed:false,issues:['decode'],warnings:[]}};
+    output.productionInputKey=shotProductionInputKey(project,shot);project.renderOutputs=[output];
+    expect(renderCanSatisfySkipIfRendered(project,shot,output)).toBe(false);
+    output.technicalQc!.passed=true;output.technicalQc!.issues=[];
+    expect(renderCanSatisfySkipIfRendered(project,shot,output)).toBe(true);
+    shot.prompt='changed';
+    expect(renderCanSatisfySkipIfRendered(project,shot,output)).toBe(false);
+  });
+
+  it('repairs malformed Director JSON once, caps plans at eight, and preserves valid references',async()=>{
+    const scene={id:'scene',index:1,heading:'INT. ROOM',body:'ensemble',shotIds:[]} as FilmProject['scenes'][number];
+    const assets:Asset[]=[
+      ...Array.from({length:6},(_,i)=>({id:'c'+i,kind:'character' as const,name:'C'+i,sourcePath:'c',projectPath:'assets/c'+i+'.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'})),
+      ...Array.from({length:3},(_,i)=>({id:'p'+i,kind:'prop' as const,name:'P'+i,sourcePath:'p',projectPath:'assets/p'+i+'.png',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}))
+    ];
+    const project={id:'director',story:{title:'Film',logline:'',notes:''},scenes:[scene],shots:[],assets,shotDependencies:[],settings:{workflowProfiles:[profile('route',[{key:'startImage',jsonPath:'image'}],{maxGenericReferences:16})]}} as any as FilmProject;
+    const one={title:'Shot',prompt:'p',camera:'wide',action:'stand',dialogue:'',continuityNotes:'',quality:'balanced',preferredModel:'ltx-2.5-fast',characterAssetIds:assets.filter(a=>a.kind==='character').map(a=>a.id),propAssetIds:assets.filter(a=>a.kind==='prop').map(a=>a.id),referenceAssetIds:[]};
+    const valid=JSON.stringify({shots:Array.from({length:10},()=>one)});
+    let calls=0;const original=globalThis.fetch;
+    (globalThis as any).fetch=vi.fn(async(_input:any,init?:RequestInit)=>{
+      calls++;if(calls===2)expect(String(init?.body)).toMatch(/previous response was not parseable JSON/i);
+      return new Response(JSON.stringify({choices:[{message:{content:calls===1?'{"shots":[':valid}}]}),{status:200,headers:{'content-type':'application/json'}});
+    });
+    try{
+      const drafts=await planSceneWithLocalDirector(project,scene,{director:{baseUrl:'http://127.0.0.1:11434/v1',model:'director',temperature:.5}} as AppMachineSettings);
+      expect(calls).toBe(2);expect(drafts).toHaveLength(8);expect(drafts[0].characterAssetIds).toHaveLength(6);expect(drafts[0].propAssetIds).toHaveLength(3);
+      expect(parseDirectorJsonObject('{"ok":true}')).toEqual({ok:true});
+    }finally{(globalThis as any).fetch=original;}
+  });
+
+  it('balances semantic references across characters, location and props',()=>{
+    const shot=shotBase();shot.characterAssetIds=['c1','c2','c3','c4','c5'];shot.locationAssetId='loc';shot.propAssetIds=['prop'];shot.referenceAssetIds=['ref'];
+    expect(semanticReferenceAssetIds(shot)).toEqual(['c1','c2','loc','prop']);
+  });
+
+  it('invalidates Director proposals when scene shots/routes change and stages proposals before mutation',async()=>{
+    const shot=shotBase(),scene={id:'scene',index:1,heading:'INT.',body:'body',shotIds:[shot.id]} as FilmProject['scenes'][number];
+    const project={id:'director-key',story:{title:'Film',logline:'',notes:''},scenes:[scene],shots:[shot],assets:[],shotDependencies:[],settings:{workflowProfiles:[profile('route',[{key:'startImage',jsonPath:'image'}],{maxGenericReferences:16})]}} as any as FilmProject;
+    const before=sceneDirectorInputKey(project,scene);shot.prompt='changed';expect(sceneDirectorInputKey(project,scene)).not.toBe(before);
+    shot.prompt='base prompt';const routeKey=sceneDirectorInputKey(project,scene);project.settings.workflowProfiles[0].mode='t2v';expect(sceneDirectorInputKey(project,scene)).not.toBe(routeKey);
+    const source=await readFile(join(process.cwd(),'src','renderer','src','views','Storyboard.tsx'),'utf8');
+    expect(source).toMatch(/directorProposals/);expect(source).toMatch(/Nothing has been added to the project yet/);expect(source).toMatch(/Apply proposal/);
+  });
+
+  it('marks stale canonical pointers visibly in both Studio surfaces',async()=>{
+    const studio=await readFile(join(process.cwd(),'src','renderer','src','views','Studio.tsx'),'utf8');
+    const compact=await readFile(join(process.cwd(),'src','renderer','src','views','CompactStudio.tsx'),'utf8');
+    expect(studio).toMatch(/canonical stale/);
+    expect(compact).toMatch(/canonical stale|STALE/);
+    expect(compact).toMatch(/canonicalTakeReadiness/);
   });
 });
