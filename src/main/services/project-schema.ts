@@ -7,7 +7,7 @@ import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 import { assertSafeJsonPath, assertSafeObjectKey } from '../../shared/safe-object';
 import { WORKFLOW_BINDING_CLASS_TYPE_LIMIT, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_JSON_PATH_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT, WORKFLOW_BINDING_TITLE_LIMIT, WORKFLOW_PROFILE_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../../shared/workflow-limits';
-import { defaultSequentialDependencies } from '../../shared/production-state';
+import { assertAcyclicShotDependencies, defaultSequentialDependencies } from '../../shared/production-state';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 const MODEL_FAMILIES = new Set<ModelFamily>(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom']);
@@ -104,6 +104,7 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
   assertUniqueIds('timeline clip',timeline);
   assertUniqueIds('shot state',shotStates);
   assertUniqueIds('shot dependency',shotDependencies);
+  assertAcyclicShotDependencies(shots,scenes,shotDependencies);
   assertUniqueIds('shot QC result',qcResults);
   assertUniqueIds('human task',humanTasks);
   assertUniqueIds('cut revision',cutRevisions);
