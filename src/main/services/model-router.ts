@@ -26,7 +26,9 @@ export function routeWorkflow(project: FilmProject, shot: Shot, forcedProfileId?
   );
   if (candidates.length === 0) throw new Error(`No enabled ${shot.generation.modelFamily}/${shot.generation.mode} workflow profile. Import, validate and enable a matching WanGP settings profile or ComfyUI workflow in Settings.`);
 
-  const validated = candidates.find(p=>p.validation?.structuralStatus==='valid');
+  const validated = candidates
+    .filter(p=>p.validation?.structuralStatus==='valid')
+    .sort((a,b)=>(b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||a.id.localeCompare(b.id))[0];
   if(!validated)throw new Error(`No validated ${shot.generation.modelFamily}/${shot.generation.mode} workflow profile. Validate a matching profile in Settings before rendering.`);
   return validated;
 }
