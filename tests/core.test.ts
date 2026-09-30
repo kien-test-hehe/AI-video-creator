@@ -47,9 +47,10 @@ import { buildWorkflowImportNotes, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDIN
 import { DEFAULT_CONTINUITY_FIELDS, OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, continuityFrameForShot, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, latestShotQcResult, productionShotOrder, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 import { advisePreviz } from '../src/main/services/previz-service';
-import { observedStateDraftFromVisionResult } from '../src/main/services/automatic-qc-service';
+import { evaluateContinuityQc, observedStateDraftFromVisionResult } from '../src/main/services/automatic-qc-service';
 import { AutomationJournal } from '../src/main/services/automation-journal';
 import { assertExternalDependenciesReady, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
+import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../src/shared/retry-policy';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1434,6 +1435,7 @@ describe('production state core',()=>{
     expect(loaded.project.shots.every(shot=>shot.previz?.requirement==='none'&&shot.previz.status==='not-needed')).toBe(true);
     expect(loaded.project.shotDependencies).toHaveLength(1);
     expect(loaded.project.shotDependencies[0]).toMatchObject({fromShotId:'shot-a',toShotId:'shot-b',relation:'continuity',strength:'soft'});
+    expect(loaded.project.shotDependencies[0].propagate).not.toContain('camera');
   });
 
   it('propagates only a current observed final state and invalidates its derived downstream start state when superseded',()=>{
@@ -1443,6 +1445,7 @@ describe('production state core',()=>{
       characters:[],props:[],environment:{timeOfDay:'NIGHT',lighting:'warm'},camera:{screenDirection:'left-to-right'},actionPhase:'hand on door',dialogueState:'line complete',confidence:.9,createdAt:'2026-01-01T00:00:02.000Z'
     });
     project.shots[0].observedFinalStateId='state-final-a';
+    project.shotDependencies[0].propagate=[...DEFAULT_CONTINUITY_FIELDS,'camera'];
     const propagated=propagateObservedFinalState(project,'shot-a','2026-01-01T00:00:03.000Z');
     expect(propagated).toHaveLength(1);
     const next=project.shots.find(shot=>shot.id==='shot-b')!,state=project.shotStates.find(item=>item.id===next.actualStartStateId)!;
@@ -2202,7 +2205,7 @@ describe('field-scoped continuity frame propagation',()=>{
   });
 
   it('still carries the frame when the dependency explicitly propagates the complete visual-frame contract',()=>{
-    const project=makeProject([...DEFAULT_CONTINUITY_FIELDS]);
+    const project=makeProject([...DEFAULT_CONTINUITY_FIELDS,'camera']);
     propagateObservedFinalState(project,'a');
     const target=project.shots.find(shot=>shot.id==='b')!;
     const state=project.shotStates.find(item=>item.id===target.actualStartStateId)!;
@@ -2211,7 +2214,7 @@ describe('field-scoped continuity frame propagation',()=>{
   });
 
   it('removes a previously propagated frame when the dependency is narrowed later',()=>{
-    const project=makeProject([...DEFAULT_CONTINUITY_FIELDS]);
+    const project=makeProject([...DEFAULT_CONTINUITY_FIELDS,'camera']);
     propagateObservedFinalState(project,'a');
     const target=project.shots.find(shot=>shot.id==='b')!;
     const firstStateId=target.actualStartStateId!;
@@ -2257,7 +2260,7 @@ describe('next-five production hardening',()=>{
     full.assets.push({id:'frame',kind:'keyframe',name:'Frame',sourcePath:'frame.jpg',projectPath:'assets/keyframe/frame.jpg',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'});
     full.shots[0].observedFinalStateId='final-a';
     full.shotStates.push({id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',frameAssetId:'frame',characters:[],props:[],environment:{lighting:'warm'},camera:{shotSize:'wide'},actionPhase:'done',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'});
-    full.shotDependencies=[{id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:[...DEFAULT_CONTINUITY_FIELDS],createdAt:'2026-01-01T00:00:00.000Z'}];
+    full.shotDependencies=[{id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:[...DEFAULT_CONTINUITY_FIELDS,'camera'],createdAt:'2026-01-01T00:00:00.000Z'}];
     propagateObservedFinalState(full,'a');
     expect(full.shotStates.find(state=>state.id===full.shots[1].actualStartStateId)?.status).toBe('current');
 
@@ -2291,11 +2294,13 @@ describe('next-five production hardening',()=>{
     expect(productionShotOrder(project).map(item=>item.id)).toEqual(['a','b','c']);
   });
 
-  it('blocks a partial AUTO RUN when an unresolved upstream dependency is outside the selection',()=>{
+  it('blocks a partial AUTO RUN only for unresolved hard upstream dependencies',()=>{
     const project=projectBase();
-    project.shotDependencies=[{id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}];
+    project.shotDependencies=[{id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'hard',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}];
     expect(()=>assertExternalDependenciesReady(project,new Set(['b']))).toThrow(/unresolved upstream dependencies/i);
     expect(()=>assertExternalDependenciesReady(project,new Set(['a','b']))).not.toThrow();
+    project.shotDependencies[0].strength='soft';
+    expect(()=>assertExternalDependenciesReady(project,new Set(['b']))).not.toThrow();
   });
 
   it('rejects cyclic dependency graphs during portable-project validation',()=>{
@@ -2319,5 +2324,61 @@ describe('next-five production hardening',()=>{
     expect(loaded.shots.find(item=>item.id==='b')?.startFrameAssetId).toBeUndefined();
     expect(loaded.shots.find(item=>item.id==='b')?.actualStartStateId).toBeUndefined();
     expect(loaded.shotStates.find(item=>item.id==='start-b')?.status).toBe('stale');
+  });
+});
+
+
+describe('P1 production policy hardening',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const makeShot=(id:string,index:number):Shot=>({id,sceneId:'scene',index,title:id,prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:index}});
+  const makeProject=():FilmProject=>({
+    schemaVersion:3,id:'p1-policy',name:'P1 Policy',rootPath:'/tmp/p1-policy',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'P1 Policy',logline:'',script:'',notes:''},
+    scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['a','b','c']}],
+    assets:[],shots:[makeShot('a',3),makeShot('b',1),makeShot('c',2)],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  });
+
+  it('uses hard dependencies as blockers while soft dependencies remain ordering hints',()=>{
+    const project=makeProject();
+    project.shotDependencies=[
+      {id:'soft-ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'hard-bc',fromShotId:'b',toShotId:'c',relation:'temporal',strength:'hard',propagate:[],createdAt:'2026-01-01T00:00:00.000Z'}
+    ];
+    expect(productionShotOrder(project).map(shot=>shot.id)).toEqual(['a','b','c']);
+    expect(()=>assertExternalDependenciesReady(project,new Set(['c']))).toThrow(/b → c/i);
+    expect(()=>assertExternalDependenciesReady(project,new Set(['b']))).not.toThrow();
+  });
+
+  it('requires camera continuity to be explicit rather than part of the default contract',()=>{
+    expect(DEFAULT_CONTINUITY_FIELDS).not.toContain('camera');
+    expect(DEFAULT_CONTINUITY_FIELDS).toEqual(expect.arrayContaining(['character','wardrobe','prop','location','lighting','action','dialogue']));
+  });
+
+  it('creates a separate continuity review requirement for every missing upstream frame',async()=>{
+    const project=makeProject(),shot=project.shots.find(item=>item.id==='c')!;
+    const e1={id:'a-c',fromShotId:'a',toShotId:'c',relation:'continuity' as const,strength:'soft' as const,propagate:['character' as const],createdAt:'2026-01-01T00:00:00.000Z'};
+    const e2={id:'b-c',fromShotId:'b',toShotId:'c',relation:'continuity' as const,strength:'hard' as const,propagate:['prop' as const],createdAt:'2026-01-01T00:00:00.000Z'};
+    project.shotDependencies=[e1,e2];
+    const result=await evaluateContinuityQc({} as AppMachineSettings,project,shot,[{edge:e1},{edge:e2}],'/tmp/current-first.jpg');
+    expect(result.status).toBe('human-verify');
+    expect(result.issues.filter(issue=>issue.code==='CONTINUITY_UPSTREAM_FRAME_MISSING')).toHaveLength(2);
+    expect(result.issues.map(issue=>issue.message).join(' ')).toMatch(/a/);
+    expect(result.issues.map(issue=>issue.message).join(' ')).toMatch(/b/);
+  });
+
+  it('allows bounded seed rerolls only for visual QC, not semantic or continuity failures',()=>{
+    const issue={code:'QC',severity:'major' as const,message:'Mismatch'};
+    expect(qcFailureAutoRetryDecision({layer:'visual',issues:[issue]}).action).toBe('retry');
+    expect(qcFailureAutoRetryDecision({layer:'semantic',issues:[issue]}).action).toBe('human');
+    expect(qcFailureAutoRetryDecision({layer:'continuity',issues:[issue]}).action).toBe('human');
+  });
+
+  it('retries only recognized transient backend failures and stops deterministic repeats',()=>{
+    expect(renderFailureAutoRetryDecision({status:'failed',error:'connection reset by local backend',message:'Failed'} as any).action).toBe('retry');
+    expect(renderFailureAutoRetryDecision({status:'orphaned',error:'process disappeared after restart',message:'Recovery failed'} as any).action).toBe('retry');
+    expect(renderFailureAutoRetryDecision({status:'failed',error:'CUDA out of memory',message:'Failed'} as any).action).toBe('human');
+    expect(renderFailureAutoRetryDecision({status:'failed',error:'Invalid node class_type Foo',message:'Failed'} as any).action).toBe('human');
+    expect(renderFailureAutoRetryDecision({status:'failed',error:'mysterious deterministic crash',message:'Failed'} as any).action).toBe('human');
   });
 });
