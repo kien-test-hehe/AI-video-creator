@@ -27,7 +27,9 @@ export async function recordObservedFinalState(projects:ProjectService,request:R
     if(!output.technicalQc?.passed)throw new Error('Observed final state cannot become current until the source video passes technical QC.');
     const recordedInputKey=renderOutputProductionInputKey(project,output),currentInputKey=currentProductionInputKeyForOutput(project,shot,output);
     if(!recordedInputKey||recordedInputKey!==currentInputKey)throw new Error('Observed final state cannot be recorded from a stale or provenance-unknown render output.');
-    for(const layer of ['visual','semantic'] as const){
+    const requiredLayers:Array<'visual'|'semantic'|'continuity'>=['visual','semantic'];
+    if(project.shotDependencies.some(edge=>edge.toShotId===shot.id&&edge.relation!=='parallel'&&edge.propagate.length>0))requiredLayers.push('continuity');
+    for(const layer of requiredLayers){
       const expected=shotQcInputKey(project,shot.id,output.id,layer);
       const result=latestShotQcResult(project,shot.id,output.id,layer,expected);
       if(!result||result.status!=='pass')throw new Error(`Observed final state requires current ${layer} QC PASS before it can propagate continuity.`);

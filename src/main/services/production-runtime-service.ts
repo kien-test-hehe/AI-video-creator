@@ -3,14 +3,14 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AutomationRunRequest, AutomationStatus, FilmProject, HumanTaskType, QcLayer, RenderOutput, Shot } from '../../shared/types';
-import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, productionShotOrder, renderOutputProductionInputKey, shotProductionInputKey, shotQcInputKey } from '../../shared/production-state';
+import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, incomingContinuityEdges, invalidateObservedFinalState, invalidateStateCascade, isApprovedObservedStateReview, productionShotOrder, renderOutputProductionInputKey, requiresHumanContinuityMerge, shotProductionInputKey, shotQcInputKey } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
 import { RenderQueueService } from './render-queue';
 import { preflightProject } from './preflight-service';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath } from './path-safety';
 import { sampleVideoFrames, type SampledVideoFrames } from './media-analysis';
-import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, selectStableFinalFrame } from './automatic-qc-service';
+import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, observedStateDraftFingerprint, observedStateReviewTitle, selectStableFinalFrame } from './automatic-qc-service';
 import { createHumanTask, recordObservedFinalState, recordShotQc } from './production-state-service';
 import { ensurePrevizPlan } from './previz-service';
 import { releaseLocalVisionModel } from './local-vision-service';
@@ -133,6 +133,11 @@ export class ProductionRuntimeService extends EventEmitter{
         if(!project){this.fail('Project closed while preparing previz.');break;}
         shot=project.shots.find(item=>item.id===currentShotId);
         if(!shot){this.fail('Current shot disappeared while preparing previz.');break;}
+        await this.reconcilePreparationTasks(shot);
+        project=this.projects.getCurrent();
+        if(!project){this.fail('Project closed while reconciling human tasks.');break;}
+        shot=project.shots.find(item=>item.id===currentShotId);
+        if(!shot){this.fail('Current shot disappeared while reconciling human tasks.');break;}
 
         const blockers=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===currentShotId);
         if(blockers.length){
@@ -272,12 +277,13 @@ export class ProductionRuntimeService extends EventEmitter{
       const frameAssetId=await this.ensureObservedFrameAsset(output,stableFinalFrame);
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
       const draft=await extractObservedStateDraft(this.settings.get(),project,shot,stableFinalFrame);
-      const confidenceReviewTitle=`${OBSERVED_STATE_CONFIDENCE_TASK_PREFIX}${shot.title}`;
+      const draftFingerprint=observedStateDraftFingerprint(draft);
+      const confidenceReviewTitle=observedStateReviewTitle(shot.title,draft);
       const confidenceApproved=project.humanTasks.some(task=>isApprovedObservedStateReview(task,shotId,confidenceReviewTitle,outputId));
       if(draft.confidence<0.6&&!confidenceApproved){
         await this.ensureHumanTask(
           shot,'manual-qc',confidenceReviewTitle,
-          `Automatic final-state extraction confidence is ${Math.round(draft.confidence*100)}%, below the 60% auto-propagation threshold.`,
+          `Automatic final-state extraction confidence is ${Math.round(draft.confidence*100)}%, below the 60% auto-propagation threshold. Draft provenance: ${draftFingerprint}.`,
           'Inspect the extracted final frame and rendered take. Use the explicit Approve observed state action only if the extracted facts are visibly correct; otherwise dismiss the task and adjust/re-render the shot.',
           [outputId]
         );
@@ -373,6 +379,29 @@ export class ProductionRuntimeService extends EventEmitter{
     await this.reconcilePreparationTasks(shot);
     project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
 
+    if(requiresHumanContinuityMerge(project,shot.id)){
+      const actualStartStateId=shot.actualStartStateId;
+      const actual=actualStartStateId?project.shotStates.find(state=>state.id===actualStartStateId):undefined;
+      const humanResolved=actual?.status==='current'&&actual.source==='human';
+      if(!humanResolved){
+        if(actual&&actual.source!=='human'&&actual.status!=='stale'){
+          await this.projects.mutate(next=>{
+            const current=next.shots.find(item=>item.id===shotId);
+            const state=current?.actualStartStateId?next.shotStates.find(item=>item.id===current.actualStartStateId):undefined;
+            if(state&&state.source!=='human'&&state.status!=='stale')invalidateStateCascade(next,[state.id],'Multiple upstream continuity dependencies require a human-resolved actual start state.');
+          });
+          project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
+        }
+        const incoming=incomingContinuityEdges(project,shot.id);
+        await this.ensureHumanTask(
+          shot,'verify-continuity','Resolve multi-source continuity',
+          `Shot “${shot.title}” has ${incoming.length} upstream continuity sources. CineForge will not silently choose one predecessor or merge potentially conflicting state.`,
+          'Review the incoming states and either reduce the dependency graph to one source or attach/approve a human-owned start frame/state that resolves the combined continuity intent.'
+        );
+        return;
+      }
+    }
+
     if(shot.generation.mode==='v2v'){
       if(!shot.referenceVideoAssetId)await this.ensureHumanTask(shot,'route-unsupported','Reference video required',`Shot “${shot.title}” uses V2V but has no reference video.`,'Attach a reference video in Shot Workshop, then resume AUTO RUN.');
       return;
@@ -409,15 +438,21 @@ export class ProductionRuntimeService extends EventEmitter{
   private async reconcilePreparationTasks(shot:Shot):Promise<void>{
     const project=this.projects.getCurrent();if(!project)return;
     const now=new Date().toISOString();
-    const satisfied=(taskTitle:string)=>{
-      if(taskTitle==='Start keyframe required'||taskTitle==='Automatic start keyframe failed')return Boolean(shot.startFrameAssetId);
-      if(taskTitle==='End keyframe required'||taskTitle==='Automatic end keyframe failed')return Boolean(shot.endFrameAssetId);
-      if(taskTitle==='Reference video required')return Boolean(shot.referenceVideoAssetId);
-      return false;
-    };
-    const closable=project.humanTasks.filter(task=>task.status==='open'&&task.shotId===shot.id&&['verify-keyframe','route-unsupported'].includes(task.type)&&satisfied(task.title));
+    const closable=project.humanTasks
+      .filter(task=>task.status==='open'&&task.shotId===shot.id)
+      .map(task=>({task,disposition:automationTaskDisposition(project,shot,task)}))
+      .filter((item):item is {task:FilmProject['humanTasks'][number];disposition:'resolved'|'dismissed'}=>Boolean(item.disposition));
     if(!closable.length)return;
-    await this.projects.mutate(next=>{for(const task of next.humanTasks){if(!closable.some(item=>item.id===task.id))continue;task.status='resolved';task.resolvedAt=now;task.resolution='Automatically resolved because the required generation input is now attached.';}});
+    const byId=new Map(closable.map(item=>[item.task.id,item.disposition] as const));
+    await this.projects.mutate(next=>{
+      for(const task of next.humanTasks){
+        const disposition=byId.get(task.id);if(!disposition||task.status!=='open')continue;
+        task.status=disposition;task.resolvedAt=now;
+        task.resolution=disposition==='resolved'
+          ?'Automatically resolved because the required current production input/state is now satisfied.'
+          :'Automatically dismissed because the prior automation blocker is stale or is being revalidated against current production inputs.';
+      }
+    });
   }
 
   private async ensureShotPreviz(shotId:string):Promise<void>{
@@ -460,6 +495,46 @@ export class ProductionRuntimeService extends EventEmitter{
     const snapshot=this.snapshot(),targetShotIds=[...this.targetShotIds],maxAutoRetries=this.maxAutoRetries,buildTimeline=this.buildTimeline;
     this.journalTail=this.journalTail.then(()=>this.journal.write(project,{schemaVersion:1,projectId:project.id,projectRoot:project.rootPath,targetShotIds,maxAutoRetries,buildTimeline,status:snapshot})).catch(error=>{console.warn('Could not persist autonomous production journal:',error);});
   }
+}
+
+export function automationTaskDisposition(
+  project:FilmProject,
+  shot:Shot,
+  task:FilmProject['humanTasks'][number]
+):'resolved'|'dismissed'|undefined{
+  if(task.status!=='open'||task.shotId!==shot.id)return undefined;
+  if(task.title==='Start keyframe required'||task.title==='Automatic start keyframe failed')return shot.startFrameAssetId?'resolved':undefined;
+  if(task.title==='End keyframe required'||task.title==='Automatic end keyframe failed')return shot.endFrameAssetId?'resolved':undefined;
+  if(task.title==='Reference video required')return shot.referenceVideoAssetId?'resolved':undefined;
+  const currentActual=shot.actualStartStateId?project.shotStates.find(state=>state.id===shot.actualStartStateId):undefined;
+  if(task.title==='Resolve multi-source continuity'){
+    if(!requiresHumanContinuityMerge(project,shot.id)||(currentActual?.status==='current'&&currentActual.source==='human'))return'resolved';
+    return undefined;
+  }
+  // This task is a cached preflight result. Dismiss it before rerunning preflight so a
+  // fixed workflow can advance, while an unfixed workflow immediately creates a fresh blocker.
+  if(task.title==='Workflow input mismatch')return'dismissed';
+  if(task.title==='Render failure needs correction'||task.title==='Backend retries exhausted'){
+    const currentBackendFailure=project.renderJobs.some(job=>
+      job.shotId===shot.id&&['failed','orphaned'].includes(job.status)&&failedRenderJobMatchesCurrentInputs(project,shot,job)
+    );
+    return currentBackendFailure?undefined:'dismissed';
+  }
+  const outputScopedAutomation=
+    task.title==='Automatic visual retries exhausted'||
+    task.title==='Semantic QC needs corrective review'||
+    task.title==='Continuity QC needs corrective review'||
+    task.title.startsWith(OBSERVED_STATE_CONFIDENCE_TASK_PREFIX);
+  if(outputScopedAutomation&&task.relatedRenderOutputIds.length){
+    const hasCurrentOutput=task.relatedRenderOutputIds.some(outputId=>{
+      const output=project.renderOutputs.find(item=>item.id===outputId&&item.shotId===shot.id&&item.mediaType==='video');
+      if(!output)return false;
+      const current=currentProductionInputKeyForOutput(project,shot,output),recorded=renderOutputProductionInputKey(project,output);
+      return Boolean(current&&recorded===current);
+    });
+    if(!hasCurrentOutput)return'dismissed';
+  }
+  return undefined;
 }
 
 export function assertExternalDependenciesReady(project:FilmProject,targetShotIds:ReadonlySet<string>):void{

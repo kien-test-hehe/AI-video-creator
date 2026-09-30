@@ -44,10 +44,15 @@ export function shotKeyframeInputKey(shot:Shot,role:'start'|'end'):string{
 }
 
 
+export function currentGenerationState(project:Pick<FilmProject,'shotStates'>,stateId:string|undefined):FilmProject['shotStates'][number]|undefined{
+  if(!stateId)return undefined;
+  return project.shotStates.find(item=>item.id===stateId&&item.status==='current');
+}
+
 function stateRenderKey(project:FilmProject,stateId:string|undefined):unknown{
   if(!stateId)return undefined;
-  const state=project.shotStates.find(item=>item.id===stateId);
-  if(!state)return{missing:stateId};
+  const state=currentGenerationState(project,stateId);
+  if(!state)return undefined;
   return{
     id:state.id,role:state.role,source:state.source,status:state.status,frameAssetId:state.frameAssetId,
     derivedFromStateId:state.derivedFromStateId,characters:state.characters,props:state.props,

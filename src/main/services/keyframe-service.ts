@@ -14,15 +14,16 @@ import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPath
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
 import { killProcessTree } from './process-utils';
 import { planShotReferences } from './reference-plan';
-import { keyframeProjectInputKey } from '../../shared/shot-signature';
+import { currentGenerationState, keyframeProjectInputKey } from '../../shared/shot-signature';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease, type KeyframeLease } from './keyframe-lease';
 import { invalidateObservedFinalState } from '../../shared/production-state';
 
-function keyframePrompt(project:FilmProject,shot:Shot,role:'start'|'end'):string{
+export function keyframePrompt(project:FilmProject,shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
-  const stateId=role==='start'?(shot.actualStartStateId??shot.plannedStartStateId):shot.plannedEndStateId;
-  const state=stateId?project.shotStates.find(item=>item.id===stateId&&item.status!=='stale'):undefined;
+  const actual=role==='start'?currentGenerationState(project,shot.actualStartStateId):undefined;
+  const planned=role==='start'?currentGenerationState(project,shot.plannedStartStateId):currentGenerationState(project,shot.plannedEndStateId);
+  const state=actual??planned;
   const stateContext=state?JSON.stringify({
     characters:state.characters,props:state.props,environment:state.environment,camera:state.camera,
     actionPhase:state.actionPhase,dialogueState:state.dialogueState,confidence:state.confidence

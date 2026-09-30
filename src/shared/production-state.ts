@@ -308,6 +308,16 @@ function selectFields(source:ShotState,fields:ReadonlySet<ContinuityField>):Pick
   };
 }
 
+export function incomingContinuityEdges(project:Pick<FilmProject,'shotDependencies'>,shotId:string):ShotDependency[]{
+  return project.shotDependencies
+    .filter(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0)
+    .sort((a,b)=>(a.strength===b.strength?0:a.strength==='hard'?-1:1)||a.id.localeCompare(b.id));
+}
+
+export function requiresHumanContinuityMerge(project:Pick<FilmProject,'shotDependencies'>,shotId:string):boolean{
+  return incomingContinuityEdges(project,shotId).length>1;
+}
+
 export function continuityFrameForShot(project:FilmProject,shot:Shot|undefined):{assetId:string;source:'observed-final'|'planned-end'}|undefined{
   if(!shot)return undefined;
   const observed=shot.observedFinalStateId?project.shotStates.find(state=>state.id===shot.observedFinalStateId&&state.shotId===shot.id&&state.role==='observed-final'&&state.status==='current'):undefined;
@@ -333,6 +343,12 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
     if(!target)continue;
     const existing=target.actualStartStateId?project.shotStates.find(state=>state.id===target.actualStartStateId):undefined;
     if(existing?.status==='current'&&existing.source==='human')continue;
+    if(requiresHumanContinuityMerge(project,target.id)){
+      if(existing&&existing.source!=='human'&&existing.status!=='stale'){
+        invalidateStateCascade(project,[existing.id],'Multiple upstream continuity dependencies now converge on this shot; generated single-source start state is ambiguous and requires human resolution.');
+      }
+      continue;
+    }
     const startFrameOwnedByExisting=Boolean(existing?.frameAssetId&&existing.source!=='human'&&target.startFrameAssetId===existing.frameAssetId);
     if(target.startFrameAssetId&&!startFrameOwnedByExisting)continue;
 
