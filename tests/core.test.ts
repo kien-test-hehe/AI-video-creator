@@ -30,7 +30,7 @@ import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, record
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe, keyframePrompt } from '../src/main/services/keyframe-service';
-import { invalidateChangedRoutes, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
+import { invalidateChangedRoutes, pickRecommended, preferredVideoMode, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
@@ -38,7 +38,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited, stringifyJsonLimited } from '../src/main/services/json-file';
 import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
-import { buildRenderPrompt } from '../src/main/services/render-queue';
+import { buildRenderPrompt, selectPreferredTechnicalVideo } from '../src/main/services/render-queue';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
 import { loadPortableProject } from '../src/main/services/project-schema';
@@ -72,6 +72,12 @@ describe('Compact Studio source contract',()=>{
     expect(compact).toMatch(/Production timeline/);
     expect(compact).toMatch(/Generate shot/);
     expect(compact).toMatch(/Human Review/);
+    expect(compact).toMatch(/jumpPreviewStart/);
+    expect(compact).toMatch(/stepPreview\(-1\)/);
+    expect(compact).toMatch(/togglePreviewPlayback/);
+    expect(compact).toMatch(/setPreviewOutputId\(output\.id\)/);
+    expect(compact).toMatch(/Plan \/ revise shots/);
+    expect(compact).not.toMatch(/>Open proposal<\/button>/);
     expect(shell).toMatch(/studio-shell/);
     expect(styles).toMatch(/\.workspace\.studio-mode>\.topbar\{display:none\}/);
   });
@@ -2946,5 +2952,117 @@ describe('AI-QC epistemic hardening',()=>{
       expect(userContent[1].type).toBe('image_url');
       expect(userContent[2].type).toBe('image_url');
     }finally{(globalThis as any).fetch=original;await rm(root,{recursive:true,force:true});}
+  });
+});
+
+
+describe('final missing hardening regressions',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const makeShot=(id='shot'):Shot=>({id,sceneId:'scene',index:1,title:id,prompt:'base',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation}});
+  const makeProject=():FilmProject=>({schemaVersion:3,id:'final-missing',name:'Final missing',rootPath:'/tmp/final-missing',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',story:{title:'Final missing',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['shot']}],assets:[],shots:[makeShot()],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}});
+
+  it('prefers the cleanest technically passing output instead of backend array order',()=>{
+    const shot=makeShot();
+    const output=(id:string,warnings:string[],durationSec:number,createdAt:string):RenderOutput=>({id,jobId:'job',shotId:shot.id,path:'/tmp/'+id+'.mp4',filename:id+'.mp4',mediaType:'video',createdAt,technicalQc:{checkedAt:createdAt,passed:true,issues:[],warnings,durationSec,width:768,height:432,fps:24,hasAudio:false}});
+    const noisy=output('noisy',['warning'],4.04,'2026-01-01T00:00:01.000Z');
+    const cleanFar=output('clean-far',[],4.3,'2026-01-01T00:00:02.000Z');
+    const cleanNear=output('clean-near',[],4.05,'2026-01-01T00:00:03.000Z');
+    expect(selectPreferredTechnicalVideo([noisy,cleanFar,cleanNear],shot)?.id).toBe('clean-near');
+  });
+
+  it('routes all extra characters and props into generic reference arrays without silently dropping them',()=>{
+    const shot=makeShot();shot.characterAssetIds=['c1','c2','c3','c4','c5','c6'];shot.propAssetIds=['p1','p2','p3'];shot.locationAssetId='loc';shot.referenceAssetIds=['r1','r2'];
+    const profile={id:'wf',runtime:'comfyui',purpose:'video',name:'WF',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/wf.json',workflowFormat:'api',bindings:[{key:'characterImage1',selector:{nodeId:'1'},input:'a'},{key:'propImage1',selector:{nodeId:'2'},input:'b'},{key:'referenceImages',selector:{nodeId:'3'},input:'refs'}],enabled:true} as WorkflowProfile;
+    const plan=planShotReferences(shot,profile);
+    expect(plan.characterIds[0]).toBe('c1');
+    expect(plan.propIds[0]).toBe('p1');
+    expect(plan.genericCapacity).toBe(16);
+    expect(plan.genericIds).toEqual(expect.arrayContaining(['c2','c3','c4','c5','c6','loc','p2','p3','r1','r2']));
+    expect(plan.unservedIds).toEqual([]);
+  });
+
+  it('supports includeAudio as a real workflow binding',()=>{
+    const workflow:ApiWorkflow={'1':{class_type:'VideoNode',inputs:{generate_audio:false}}};
+    const bindings=suggestBindings(workflow);
+    expect(bindings.some(binding=>binding.key==='includeAudio')).toBe(true);
+    const values:any={prompt:'x',negativePrompt:'',width:768,height:432,frames:97,fps:24,seed:1,includeAudio:true,filenamePrefix:'x'};
+    expect((applyBindings(workflow,bindings,values)['1'].inputs as any).generate_audio).toBe(true);
+  });
+
+  it('uses deterministic validated-model fallback independent of Set insertion order',()=>{
+    const shot=makeShot();shot.generation.modelFamily='framepack';
+    const a=chooseModelForShot(shot,{validatedModels:new Set(['custom','wan-2.2-5b'])});
+    const b=chooseModelForShot(shot,{validatedModels:new Set(['wan-2.2-5b','custom'])});
+    expect(a).toBe('wan-2.2-5b');expect(b).toBe(a);
+  });
+
+  it('omits planned start conditioning whenever an authoritative actual start exists',()=>{
+    const project=makeProject(),shot=project.shots[0];
+    shot.actualStartStateId='actual';shot.plannedStartStateId='planned';
+    project.shotStates=[
+      {id:'actual',shotId:shot.id,role:'actual-start',source:'human',status:'current',characters:[],props:[],environment:{notes:'ACTUAL_MARKER'},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+      {id:'planned',shotId:shot.id,role:'planned-start',source:'planned',status:'current',characters:[],props:[],environment:{notes:'PLANNED_MARKER'},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'}
+    ];
+    const prompt=buildRenderPrompt(project,shot);
+    expect(prompt).toContain('ACTUAL_MARKER');
+    expect(prompt).not.toContain('PLANNED_MARKER');
+    expect(prompt).toMatch(/authoritative actual start state overrides/i);
+  });
+
+  it('keeps a generated keyframe review tied to that exact candidate',()=>{
+    const project=makeProject(),shot=project.shots[0];
+    const task={id:'task',type:'verify-keyframe' as const,status:'open' as const,shotId:shot.id,title:'Review generated start keyframe',reason:'review',relatedAssetIds:['candidate'],relatedRenderOutputIds:[],createdAt:'2026-01-01T00:00:00.000Z'};
+    expect(automationTaskDisposition(project,shot,task)).toBeUndefined();
+    shot.startFrameAssetId='candidate';
+    expect(automationTaskDisposition(project,shot,task)).toBe('resolved');
+    shot.startFrameAssetId='different-human-frame';
+    expect(automationTaskDisposition(project,shot,task)).toBe('dismissed');
+  });
+
+  it('derives non-basic WanGP video modes from capabilities and inputs',()=>{
+    expect(preferredVideoMode({modelType:'flf',name:'FLF',mainOutput:['video'],outputs:['video'],inputs:['image'],capabilities:{first_last_frame_to_video:true}})).toBe('flf2v');
+    expect(preferredVideoMode({modelType:'ia',name:'IA',mainOutput:['video'],outputs:['video'],inputs:['audio'],capabilities:{audio_to_video:true}})).toBe('ia2v');
+    expect(preferredVideoMode({modelType:'vv',name:'VV',mainOutput:['video'],outputs:['video'],inputs:['video'],capabilities:{video_to_video:true}})).toBe('v2v');
+  });
+
+  it('recommends unknown WanGP catalog names by capability/output rather than dropping them',()=>{
+    const picks=pickRecommended([
+      {modelType:'future-video-z',name:'Future Video Z',mainOutput:['video'],outputs:['video'],inputs:['image'],capabilities:{image_to_video:true}},
+      {modelType:'future-image-z',name:'Future Image Z',mainOutput:['image'],outputs:['image'],inputs:['image'],capabilities:{image_to_image:true}}
+    ]);
+    expect(picks.some(item=>item.purpose==='video'&&item.entry.modelType==='future-video-z')).toBe(true);
+    expect(picks.some(item=>item.purpose==='image'&&item.entry.modelType==='future-image-z')).toBe(true);
+  });
+
+  it('routes among equal model/mode profiles deterministically using qualification timestamp then id',()=>{
+    const shot=makeShot();shot.generation.modelFamily='custom';
+    const project=makeProject();project.settings.workflowProfiles=[
+      {id:'b',runtime:'wangp',purpose:'video',name:'B',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/b.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-01T00:00:00.000Z'}},
+      {id:'a',runtime:'wangp',purpose:'video',name:'A',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/a.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-02T00:00:00.000Z'}}
+    ];
+    expect(routeWorkflow(project,shot).id).toBe('a');
+    project.settings.workflowProfiles.reverse();
+    expect(routeWorkflow(project,shot).id).toBe('a');
+  });
+
+  it('preserves includeAudio workflow bindings through project schema load',()=>{
+    const raw={
+      schemaVersion:3,id:'audio-bind',name:'Audio binding',rootPath:'/tmp/audio-bind',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'Audio binding',logline:'',script:'',notes:''},scenes:[],assets:[],shots:[],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[{
+        id:'wf-audio',runtime:'wangp',purpose:'video',name:'Audio WF',modelFamily:'custom',mode:'t2v',workflowPath:'/tmp/audio-bind/workflows/a.json',workflowFormat:'wangp-settings',enabled:false,
+        bindings:[{key:'includeAudio',jsonPath:'generate_audio',transform:'boolean',required:false}]
+      }]}
+    };
+    const loaded=loadPortableProject(raw,'/tmp/audio-bind').project;
+    expect(loaded.settings.workflowProfiles[0].bindings[0].key).toBe('includeAudio');
+  });
+
+  it('keeps the preflight contract explicit for FLF2V, V2V, IA2V and audio-generation binding',async()=>{
+    const source=await readFile(join(process.cwd(),'src','main','services','preflight-service.ts'),'utf8');
+    expect(source).toMatch(/SHOT_NO_END_FRAME/);
+    expect(source).toMatch(/SHOT_NO_REFERENCE_VIDEO/);
+    expect(source).toMatch(/SHOT_NO_INPUT_AUDIO/);
+    expect(source).toMatch(/AUDIO_GENERATION_CONTROL_UNBOUND/);
   });
 });
