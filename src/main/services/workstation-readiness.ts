@@ -31,7 +31,15 @@ export async function assessWorkstationReadiness(project:FilmProject|undefined,m
   else add('profiles','Production profiles','blocked','No enabled structurally valid video workflow profile is available.','Provision/import and validate at least one local video workflow.');
 
   const autoQcAvailable=Boolean(machine.director.model.trim());
-  add('auto-qc','Automatic visual QC',autoQcAvailable?'ready':'warning',autoQcAvailable?`Local multimodal Director model configured: ${machine.director.model}.`:'No local Director/VLM model is configured. CineForge will fail safely to Human Review for visual/semantic QC.','Configure a local OpenAI-compatible multimodal model in Machine Settings.');
+  add(
+    'auto-qc',
+    'Automatic visual QC',
+    'warning',
+    autoQcAvailable
+      ? `Local Director/VLM model configured: ${machine.director.model}. Configuration alone does not prove multimodal compatibility; CineForge verifies it on real QC calls and fails safely to Human Review if image input/JSON output is unsupported.`
+      : 'No local Director/VLM model is configured. CineForge will fail safely to Human Review for visual/semantic QC.',
+    autoQcAvailable?'Run a short qualification take to verify real image-input QC before relying on AUTO RUN.':'Configure a local OpenAI-compatible multimodal model in Machine Settings.'
+  );
 
   add('blender','Blender previz',probe.blender?.available?'ready':'warning',probe.blender?.available?(probe.blender.version||'Blender detected.'):'Blender was not detected. Required previz shots will become Human Tasks instead of blocking the app.','Install Blender or keep previz optional.');
   add('capcut','CapCut finishing',probe.capcut.installed?'ready':'warning',probe.capcut.installed?`CapCut detected${probe.capcut.path?` at ${probe.capcut.path}`:''}.`:'CapCut was not detected. Local master export still works; finishing handoff can be used after CapCut is installed.');
