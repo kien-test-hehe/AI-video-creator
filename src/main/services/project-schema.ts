@@ -113,8 +113,15 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
     if(state.derivedFromStateId&&!stateById.has(state.derivedFromStateId))throw new Error(`Shot state ${state.id} derives from missing state ${state.derivedFromStateId}.`);
     if(state.derivedFromStateId===state.id)throw new Error(`Shot state ${state.id} cannot derive from itself.`);
   }
+  const humanTaskById=new Map(humanTasks.map(task=>[task.id,task] as const));
   for(const result of qcResults){
-    if(result.humanOverrideTaskId&&!humanTaskIds.has(result.humanOverrideTaskId))throw new Error(`QC result ${result.id} references missing human task ${result.humanOverrideTaskId}.`);
+    if(!result.humanOverrideTaskId)continue;
+    const task=humanTaskById.get(result.humanOverrideTaskId);
+    if(!task)throw new Error(`QC result ${result.id} references missing human task ${result.humanOverrideTaskId}.`);
+    if(task.shotId!==result.shotId)throw new Error(`QC result ${result.id} links to human task ${task.id} from a different shot.`);
+    if(result.renderOutputId&&!task.relatedRenderOutputIds.includes(result.renderOutputId))throw new Error(`QC result ${result.id} links to human task ${task.id} that does not reference render output ${result.renderOutputId}.`);
+    const expectedType=result.layer==='continuity'?'verify-continuity':'manual-qc';
+    if(result.layer!=='technical'&&task.type!==expectedType)throw new Error(`QC result ${result.id} links to incompatible human task type ${task.type}; expected ${expectedType}.`);
   }
   const duplicateTimelineOrder=duplicateTimelineOrderKey(timeline);
   if(duplicateTimelineOrder)throw new Error(`Duplicate timeline track/order slot: ${duplicateTimelineOrder}`);
@@ -512,6 +519,10 @@ function sanitizeHumanTask(value:unknown,shotIds:Set<string>,assetIds:Set<string
   if(shotId&&!shotIds.has(shotId))throw new Error(`Human task references unknown shot: ${shotId}`);
   const relatedAssetIds=[...new Set(boundedArray(source.relatedAssetIds,'human task asset ids',64).map(item=>safeId(item)).filter(id=>assetIds.has(id)))];
   const relatedRenderOutputIds=[...new Set(boundedArray(source.relatedRenderOutputIds,'human task render output ids',64).map(item=>safeId(item)).filter(id=>outputs.has(id)))];
+  if(shotId){
+    const mismatched=relatedRenderOutputIds.find(id=>outputs.get(id)?.shotId!==shotId);
+    if(mismatched)throw new Error(`Human task for shot ${shotId} cannot reference render output ${mismatched} from shot ${outputs.get(mismatched)?.shotId}.`);
+  }
   return{
     id:safeId(source.id),
     type:enumOrDefault(source.type,new Set(['create-asset','approve-asset','verify-keyframe','verify-previz','verify-continuity','choose-take','manual-qc','route-unsupported'] as const),'manual-qc','human task type'),
