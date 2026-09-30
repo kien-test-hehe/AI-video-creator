@@ -1,5 +1,5 @@
 import type {
-  ContinuityField, FilmProject, QcLayer, RenderOutput, Shot, ShotDependency, ShotState, WorkflowProfile
+  ContinuityField, FilmProject, HumanTask, QcLayer, RenderOutput, Shot, ShotDependency, ShotState, WorkflowProfile
 } from './types';
 import { shotProjectRenderInputKey, shotProjectRenderInputKeyForProfile } from './shot-signature';
 
@@ -9,6 +9,38 @@ export const DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
 const LEGACY_DEFAULT_CONTINUITY_FIELDS:ContinuityField[]=[
   'character','wardrobe','prop','location','lighting','action','dialogue'
 ];
+const FULL_FRAME_CONTINUITY_FIELDS:ContinuityField[]=[
+  'character','wardrobe','prop','location','lighting','action','camera'
+];
+
+export const OBSERVED_STATE_CONFIDENCE_TASK_PREFIX='Observed final state confidence · ';
+export const OBSERVED_STATE_APPROVAL_PREFIX='Observed final state extraction approved:';
+
+export function isObservedStateConfidenceTaskTitle(title:string):boolean{
+  return title.startsWith(OBSERVED_STATE_CONFIDENCE_TASK_PREFIX);
+}
+
+export function isObservedStateApprovalResolution(resolution:string|undefined):boolean{
+  return Boolean(resolution?.startsWith(OBSERVED_STATE_APPROVAL_PREFIX));
+}
+
+export function isApprovedObservedStateReview(
+  task:Pick<HumanTask,'shotId'|'type'|'title'|'status'|'relatedRenderOutputIds'|'resolution'>,
+  shotId:string,
+  title:string,
+  outputId:string
+):boolean{
+  return task.shotId===shotId&&
+    task.type==='manual-qc'&&
+    task.title===title&&
+    task.status==='resolved'&&
+    task.relatedRenderOutputIds.includes(outputId)&&
+    isObservedStateApprovalResolution(task.resolution);
+}
+
+function shouldPropagateContinuityFrame(fields:ReadonlySet<ContinuityField>):boolean{
+  return FULL_FRAME_CONTINUITY_FIELDS.every(field=>fields.has(field));
+}
 
 function legacyStableId(prefix:string,input:string):string{
   let hash=0x811c9dc5;
@@ -231,19 +263,20 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
     if(existing?.status==='current'&&existing.source==='human')continue;
     const startFrameOwnedByExisting=Boolean(existing?.frameAssetId&&existing.source!=='human'&&target.startFrameAssetId===existing.frameAssetId);
     if(target.startFrameAssetId&&!startFrameOwnedByExisting)continue;
-    if(existing?.derivedFromStateId===sourceState.id&&existing.status!=='stale')continue;
-    if(existing&&existing.status!=='stale')invalidateStateCascade(project,[existing.id],`Superseded by propagated state from ${sourceShotId}.`);
 
     const fields=new Set(edge.propagate);
     const selected=selectFields(sourceState,fields);
-    const id=productionFingerprint('state',`${edge.id}:${sourceState.id}:${shotStateContentKey({...sourceState,...selected,shotId:target.id,role:'actual-start',source:'generated',derivedFromStateId:sourceState.id})}`);
+    const frameAssetId=shouldPropagateContinuityFrame(fields)?sourceState.frameAssetId:undefined;
+    const id=productionFingerprint('state',`${edge.id}:${sourceState.id}:${shotStateContentKey({...sourceState,...selected,frameAssetId,shotId:target.id,role:'actual-start',source:'generated',derivedFromStateId:sourceState.id})}`);
+    if(existing?.id===id&&existing.status!=='stale')continue;
+    if(existing&&existing.status!=='stale')invalidateStateCascade(project,[existing.id],`Superseded by propagated state from ${sourceShotId}.`);
     const propagated:ShotState={
       id,
       shotId:target.id,
       role:'actual-start',
       source:'generated',
       status:'unreviewed',
-      frameAssetId:sourceState.frameAssetId,
+      frameAssetId,
       sourceRenderOutputId:sourceState.sourceRenderOutputId,
       derivedFromStateId:sourceState.id,
       ...selected,
@@ -255,7 +288,7 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
     if(duplicate)Object.assign(duplicate,propagated);
     else project.shotStates.push(propagated);
     target.actualStartStateId=id;
-    if(sourceState.frameAssetId)target.startFrameAssetId=sourceState.frameAssetId;
+    if(frameAssetId)target.startFrameAssetId=frameAssetId;
     target.latestRenderId=undefined;
     target.canonicalRenderId=undefined;
     if(['rendered','failed'].includes(target.status))target.status='ready';

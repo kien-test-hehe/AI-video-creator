@@ -3,7 +3,7 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AutomationRunRequest, AutomationStatus, FilmProject, HumanTaskType, QcLayer, RenderOutput, Shot } from '../../shared/types';
-import { canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
+import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
 import { RenderQueueService } from './render-queue';
@@ -244,13 +244,13 @@ export class ProductionRuntimeService extends EventEmitter{
       const frameAssetId=await this.ensureObservedFrameAsset(output,stableFinalFrame);
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
       const draft=await extractObservedStateDraft(this.settings.get(),project,shot,stableFinalFrame);
-      const confidenceReviewTitle=`Observed final state confidence · ${shot.title}`;
-      const confidenceApproved=project.humanTasks.some(task=>task.shotId===shotId&&task.title===confidenceReviewTitle&&task.status==='resolved'&&task.relatedRenderOutputIds.includes(outputId));
+      const confidenceReviewTitle=`${OBSERVED_STATE_CONFIDENCE_TASK_PREFIX}${shot.title}`;
+      const confidenceApproved=project.humanTasks.some(task=>isApprovedObservedStateReview(task,shotId,confidenceReviewTitle,outputId));
       if(draft.confidence<0.6&&!confidenceApproved){
         await this.ensureHumanTask(
           shot,'manual-qc',confidenceReviewTitle,
           `Automatic final-state extraction confidence is ${Math.round(draft.confidence*100)}%, below the 60% auto-propagation threshold.`,
-          'Inspect the extracted final frame and rendered take. Resolve this task to approve the extracted state, or adjust/re-render the shot.',
+          'Inspect the extracted final frame and rendered take. Use the explicit Approve observed state action only if the extracted facts are visibly correct; otherwise dismiss the task and adjust/re-render the shot.',
           [outputId]
         );
         return;
