@@ -20,7 +20,7 @@ import { continuityPredecessorShots, continuityReviewInputKey, directorDraftIncl
 import { latestCurrentPassingVideoTake, latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
-import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineClipUseIssue, timelineExportInputKey, timelineOutputIssue, timelineTakeApprovalInputKey } from '../src/shared/timeline-policy';
+import { capcutHandoffInputKey, capcutReferencedAssetIds, compareTimelineClips, duplicateTimelineOrderKey, timelineClipUseIssue, timelineExportInputKey, timelineOutputIssue, timelineTakeApprovalInputKey } from '../src/shared/timeline-policy';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
@@ -37,7 +37,7 @@ import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { readFileBufferLimited, readJsonFileLimited, stringifyJsonLimited } from '../src/main/services/json-file';
-import { ffmpegConcatFileLine } from '../src/main/services/ffmpeg-service';
+import { buildNormalizeClipArgs, ffmpegConcatFileLine, selectMasterVideoGeometry } from '../src/main/services/ffmpeg-service';
 import { buildRenderPrompt, renderCanSatisfySkipIfRendered, selectPreferredTechnicalVideo } from '../src/main/services/render-queue';
 import { wangpEntrypoint } from '../src/main/services/wangp-runner';
 import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapper';
@@ -55,6 +55,7 @@ import { qcContactFrameFractions, videoFrameExtractionArgs } from '../src/main/s
 import { analyzeImagesWithLocalVision, LocalVisionUnavailableError, parseLocalVisionJsonObject } from '../src/main/services/local-vision-service';
 import { directorModelListContains, videoRouteQualification } from '../src/main/services/workstation-readiness';
 import { effectiveWorkflowCapabilities, workflowCapabilityErrors } from '../src/shared/workflow-capabilities';
+import { prepareCapCutHandoff } from '../src/main/services/capcut-handoff';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
