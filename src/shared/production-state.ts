@@ -42,6 +42,50 @@ function shouldPropagateContinuityFrame(fields:ReadonlySet<ContinuityField>):boo
   return FULL_FRAME_CONTINUITY_FIELDS.every(field=>fields.has(field));
 }
 
+function editorialShotCompare(project:Pick<FilmProject,'scenes'>,a:Shot,b:Shot):number{
+  const sceneA=project.scenes.find(scene=>scene.id===a.sceneId)?.index??0;
+  const sceneB=project.scenes.find(scene=>scene.id===b.sceneId)?.index??0;
+  return sceneA-sceneB||a.index-b.index||a.id.localeCompare(b.id);
+}
+
+export function productionShotOrder(project:Pick<FilmProject,'shots'|'scenes'|'shotDependencies'>):Shot[]{
+  const shots=[...project.shots].sort((a,b)=>editorialShotCompare(project,a,b));
+  const byId=new Map(shots.map(shot=>[shot.id,shot] as const));
+  const indegree=new Map(shots.map(shot=>[shot.id,0] as const));
+  const outgoing=new Map<string,string[]>();
+  for(const edge of project.shotDependencies){
+    if(edge.relation==='parallel'||!byId.has(edge.fromShotId)||!byId.has(edge.toShotId))continue;
+    indegree.set(edge.toShotId,(indegree.get(edge.toShotId)??0)+1);
+    const list=outgoing.get(edge.fromShotId)??[];list.push(edge.toShotId);outgoing.set(edge.fromShotId,list);
+  }
+  const ready=shots.filter(shot=>(indegree.get(shot.id)??0)===0);
+  const result:Shot[]=[];
+  while(ready.length){
+    ready.sort((a,b)=>editorialShotCompare(project,a,b));
+    const shot=ready.shift()!;result.push(shot);
+    for(const targetId of outgoing.get(shot.id)??[]){
+      const next=(indegree.get(targetId)??0)-1;indegree.set(targetId,next);
+      if(next===0){const target=byId.get(targetId);if(target)ready.push(target);}
+    }
+  }
+  if(result.length!==shots.length){
+    const blocked=shots.filter(shot=>(indegree.get(shot.id)??0)>0).map(shot=>shot.id).slice(0,16);
+    throw new Error(`Shot dependency graph contains a cycle involving: ${blocked.join(', ')||'unknown shots'}.`);
+  }
+  return result;
+}
+
+export function assertAcyclicShotDependencies(shots:Shot[],scenes:FilmProject['scenes'],shotDependencies:ShotDependency[]):void{
+  productionShotOrder({shots,scenes,shotDependencies});
+}
+
+export function currentActualStartFrameAssetId(project:Pick<FilmProject,'shotStates'|'assets'>,shot:Shot):string|undefined{
+  if(!shot.actualStartStateId)return undefined;
+  const state=project.shotStates.find(item=>item.id===shot.actualStartStateId&&item.shotId===shot.id&&item.role==='actual-start'&&item.status==='current');
+  if(!state?.frameAssetId||!project.assets.some(asset=>asset.id===state.frameAssetId))return undefined;
+  return state.frameAssetId;
+}
+
 function legacyStableId(prefix:string,input:string):string{
   let hash=0x811c9dc5;
   for(let index=0;index<input.length;index++){
@@ -275,7 +319,7 @@ export function propagateObservedFinalState(project:FilmProject,sourceShotId:str
       shotId:target.id,
       role:'actual-start',
       source:'generated',
-      status:'unreviewed',
+      status:frameAssetId?'current':'unreviewed',
       frameAssetId,
       sourceRenderOutputId:sourceState.sourceRenderOutputId,
       derivedFromStateId:sourceState.id,
