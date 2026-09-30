@@ -7,7 +7,7 @@ import type { AssetKind, FilmProject, ParsedScene, Scene, Shot } from '../../sha
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertPathInside, assertRelativeProjectPath, assertSafeWritePath, isPathInside } from './path-safety';
 import { loadPortableProject, UnsupportedProjectSchemaError } from './project-schema';
 import { preserveTrustedProfileValidation, shotProjectRenderInputKey } from '../../shared/shot-signature';
-import { latestPassingVideoTake } from '../../shared/take-policy';
+import { latestCurrentPassingVideoTake } from '../../shared/take-policy';
 import { readJsonFileLimited, stringifyJsonLimited } from './json-file';
 import { invalidateObservedFinalState, invalidateStateCascade, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, refreshCanonicalRender, shotStateFingerprint } from '../../shared/production-state';
 
@@ -353,7 +353,7 @@ export class ProjectService {
       if(shot?.canonicalRenderId===outputId)shot.canonicalRenderId=undefined;
       if(shot?.observedFinalStateId&&project.shotStates.find(state=>state.id===shot.observedFinalStateId)?.status==='stale')shot.observedFinalStateId=undefined;
       if(shot?.latestRenderId===outputId){
-        const fallback=latestPassingVideoTake(project.renderOutputs.filter(item=>item.shotId===shot.id));
+        const fallback=latestCurrentPassingVideoTake(project,shot.id);
         shot.latestRenderId=fallback?.id;
         if(!fallback&&shot.status==='rendered')shot.status='ready';
       }
