@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { FilmProject } from '../../shared/types';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath, ensureSafeDirectory } from './path-safety';
-import { compareTimelineClips, timelineClipUseIssue } from '../../shared/timeline-policy';
+import { capcutReferencedAssetIds, compareTimelineClips, timelineClipUseIssue } from '../../shared/timeline-policy';
 
 export interface CapCutHandoffResult{directory:string;manifestPath:string;taskPath:string;prompt:string}
 
@@ -28,9 +28,14 @@ export async function prepareCapCutHandoff(project:FilmProject):Promise<CapCutHa
   }
 
   const assets=[];
-  for(const asset of project.assets){
+  for(const assetId of capcutReferencedAssetIds(project)){
+    const asset=project.assets.find(item=>item.id===assetId);
+    if(!asset)throw new Error(`Timeline references a missing CapCut support asset: ${assetId}.`);
     const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);
-    assets.push({id:asset.id,kind:asset.kind,name:asset.name,path,projectRelativePath:relative(project.rootPath,path),notes:asset.notes,tags:asset.tags});
+    assets.push({
+      id:asset.id,kind:asset.kind,name:asset.name,path,projectRelativePath:relative(project.rootPath,path),
+      notes:asset.notes,tags:asset.tags,continuity:asset.continuity??null
+    });
   }
 
   const stamp=new Date().toISOString().replace(/[:.]/g,'-'),handoffRoot=await ensureSafeDirectory(project.rootPath,join(project.rootPath,'handoff','capcut'),'CapCut handoff root');
