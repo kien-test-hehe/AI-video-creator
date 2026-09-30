@@ -1,5 +1,5 @@
 import type {
-  ContinuityField, FilmProject, QcLayer, RenderOutput, Shot, ShotDependency, ShotState, WorkflowProfile
+  ContinuityField, FilmProject, HumanTask, QcLayer, RenderOutput, Shot, ShotDependency, ShotState, WorkflowProfile
 } from './types';
 import { shotProjectRenderInputKey, shotProjectRenderInputKeyForProfile } from './shot-signature';
 
@@ -22,6 +22,20 @@ export function isObservedStateConfidenceTaskTitle(title:string):boolean{
 
 export function isObservedStateApprovalResolution(resolution:string|undefined):boolean{
   return Boolean(resolution?.startsWith(OBSERVED_STATE_APPROVAL_PREFIX));
+}
+
+export function isApprovedObservedStateReview(
+  task:Pick<HumanTask,'shotId'|'type'|'title'|'status'|'relatedRenderOutputIds'|'resolution'>,
+  shotId:string,
+  title:string,
+  outputId:string
+):boolean{
+  return task.shotId===shotId&&
+    task.type==='manual-qc'&&
+    task.title===title&&
+    task.status==='resolved'&&
+    task.relatedRenderOutputIds.includes(outputId)&&
+    isObservedStateApprovalResolution(task.resolution);
 }
 
 function shouldPropagateContinuityFrame(fields:ReadonlySet<ContinuityField>):boolean{
