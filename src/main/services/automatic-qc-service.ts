@@ -98,7 +98,7 @@ export async function evaluateSemanticQc(machine:AppMachineSettings,project:Film
         status:'human-verify',
         issues:[
           ...evaluation.issues,
-          {code:'AUDIO_SEMANTICS_UNVERIFIED',severity:'warning',message:'The shot contains dialogue/audio intent, but image-only semantic QC cannot verify spoken content, lip-sync, timing, or audio quality.'}
+          {code:'AUDIO_SEMANTICS_UNVERIFIED',severity:'warning' as const,message:'The shot contains dialogue/audio intent, but image-only semantic QC cannot verify spoken content, lip-sync, timing, or audio quality.'}
         ].slice(0,32),
         note:evaluation.note
       };
