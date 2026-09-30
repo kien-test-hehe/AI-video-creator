@@ -11,7 +11,13 @@ export interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolea
 
 export function selectMasterVideoGeometry(infos:ProbeInfo[],defaultFps:number):ProbeInfo{
   if(!infos.length)throw new Error('Cannot select master video geometry without source probes.');
-  const ranked=[...infos].sort((a,b)=>(b.width*b.height)-(a.width*a.height)||b.width-a.width||b.height-a.height||b.fps-a.fps);
+  const orientation=(info:ProbeInfo)=>info.width===info.height?'square':info.width>info.height?'landscape':'portrait';
+  const counts=new Map<string,number>();
+  for(const info of infos)counts.set(orientation(info),(counts.get(orientation(info))??0)+1);
+  const dominant=[...counts.entries()]
+    .sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))[0][0];
+  const pool=infos.filter(info=>orientation(info)===dominant);
+  const ranked=[...pool].sort((a,b)=>(b.width*b.height)-(a.width*a.height)||b.width-a.width||b.height-a.height||b.fps-a.fps);
   const selected=ranked[0];
   return{...selected,fps:Math.max(1,defaultFps||selected.fps)};
 }
