@@ -114,9 +114,13 @@ export function Storyboard(){
 
   return <Page title="Storyboard" subtitle="Drag shots to reorder them. Drag characters, locations, visual references, props, keyframes, audio or video from Assets directly onto a shot.">
     {project.scenes.length===0?<Empty>Parse your screenplay first.</Empty>:<div className="scene-stack">{project.scenes.map(scene=>{
-      const shots=project.shots.filter(s=>s.sceneId===scene.id).sort((a,b)=>a.index-b.index);
-      return <Card key={scene.id} kicker={'SCENE '+scene.index} title={scene.heading} actions={<div className="row"><button className="ghost" disabled={Boolean(planningSceneId)} onClick={()=>aiPlan(scene.id)}>{planningSceneId===scene.id?'Planning…':'AI Director'}</button><button className="ghost" onClick={()=>addShot(scene.id)}>+ Shot</button></div>}>
+      const shots=project.shots.filter(s=>s.sceneId===scene.id).sort((a,b)=>a.index-b.index),proposal=directorProposals[scene.id];
+      return <Card key={scene.id} kicker={'SCENE '+scene.index} title={scene.heading} actions={<div className="row"><button className="ghost" disabled={Boolean(planningSceneId)} onClick={()=>aiPlan(scene.id)}>{planningSceneId===scene.id?'Planning…':proposal?'Regenerate proposal':'AI Director'}</button><button className="ghost" onClick={()=>addShot(scene.id)}>+ Shot</button></div>}>
         <p className="scene-body">{scene.body}</p>
+        {proposal&&<div className="director-proposal">
+          <div className="row spread"><div><strong>AI proposal · {proposal.drafts.length} shot{proposal.drafts.length===1?'':'s'}</strong><small>Nothing has been added to the project yet.</small></div><div className="row"><button className="ghost" onClick={()=>dismissDirectorProposal(scene.id)}>Dismiss</button><button onClick={()=>applyDirectorProposal(scene.id)}>Apply proposal</button></div></div>
+          <div className="shot-strip">{proposal.drafts.map((draft,index)=><article className="shot-tile" key={index}><span>{draft.title||('Proposed shot '+(index+1))}</span><small>{draft.preferredModel||'auto route'} · {draft.quality}</small><p>{draft.prompt.slice(0,280)}</p><div className="shot-ref-pills"><Pill>C{draft.characterAssetIds?.length??0}</Pill><Pill>{draft.locationAssetId?'LOC':'NO LOC'}</Pill><Pill>REF{draft.referenceAssetIds?.length??0}</Pill><Pill>P{draft.propAssetIds?.length??0}</Pill></div></article>)}</div>
+        </div>}
         <div className="shot-strip">{shots.map(shot=><button className="shot-tile shot-drop-target" key={shot.id} draggable onDragStart={e=>startShotDrag(e,shot.id)} onDragOver={e=>e.preventDefault()} onDrop={e=>dropOnShot(e,shot.id)} onClick={()=>{selectShot(shot.id);setView('shots');}}>
           <span>{shot.title}</span><small>{shot.generation.modelFamily}</small>
           <div className="shot-ref-pills"><Pill>C{shot.characterAssetIds.length}</Pill><Pill>{shot.locationAssetId?'LOC':'NO LOC'}</Pill><Pill>REF{shot.referenceAssetIds?.length??0}</Pill><Pill>P{shot.propAssetIds.length}</Pill></div>
