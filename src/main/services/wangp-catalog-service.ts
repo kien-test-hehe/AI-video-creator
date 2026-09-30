@@ -91,7 +91,7 @@ function invalidateChangedRoutes(project:FilmProject,before:Map<string,string>):
   }
 }
 
-function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:GenerationMode}>{
+export function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:GenerationMode}>{
   const video=catalog.filter(e=>e.mainOutput.includes('video')||e.outputs.includes('video')).sort((a,b)=>a.modelType.localeCompare(b.modelType));
   const image=catalog.filter(e=>e.mainOutput.includes('image')||e.outputs.includes('image')).sort((a,b)=>a.modelType.localeCompare(b.modelType));
   const namedGeneral=maxBy(video,e=>score(e,[['ltx2_25_22B_distilled_nvfp4',100],['ltx2_25',70],['LTX-2.5',60],['LTX 2.5',60]]));
