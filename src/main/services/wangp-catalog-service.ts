@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { app } from 'electron';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { AppMachineSettings, FilmProject, ModelFamily, WanGpCatalogEntry, WorkflowProfile } from '../../shared/types';
+import type { AppMachineSettings, FilmProject, GenerationMode, ModelFamily, WanGpCatalogEntry, WorkflowProfile } from '../../shared/types';
 import { AppSettingsService } from './app-settings-service';
 import { assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { ProjectService } from './project-service';
@@ -94,14 +94,16 @@ export function invalidateChangedRoutes(project:FilmProject,before:Map<string,st
   }
 }
 
-function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:'t2v'|'i2v'|'t2i'|'i2i'}>{
-  const video=catalog.filter(e=>e.mainOutput.includes('video')||e.outputs.includes('video'));
-  const image=catalog.filter(e=>e.mainOutput.includes('image')||e.outputs.includes('image'));
-  const general=maxBy(video,e=>score(e,[['ltx2_25_22B_distilled_nvfp4',100],['ltx2_25',70],['LTX-2.5',60],['LTX 2.5',60]]));
+export function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:GenerationMode}>{
+  const video=catalog.filter(e=>e.mainOutput.includes('video')||e.outputs.includes('video')).sort((a,b)=>a.modelType.localeCompare(b.modelType));
+  const image=catalog.filter(e=>e.mainOutput.includes('image')||e.outputs.includes('image')).sort((a,b)=>a.modelType.localeCompare(b.modelType));
+  const namedGeneral=maxBy(video,e=>score(e,[['ltx2_25_22B_distilled_nvfp4',100],['ltx2_25',70],['LTX-2.5',60],['LTX 2.5',60]]));
+  const general=namedGeneral??video.find(entry=>preferredVideoMode(entry)!=='t2v')??video[0];
   const hero=maxBy(video,e=>score(e,[['hunyuan_1_5',90],['Hunyuan Video 1.5',80],['HunyuanVideo-1.5',80]]));
   const motion=maxBy(video,e=>score(e,[['Wan2.2 TextImage2video 5B',100],['ti2v_2_2',95],['Wan2.2',50],['5B',20]]));
-  const keyframe=maxBy(image,e=>score(e,[['Qwen Image 2.1',100],['qwen_image_2',95],['Qwen Image Edit Plus',90],['Krea 2 Identity',85],['Krea 2',70],['Z-Image',60]]));
-  const out:Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:'t2v'|'i2v'|'t2i'|'i2i'}>=[];
+  const namedKeyframe=maxBy(image,e=>score(e,[['Qwen Image 2.1',100],['qwen_image_2',95],['Qwen Image Edit Plus',90],['Krea 2 Identity',85],['Krea 2',70],['Z-Image',60]]));
+  const keyframe=namedKeyframe??image[0];
+  const out:Array<{entry:WanGpCatalogEntry;role:'general'|'hero'|'motion'|'keyframe';purpose:'video'|'image';mode:GenerationMode}>=[];
   if(general)out.push({entry:general,role:'general',purpose:'video',mode:preferredVideoMode(general)});
   if(hero&&hero.modelType!==general?.modelType)out.push({entry:hero,role:'hero',purpose:'video',mode:preferredVideoMode(hero)});
   if(motion&&motion.modelType!==general?.modelType&&motion.modelType!==hero?.modelType)out.push({entry:motion,role:'motion',purpose:'video',mode:preferredVideoMode(motion)});
@@ -109,7 +111,14 @@ function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpCatalogE
   return out;
 }
 
-function preferredVideoMode(entry:WanGpCatalogEntry):'t2v'|'i2v'{if(entry.capabilities?.image_to_video)return'i2v';return't2v';}
+export function preferredVideoMode(entry:WanGpCatalogEntry):Extract<GenerationMode,'t2v'|'i2v'|'flf2v'|'ia2v'|'v2v'>{
+  const caps=entry.capabilities??{},inputs=new Set(entry.inputs.map(value=>value.toLowerCase()));
+  if(caps.first_last_frame_to_video||caps.first_last_frame||inputs.has('end_image'))return'flf2v';
+  if(caps.audio_to_video||caps.image_audio_to_video||inputs.has('audio'))return'ia2v';
+  if(caps.video_to_video||inputs.has('video'))return'v2v';
+  if(caps.image_to_video||inputs.has('image'))return'i2v';
+  return't2v';
+}
 function preferredImageMode(entry:WanGpCatalogEntry):'t2i'|'i2i'{if(entry.capabilities?.text_to_image)return't2i';if(entry.capabilities?.image_to_image)return'i2i';return entry.inputs.includes('image')?'i2i':'t2i';}
 
 function score(entry:WanGpCatalogEntry,rules:Array<[string,number]>):number{
