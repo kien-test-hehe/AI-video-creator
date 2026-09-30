@@ -140,6 +140,13 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
       const stateId=shot[key],state=stateId?stateById.get(stateId):undefined;
       if(stateId&&(!state||state.shotId!==shot.id||state.role!==role))throw new Error(`Shot ${shot.id} ${String(key)} references an invalid ${role} state: ${stateId}`);
     }
+    const actualStart=shot.actualStartStateId?stateById.get(shot.actualStartStateId):undefined;
+    if(actualStart&&actualStart.source!=='human'&&actualStart.status!=='current'&&actualStart.frameAssetId&&shot.startFrameAssetId===actualStart.frameAssetId){
+      shot.startFrameAssetId=undefined;
+      if(shot.status==='rendered')shot.status='ready';
+      shot.latestRenderId=undefined;
+      shot.canonicalRenderId=undefined;
+    }
   }
 
   const jobShotById=new Map(renderJobs.map(job=>[job.id,job.shotId] as const)),outputsByJobShot=new Map<string,RenderOutput[]>();
