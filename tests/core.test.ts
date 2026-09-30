@@ -972,7 +972,7 @@ describe('technical QC structural invariants',()=>{
   it('fails structural QC when duration is unmeasurable or requested audio is absent',()=>{
     const missing=technicalQcStructuralIssues(shot,{video:{width:1280,height:704,fps:24},hasAudio:false});
     expect(missing).toContain('Video duration could not be measured.');
-    expect(missing).toContain('Shot requested audio but output has no audio stream.');
+    expect(missing).toContain('Shot expects dialogue/audio but output has no audio stream.');
   });
   it('detects a volumedetect -inf stream as silent',()=>{
     expect(parseVolumeDetectPeak('max_volume: -inf dB')).toEqual({silent:true});
@@ -2197,10 +2197,10 @@ describe('observed-state truth hardening',()=>{
     expect(draft.environment.lighting).toBe('warm');
   });
 
-  it('records a location/action only when the VLM explicitly returns observed values',()=>{
+  it('records explicit location evidence but does not infer temporal action from one still',()=>{
     const draft=observedStateDraftFromVisionResult(project,shot,{environment:{locationAssetId:'loc-1'},actionPhase:'door visibly open',confidence:.82,characters:[],props:[]});
     expect(draft.environment.locationAssetId).toBe('loc-1');
-    expect(draft.actionPhase).toBe('door visibly open');
+    expect(draft.actionPhase).toBe('');
     expect(draft.confidence).toBe(.82);
     const wrong=observedStateDraftFromVisionResult(project,shot,{environment:{locationAssetId:'unknown-location'},actionPhase:'',confidence:.5,characters:[],props:[]});
     expect(wrong.environment.locationAssetId).toBeUndefined();
