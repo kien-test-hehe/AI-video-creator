@@ -70,6 +70,12 @@ describe('Compact Studio source contract',()=>{
     expect(compact).toMatch(/Production timeline/);
     expect(compact).toMatch(/Generate shot/);
     expect(compact).toMatch(/Human Review/);
+    expect(compact).toMatch(/jumpPreviewStart/);
+    expect(compact).toMatch(/stepPreview\(-1\)/);
+    expect(compact).toMatch(/togglePreviewPlayback/);
+    expect(compact).toMatch(/setPreviewOutputId\(output\.id\)/);
+    expect(compact).toMatch(/Plan \/ revise shots/);
+    expect(compact).not.toMatch(/>Open proposal<\/button>/);
     expect(shell).toMatch(/studio-shell/);
     expect(styles).toMatch(/\.workspace\.studio-mode>\.topbar\{display:none\}/);
   });
