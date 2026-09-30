@@ -27,15 +27,18 @@ export function effectiveWorkflowCapabilities(profile:Pick<WorkflowProfile,'bind
   const keys=new Set(profile.bindings.map(binding=>binding.key));
   const declared=profile.capabilities??{};
   const discreteGeneric=GENERIC_KEYS.filter(key=>keys.has(key)).length;
-  const inferredGeneric=keys.has('referenceImages')?Math.max(4,discreteGeneric):discreteGeneric;
-  const declaredGeneric=declared.maxGenericReferences;
+  const hasGenericArray=keys.has('referenceImages');
+  const declaredGeneric=Number.isInteger(declared.maxGenericReferences)&&declared.maxGenericReferences!>=0?Math.min(64,declared.maxGenericReferences!):undefined;
+  const maxGenericReferences=hasGenericArray
+    ?(declaredGeneric??Math.max(4,discreteGeneric))
+    :Math.min(declaredGeneric??discreteGeneric,discreteGeneric);
   return{
-    maxGenericReferences:Number.isInteger(declaredGeneric)&&declaredGeneric!>=0?Math.min(64,declaredGeneric!):inferredGeneric,
-    supportsStartImage:declared.supportsStartImage??keys.has('startImage'),
-    supportsEndImage:declared.supportsEndImage??keys.has('endImage'),
-    supportsInputAudio:declared.supportsInputAudio??keys.has('inputAudio'),
-    supportsInputVideo:declared.supportsInputVideo??keys.has('inputVideo'),
-    supportsGeneratedAudio:declared.supportsGeneratedAudio??keys.has('includeAudio')
+    maxGenericReferences,
+    supportsStartImage:Boolean(keys.has('startImage')&&(declared.supportsStartImage??true)),
+    supportsEndImage:Boolean(keys.has('endImage')&&(declared.supportsEndImage??true)),
+    supportsInputAudio:Boolean(keys.has('inputAudio')&&(declared.supportsInputAudio??true)),
+    supportsInputVideo:Boolean(keys.has('inputVideo')&&(declared.supportsInputVideo??true)),
+    supportsGeneratedAudio:Boolean(keys.has('includeAudio')&&(declared.supportsGeneratedAudio??true))
   };
 }
 
