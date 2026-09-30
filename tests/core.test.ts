@@ -2207,4 +2207,20 @@ describe('field-scoped continuity frame propagation',()=>{
     expect(state.frameAssetId).toBe('frame-a');
     expect(target.startFrameAssetId).toBe('frame-a');
   });
+
+  it('removes a previously propagated frame when the dependency is narrowed later',()=>{
+    const project=makeProject([...DEFAULT_CONTINUITY_FIELDS]);
+    propagateObservedFinalState(project,'a');
+    const target=project.shots.find(shot=>shot.id==='b')!;
+    const firstStateId=target.actualStartStateId!;
+    expect(target.startFrameAssetId).toBe('frame-a');
+    project.shotDependencies[0].propagate=['lighting'];
+    propagateObservedFinalState(project,'a');
+    const nextState=project.shotStates.find(item=>item.id===target.actualStartStateId)!;
+    expect(target.actualStartStateId).not.toBe(firstStateId);
+    expect(project.shotStates.find(item=>item.id===firstStateId)?.status).toBe('stale');
+    expect(nextState.environment.lighting).toBe('warm');
+    expect(nextState.frameAssetId).toBeUndefined();
+    expect(target.startFrameAssetId).toBeUndefined();
+  });
 });
