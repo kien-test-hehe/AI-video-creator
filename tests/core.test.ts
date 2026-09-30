@@ -1259,7 +1259,7 @@ describe('render admission serialization',()=>{
 });
 describe('main-process workflow routing authority',()=>{
   const shot:Shot={id:'route-shot',sceneId:'scene',index:1,title:'Route',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}};
-  const profile=(id:string,status:'valid'|'invalid'|'unvalidated'):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:`/tmp/${id}.json`,workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:status}});
+  const profile=(id:string,status:'valid'|'invalid'|'unvalidated'):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:`/tmp/${id}.json`,workflowFormat:'wangp-settings',bindings:[{key:'startImage',jsonPath:'image'}],enabled:true,validation:{structuralStatus:status}});
   it('refuses explicit and automatic production routes unless validation is valid',()=>{
     const invalid=profile('invalid','invalid'),unvalidated=profile('unvalidated','unvalidated'),valid=profile('valid','valid');
     const explicit=structuredClone(shot);explicit.generation.workflowProfileId='unvalidated';
@@ -3071,8 +3071,8 @@ describe('final missing hardening regressions',()=>{
   it('routes among equal model/mode profiles deterministically using qualification timestamp then id',()=>{
     const shot=makeShot();shot.generation.modelFamily='custom';
     const project=makeProject();project.settings.workflowProfiles=[
-      {id:'b',runtime:'wangp',purpose:'video',name:'B',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/b.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-01T00:00:00.000Z'}},
-      {id:'a',runtime:'wangp',purpose:'video',name:'A',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/a.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-02T00:00:00.000Z'}}
+      {id:'b',runtime:'wangp',purpose:'video',name:'B',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/b.json',workflowFormat:'wangp-settings',bindings:[{key:'startImage',jsonPath:'image'}],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-01T00:00:00.000Z'}},
+      {id:'a',runtime:'wangp',purpose:'video',name:'A',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/a.json',workflowFormat:'wangp-settings',bindings:[{key:'startImage',jsonPath:'image'}],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-02T00:00:00.000Z'}}
     ];
     expect(routeWorkflow(project,shot).id).toBe('a');
     project.settings.workflowProfiles.reverse();
@@ -3309,7 +3309,7 @@ describe('final audit integration hardening',()=>{
   it('selects a Director proposal route only when that draft can actually be bound',()=>{
     const draft={title:'Draft',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',quality:'balanced' as const,preferredModel:'ltx-2.5-fast' as const,characterAssetIds:['c1','c2','c3'],locationAssetId:'loc',propAssetIds:['p1','p2'],referenceAssetIds:['r1','r2']};
     const incompatible=profile('a-incompatible',[{key:'startImage',jsonPath:'image'}],{maxGenericReferences:16});
-    const compatible=profile('b-compatible',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}],{maxGenericReferences:16});
+    const compatible=profile('b-compatible',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'},{key:'includeAudio',jsonPath:'generate_audio'}],{maxGenericReferences:16,supportsGeneratedAudio:true});
     const project={settings:{workflowProfiles:[incompatible,compatible]}} as unknown as FilmProject;
     expect(validatedVideoRouteForDirectorDraft(project,'ltx-2.5-fast',draft)?.id).toBe('b-compatible');
   });
