@@ -16,7 +16,7 @@ import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
-import { continuityPredecessorShots, continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
+import { continuityPredecessorShots, continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForDirectorDraft, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestCurrentPassingVideoTake, latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
@@ -3298,6 +3298,20 @@ describe('final audit integration hardening',()=>{
     const project={settings:{workflowProfiles:[incompatible,compatible]}} as unknown as FilmProject;
     expect(routeWorkflow(project,shot).id).toBe('older-compatible');
     expect(()=>routeWorkflow(project,shot,'newer-incompatible')).toThrow(/start-image|reference capacity/i);
+  });
+
+  it('never invents generic-reference capacity when no generic binding exists',()=>{
+    const profileWithoutTransport=profile('metadata-only',[{key:'startImage',jsonPath:'image'}],{maxGenericReferences:16});
+    expect(effectiveWorkflowCapabilities(profileWithoutTransport).maxGenericReferences).toBe(0);
+    expect(workflowCapabilityErrors(profileWithoutTransport,shotBase()).join(' ')).toMatch(/reference capacity/i);
+  });
+
+  it('selects a Director proposal route only when that draft can actually be bound',()=>{
+    const draft={title:'Draft',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',quality:'balanced' as const,preferredModel:'ltx-2.5-fast' as const,characterAssetIds:['c1','c2','c3'],locationAssetId:'loc',propAssetIds:['p1','p2'],referenceAssetIds:['r1','r2']};
+    const incompatible=profile('a-incompatible',[{key:'startImage',jsonPath:'image'}],{maxGenericReferences:16});
+    const compatible=profile('b-compatible',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}],{maxGenericReferences:16});
+    const project={settings:{workflowProfiles:[incompatible,compatible]}} as unknown as FilmProject;
+    expect(validatedVideoRouteForDirectorDraft(project,'ltx-2.5-fast',draft)?.id).toBe('b-compatible');
   });
 
   it('treats workflow capability edits as execution/provenance changes',()=>{
