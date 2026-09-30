@@ -3482,6 +3482,23 @@ describe('final Director/profile consistency',()=>{
     expect(resolveDirectorProposalRoutes(project,[good])).toHaveLength(1);
   });
 
+  it('invalidates a staged Director proposal when route capability metadata changes',()=>{
+    const project=projectBase(),scene=project.scenes[0];
+    project.settings.workflowProfiles=[
+      profile('route','wan-2.2-5b',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}],{supportsStartImage:true,maxGenericReferences:4})
+    ];
+    const before=sceneDirectorInputKey(project,scene);
+    project.settings.workflowProfiles[0].capabilities={supportsStartImage:true,maxGenericReferences:8};
+    expect(sceneDirectorInputKey(project,scene)).not.toBe(before);
+  });
+
+  it('keeps Storyboard proposal application all-or-nothing at the UI mutation boundary',async()=>{
+    const source=await readFile(join(process.cwd(),'src','renderer','src','views','Storyboard.tsx'),'utf8');
+    expect(source).toMatch(/resolveDirectorProposalRoutes\(current,proposal\.drafts\)/);
+    expect(source).toMatch(/const resolved=resolveDirectorProposalRoutes\(p,proposal\.drafts\)/);
+    expect(source).not.toMatch(/if\(!validatedModel\|\|!route\)continue/);
+  });
+
   it('makes structured asset continuity part of Director planning and review provenance',()=>{
     const project=projectBase(),shot=project.shots[0],scene=project.scenes[0];
     const asset:Asset={
