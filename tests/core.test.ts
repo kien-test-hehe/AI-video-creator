@@ -2981,7 +2981,7 @@ describe('final missing hardening regressions',()=>{
 
   it('routes all extra characters and props into generic reference arrays without silently dropping them',()=>{
     const shot=makeShot();shot.characterAssetIds=['c1','c2','c3','c4','c5','c6'];shot.propAssetIds=['p1','p2','p3'];shot.locationAssetId='loc';shot.referenceAssetIds=['r1','r2'];
-    const profile={id:'wf',runtime:'comfyui',purpose:'video',name:'WF',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/wf.json',workflowFormat:'api',bindings:[{key:'characterImage1',selector:{nodeId:'1'},input:'a'},{key:'propImage1',selector:{nodeId:'2'},input:'b'},{key:'referenceImages',selector:{nodeId:'3'},input:'refs'}],enabled:true} as WorkflowProfile;
+    const profile={id:'wf',runtime:'comfyui',purpose:'video',name:'WF',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/wf.json',workflowFormat:'api',bindings:[{key:'characterImage1',selector:{nodeId:'1'},input:'a'},{key:'propImage1',selector:{nodeId:'2'},input:'b'},{key:'referenceImages',selector:{nodeId:'3'},input:'refs'}],capabilities:{maxGenericReferences:16},enabled:true} as WorkflowProfile;
     const plan=planShotReferences(shot,profile);
     expect(plan.characterIds[0]).toBe('c1');
     expect(plan.propIds[0]).toBe('p1');
@@ -3071,8 +3071,8 @@ describe('final missing hardening regressions',()=>{
   it('routes among equal model/mode profiles deterministically using qualification timestamp then id',()=>{
     const shot=makeShot();shot.generation.modelFamily='custom';
     const project=makeProject();project.settings.workflowProfiles=[
-      {id:'b',runtime:'wangp',purpose:'video',name:'B',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/b.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-01T00:00:00.000Z'}},
-      {id:'a',runtime:'wangp',purpose:'video',name:'A',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/a.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-02T00:00:00.000Z'}}
+      {id:'b',runtime:'wangp',purpose:'video',name:'B',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/b.json',workflowFormat:'wangp-settings',bindings:[{key:'startImage',jsonPath:'image'}],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-01T00:00:00.000Z'}},
+      {id:'a',runtime:'wangp',purpose:'video',name:'A',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/a.json',workflowFormat:'wangp-settings',bindings:[{key:'startImage',jsonPath:'image'}],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-02T00:00:00.000Z'}}
     ];
     expect(routeWorkflow(project,shot).id).toBe('a');
     project.settings.workflowProfiles.reverse();
