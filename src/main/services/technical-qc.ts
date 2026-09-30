@@ -13,8 +13,8 @@ export async function technicalQcVideo(machine:AppMachineSettings,path:string,sh
 
   try{
     const visual=await detectVisualProblems(machine.ffmpeg.path,path);
-    if(visual.black)warnings.push('Black segment ≥0.5s detected; verify that the blackout/fade is intentional.');
-    if(visual.freeze)warnings.push('Frozen segment ≥2s detected; verify that the held frame is intentional.');
+    if(visual.black)issues.push('Black segment ≥0.5s detected. CineForge cannot assume the blackout/fade is intentional; approve it through Human Review or regenerate the take.');
+    if(visual.freeze)issues.push('Frozen segment ≥2s detected. CineForge cannot assume the held frame is intentional; approve it through Human Review or regenerate the take.');
   }catch(error){issues.push(`Visual QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
   let audioPeakDb:number|undefined,audioSilent=false;
   if(probe.hasAudio){
@@ -34,7 +34,7 @@ export function technicalQcStructuralIssues(
   if(probe.durationSec==null)issues.push('Video duration could not be measured.');
   else{
     const expected=shot.generation.frames/Math.max(1,shot.generation.fps);
-    if(Math.abs(probe.durationSec-expected)>Math.max(0.75,expected*0.2))issues.push(`Duration ${probe.durationSec.toFixed(2)}s differs materially from expected ${expected.toFixed(2)}s.`);
+    if(Math.abs(probe.durationSec-expected)>Math.max(0.35,expected*0.1))issues.push(`Duration ${probe.durationSec.toFixed(2)}s differs materially from expected ${expected.toFixed(2)}s.`);
   }
   if(probe.video){
     if(probe.video.width!==shot.generation.width||probe.video.height!==shot.generation.height)issues.push(`Resolution is ${probe.video.width}×${probe.video.height}; expected ${shot.generation.width}×${shot.generation.height}.`);
