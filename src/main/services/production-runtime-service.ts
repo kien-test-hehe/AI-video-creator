@@ -380,7 +380,8 @@ export class ProductionRuntimeService extends EventEmitter{
     project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
 
     if(requiresHumanContinuityMerge(project,shot.id)){
-      const actual=shot.actualStartStateId?project.shotStates.find(state=>state.id===shot.actualStartStateId):undefined;
+      const actualStartStateId=shot.actualStartStateId;
+      const actual=actualStartStateId?project.shotStates.find(state=>state.id===actualStartStateId):undefined;
       const humanResolved=actual?.status==='current'&&actual.source==='human';
       if(!humanResolved){
         if(actual&&actual.source!=='human'&&actual.status!=='stale'){
