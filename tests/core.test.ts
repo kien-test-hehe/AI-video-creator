@@ -7,7 +7,7 @@ import { chooseModelForShot } from '../src/shared/routing';
 import { MODEL_DEFAULTS } from '../src/shared/defaults';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
-import { directorText } from '../src/main/services/director-service';
+import { boundedDirectorAssetIds, directorText } from '../src/main/services/director-service';
 import { parseAudioProblemMetrics, parseVisualProblemDurations, parseVolumeDetectPeak, technicalAudioFindings, technicalQcStructuralIssues, technicalQcVisualFindings } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
@@ -30,7 +30,7 @@ import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, record
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe, keyframePrompt } from '../src/main/services/keyframe-service';
-import { invalidateChangedRoutes, pickRecommended, preferredVideoMode, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
+import { invalidateChangedRoutes, pickRecommended, preferredGeneralVideoMode, preferredVideoMode, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
@@ -52,7 +52,7 @@ import { AutomationJournal } from '../src/main/services/automation-journal';
 import { assertExternalDependenciesReady, automationTaskDisposition, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
 import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../src/shared/retry-policy';
 import { qcContactFrameFractions, videoFrameExtractionArgs } from '../src/main/services/media-analysis';
-import { analyzeImagesWithLocalVision, parseLocalVisionJsonObject } from '../src/main/services/local-vision-service';
+import { analyzeImagesWithLocalVision, LocalVisionUnavailableError, parseLocalVisionJsonObject } from '../src/main/services/local-vision-service';
 import { directorModelListContains, videoRouteQualification } from '../src/main/services/workstation-readiness';
 
 const api: ApiWorkflow = {
@@ -2984,7 +2984,7 @@ describe('final missing hardening regressions',()=>{
     const plan=planShotReferences(shot,profile);
     expect(plan.characterIds[0]).toBe('c1');
     expect(plan.propIds[0]).toBe('p1');
-    expect(plan.genericCapacity).toBe(16);
+    expect(plan.genericCapacity).toBe(plan.genericDemand);
     expect(plan.genericIds).toEqual(expect.arrayContaining(['c2','c3','c4','c5','c6','loc','p2','p3','r1','r2']));
     expect(plan.unservedIds).toEqual([]);
   });
@@ -3178,5 +3178,77 @@ describe('final QC/runtime hardening',()=>{
     const after=videoRouteQualification(project);
     expect(after.level).toBe('ready');
     expect(after.detail).toMatch(/not creative\/semantic production quality/i);
+  });
+});
+
+
+describe('final reference/routing correctness hardening',()=>{
+  it('fails VLM HTTP/protocol and repeated malformed JSON responses into the unavailable path',async()=>{
+    const machine={director:{baseUrl:'http://127.0.0.1:11434/v1',model:'qwen3-vl:4b',temperature:.2}} as AppMachineSettings;
+    const root=await mkdtemp(join(tmpdir(),'cineforge-vlm-failsafe-')),image=join(root,'frame.jpg');
+    await writeFile(image,Buffer.from([0xff,0xd8,0xff,0xd9]));
+    const original=globalThis.fetch;
+    try{
+      (globalThis as any).fetch=vi.fn(async()=>new Response('backend exploded',{status:500}));
+      await expect(analyzeImagesWithLocalVision(machine,'Return JSON.',[image])).rejects.toBeInstanceOf(LocalVisionUnavailableError);
+
+      (globalThis as any).fetch=vi.fn(async()=>new Response('not-json',{status:200,headers:{'content-type':'application/json'}}));
+      await expect(analyzeImagesWithLocalVision(machine,'Return JSON.',[image])).rejects.toBeInstanceOf(LocalVisionUnavailableError);
+
+      let calls=0;
+      (globalThis as any).fetch=vi.fn(async()=>{
+        calls+=1;
+        return new Response(JSON.stringify({choices:[{message:{content:'{"status":"pass"'}}]}),{status:200,headers:{'content-type':'application/json'}});
+      });
+      await expect(analyzeImagesWithLocalVision(machine,'Return JSON.',[image])).rejects.toBeInstanceOf(LocalVisionUnavailableError);
+      expect(calls).toBe(2);
+    }finally{(globalThis as any).fetch=original;await rm(root,{recursive:true,force:true});}
+  });
+
+  it('preserves Director asset ids up to the project per-role safety limit',()=>{
+    const allowed=new Set(Array.from({length:20},(_,index)=>'asset-'+index));
+    const raw=[...allowed,'asset-1','unknown'];
+    const result=boundedDirectorAssetIds(raw,allowed);
+    expect(result).toHaveLength(16);
+    expect(new Set(result).size).toBe(16);
+    expect(result).not.toContain('unknown');
+  });
+
+  it('keeps Storyboard Director application limits aligned with the 16-item shot schema',async()=>{
+    const source=await readFile(join(process.cwd(),'src','renderer','src','views','Storyboard.tsx'),'utf8');
+    expect(source).toMatch(/characterAssetIds=.*slice\(0,16\)/);
+    expect(source).toMatch(/referenceAssetIds=.*slice\(0,16\)/);
+    expect(source).toMatch(/propAssetIds=.*slice\(0,16\)/);
+    expect(source).not.toMatch(/characterAssetIds=.*slice\(0,4\)/);
+    expect(source).not.toMatch(/propAssetIds=.*slice\(0,2\)/);
+  });
+
+  it('does not drop valid overflow references when a workflow exposes an array binding',()=>{
+    const shot:Shot={
+      id:'many-refs',sceneId:'scene',index:1,title:'Many refs',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:Array.from({length:16},(_,i)=>'c'+i),locationAssetId:'loc',
+      propAssetIds:Array.from({length:16},(_,i)=>'p'+i),referenceAssetIds:Array.from({length:16},(_,i)=>'r'+i),
+      status:'ready',generation:{modelFamily:'custom',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+    };
+    const profile={id:'refs',runtime:'comfyui',purpose:'video',name:'Refs',modelFamily:'custom',mode:'i2v',workflowPath:'x',workflowFormat:'api',enabled:true,bindings:[{key:'referenceImages',selector:{nodeId:'1'},input:'refs'}]} as WorkflowProfile;
+    const plan=planShotReferences(shot,profile);
+    expect(plan.genericDemand).toBe(49);
+    expect(plan.genericCapacity).toBe(49);
+    expect(plan.genericIds).toHaveLength(49);
+    expect(plan.unservedIds).toEqual([]);
+  });
+
+  it('prefers input-light t2v/i2v catalog routes for the managed general profile',()=>{
+    const catalog:any[]=[
+      {modelType:'a-audio',name:'Audio only',mainOutput:['video'],outputs:['video'],inputs:['audio'],capabilities:{audio_to_video:true}},
+      {modelType:'b-video',name:'Video edit',mainOutput:['video'],outputs:['video'],inputs:['video'],capabilities:{video_to_video:true}},
+      {modelType:'c-text',name:'Text video',mainOutput:['video'],outputs:['video'],inputs:[],capabilities:{text_to_video:true}},
+      {modelType:'d-image',name:'Image video',mainOutput:['video'],outputs:['video'],inputs:['image'],capabilities:{image_to_video:true}}
+    ];
+    expect(preferredGeneralVideoMode(catalog[0])).toBe('ia2v');
+    const picks=pickRecommended(catalog);
+    const general=picks.find(item=>item.role==='general');
+    expect(general?.entry.modelType).toBe('c-text');
+    expect(general?.mode).toBe('t2v');
   });
 });
