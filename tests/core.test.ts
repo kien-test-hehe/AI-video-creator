@@ -30,7 +30,7 @@ import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, record
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe, keyframePrompt } from '../src/main/services/keyframe-service';
-import { upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
+import { pickRecommended, preferredVideoMode, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
@@ -2777,5 +2777,34 @@ describe('final audit hardening regressions',()=>{
     expect(automationTaskDisposition(project,shot,task)).toBeUndefined();
     shot.startFrameAssetId='candidate';
     expect(automationTaskDisposition(project,shot,task)).toBe('resolved');
+  });
+});
+
+
+describe('catalog and profile routing hardening',()=>{
+  it('derives non-basic WanGP video modes from capabilities and inputs',()=>{
+    expect(preferredVideoMode({modelType:'flf',name:'FLF',mainOutput:['video'],outputs:['video'],inputs:['image'],capabilities:{first_last_frame_to_video:true}})).toBe('flf2v');
+    expect(preferredVideoMode({modelType:'ia',name:'IA',mainOutput:['video'],outputs:['video'],inputs:['audio'],capabilities:{audio_to_video:true}})).toBe('ia2v');
+    expect(preferredVideoMode({modelType:'vv',name:'VV',mainOutput:['video'],outputs:['video'],inputs:['video'],capabilities:{video_to_video:true}})).toBe('v2v');
+  });
+
+  it('still recommends unknown WanGP catalog names by capability/output instead of dropping them',()=>{
+    const picks=pickRecommended([
+      {modelType:'future-video-z',name:'Future Video Z',mainOutput:['video'],outputs:['video'],inputs:['image'],capabilities:{image_to_video:true}},
+      {modelType:'future-image-z',name:'Future Image Z',mainOutput:['image'],outputs:['image'],inputs:['image'],capabilities:{image_to_image:true}}
+    ]);
+    expect(picks.some(item=>item.purpose==='video'&&item.entry.modelType==='future-video-z')).toBe(true);
+    expect(picks.some(item=>item.purpose==='image'&&item.entry.modelType==='future-image-z')).toBe(true);
+  });
+
+  it('routes among equal model/mode profiles deterministically using qualification timestamp then id',()=>{
+    const shot={id:'s',sceneId:'scene',index:1,title:'s',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'custom',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,seed:1,negativePrompt:'',includeAudio:false}} as Shot;
+    const project={settings:{workflowProfiles:[
+      {id:'b',runtime:'wangp',purpose:'video',name:'B',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/b.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-01T00:00:00.000Z'}},
+      {id:'a',runtime:'wangp',purpose:'video',name:'A',modelFamily:'custom',mode:'i2v',workflowPath:'/tmp/a.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-02T00:00:00.000Z'}}
+    ]}} as unknown as FilmProject;
+    expect(routeWorkflow(project,shot).id).toBe('a');
+    project.settings.workflowProfiles.reverse();
+    expect(routeWorkflow(project,shot).id).toBe('a');
   });
 });
