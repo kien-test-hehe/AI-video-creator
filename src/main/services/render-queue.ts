@@ -835,7 +835,7 @@ export class RenderQueueService extends EventEmitter {
       this.liveJobs.set(job.id,detached);await this.journal.write(currentProject.rootPath,detached);this.emitSnapshot();return;
     }
     const externalSpecCurrent=await this.immutableFilesStillCurrent(currentProject,job);
-    const videos=outputs.filter(o=>o.mediaType==='video'),passing=videos.find(o=>o.technicalQc?.passed);
+    const videos=outputs.filter(o=>o.mediaType==='video'),passing=selectPreferredTechnicalVideo(videos,job.spec?.shot);
     const expectsVideo=(job.spec?.workflowProfile.purpose??'video')==='video';
     const qcFailed=expectsVideo&&(!videos.length||!passing);const now=new Date().toISOString();
     await this.projects.mutate(p=>{
@@ -856,7 +856,7 @@ export class RenderQueueService extends EventEmitter {
       const currentSpec=Boolean(shot&&externalSpecCurrent&&this.isCurrentJobSpec(p,job,shot));
       if(target){target.outputs=outputs;target.updatedAt=now;target.backendPid=undefined;target.lastHeartbeatAt=now;if(qcFailed){target.status='failed';target.progress=1;target.message=currentSpec?'Rendered but failed technical QC':'Historical snapshot rendered but failed technical QC';target.error=videos.length?videos.flatMap(v=>v.technicalQc?.issues??[]).join(' | '):'Video workflow completed without producing a video output.';}else{target.status='done';target.progress=1;target.message=currentSpec?'Done':'Done · shot changed after queue; take kept as historical output';target.error=undefined;}}
       if(shot){
-        const attempt=(videos[0]??outputs[0])?.id;
+        const attempt=(passing??videos[0]??outputs[0])?.id;
         if(currentSpec&&attempt)shot.latestAttemptRenderId=attempt;
         if(!currentSpec){if(shot.latestRenderId)shot.status='rendered';else if(shot.status==='rendering'||shot.status==='rendered'||shot.status==='failed')shot.status='ready';}
         else if(qcFailed)shot.status='failed';
@@ -931,6 +931,23 @@ function assetLine(asset:Asset|undefined,label:string):string{
   const bible=continuity?(continuity.length>20_000?continuity.slice(0,20_000):continuity):'';
   return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}${bible?`\nStructured continuity bible: ${bible}`:''}`;
 }
+export function selectPreferredTechnicalVideo(videos:RenderOutput[],shot?:Shot):RenderOutput|undefined{
+  const passing=videos.filter(output=>output.technicalQc?.passed===true);
+  if(!passing.length)return undefined;
+  const expectedDuration=shot?shot.generation.frames/Math.max(1,shot.generation.fps):undefined;
+  return[...passing].sort((a,b)=>{
+    const qa=a.technicalQc!,qb=b.technicalQc!;
+    const warningDelta=(qa.warnings?.length??0)-(qb.warnings?.length??0);
+    if(warningDelta)return warningDelta;
+    if(expectedDuration!=null){
+      const da=qa.durationSec==null?Number.POSITIVE_INFINITY:Math.abs(qa.durationSec-expectedDuration);
+      const db=qb.durationSec==null?Number.POSITIVE_INFINITY:Math.abs(qb.durationSec-expectedDuration);
+      if(da!==db)return da-db;
+    }
+    return a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id);
+  })[0];
+}
+
 function stateLine(project:FilmProject,stateId:string|undefined,label:string):string{
   const state=currentGenerationState(project,stateId);
   if(!state)return'';
@@ -946,13 +963,15 @@ export function buildRenderPrompt(project:FilmProject,shot:Shot):string{
   const refs=(shot.referenceAssetIds??[]).map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[];
   const props=shot.propAssetIds.map(id=>project.assets.find(a=>a.id===id)).filter(Boolean) as Asset[];
   const location=shot.locationAssetId?project.assets.find(a=>a.id===shot.locationAssetId):undefined;
+  const actualStart=stateLine(project,shot.actualStartStateId,'AUTHORITATIVE actual start state');
+  const plannedStart=actualStart?'':stateLine(project,shot.plannedStartStateId,'Planned start state');
+  const targetEnd=stateLine(project,shot.plannedEndStateId,'Target end state');
   const prompt=[
     shot.prompt.trim(),shot.camera.trim()?`Camera: ${shot.camera.trim()}`:'',shot.action.trim()?`Action: ${shot.action.trim()}`:'',
     shot.dialogue.trim()?`Dialogue/audio: ${shot.dialogue.trim()}`:'',location?assetLine(location,'Location continuity'):'',
     ...characters.map(a=>assetLine(a,'Character continuity')),...refs.map(a=>assetLine(a,'Visual reference')),...props.map(a=>assetLine(a,'Prop / wardrobe continuity')),
-    stateLine(project,shot.actualStartStateId,'Actual start state'),
-    stateLine(project,shot.plannedStartStateId,'Planned start state'),
-    stateLine(project,shot.plannedEndStateId,'Target end state'),
+    actualStart,plannedStart,targetEnd,
+    actualStart?'State precedence: the authoritative actual start state overrides any older/planned start state.':'',
     shot.continuityNotes.trim()?`Continuity: ${shot.continuityNotes.trim()}`:''
   ].filter(Boolean).join('\n');
   if(prompt.length>300_000)throw new Error(`Effective render prompt exceeds the 300000-character immutable job safety limit for ${shot.title}. Shorten shot text, structured continuity state, or attached asset notes before queueing.`);
