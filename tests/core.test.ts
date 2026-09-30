@@ -1448,7 +1448,7 @@ describe('production state core',()=>{
     const next=project.shots.find(shot=>shot.id==='shot-b')!,state=project.shotStates.find(item=>item.id===next.actualStartStateId)!;
     expect(next.startFrameAssetId).toBe('frame-a');
     expect(state.derivedFromStateId).toBe('state-final-a');
-    expect(state.status).toBe('unreviewed');
+    expect(state.status).toBe('current');
     expect(state.environment.lighting).toBe('warm');
     expect(state.camera).toEqual({screenDirection:'left-to-right'});
 
