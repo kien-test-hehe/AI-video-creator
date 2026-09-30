@@ -714,8 +714,21 @@ describe('Studio workflow routing and timeline drag',()=>{
    expect(studioWorkflowIssue(resolved,shot)).toMatch(/disabled/i);
  });
  it('inserts a rendered take at the requested canonical timeline position',()=>{
-   const project={shots:[{id:'s1'},{id:'s2'}],renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'}],timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}]} as unknown as FilmProject;
-   expect(insertTimelineOutput(project,'o2','a','test override')).toBe(true);const canonical=[...project.timeline].sort(compareTimelineClips);expect(canonical.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(canonical.map(clip=>clip.order)).toEqual([0,1]);
+   const makeShot=(id:string,index:number):Shot=>({id,sceneId:'scene',index,title:id,prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:index,negativePrompt:'',includeAudio:false}});
+   const project={
+     schemaVersion:3,id:'timeline-drag',name:'Timeline drag',rootPath:'/tmp/timeline-drag',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+     story:{title:'Timeline drag',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['s1','s2']}],assets:[],shots:[makeShot('s1',1),makeShot('s2',2)],renderJobs:[],
+     renderOutputs:[
+       {id:'o1',jobId:'orphaned',shotId:'s1',path:'/tmp/timeline-drag/o1.mp4',filename:'o1.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'},
+       {id:'o2',jobId:'orphaned',shotId:'s2',path:'/tmp/timeline-drag/o2.mp4',filename:'o2.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:02.000Z'}
+     ],
+     timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+     settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+   } as FilmProject;
+   expect(insertTimelineOutput(project,'o2','a','test override')).toBe(true);
+   const canonical=[...project.timeline].sort(compareTimelineClips);
+   expect(canonical.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(canonical.map(clip=>clip.order)).toEqual([0,1]);
+   expect(canonical[0].approval).toBe('human-override');expect(canonical[0].approvalInputKey).toBeTruthy();
  });
  it('refuses timeline insertion once the canonical 100000-clip limit is reached',()=>{
    const timeline:any[]=[];timeline.length=100_000;
