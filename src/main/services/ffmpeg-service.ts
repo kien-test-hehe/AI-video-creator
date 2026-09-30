@@ -7,7 +7,14 @@ import { assertExistingPathInside, assertSafeWritePath, ensureSafeDirectory } fr
 import { isProcessAlive, killProcessTree } from './process-utils';
 import { compareTimelineClips, duplicateTimelineOrderKey, timelineClipUseIssue } from '../../shared/timeline-policy';
 
-interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean;durationSec?:number}
+export interface ProbeInfo{width:number;height:number;fps:number;hasAudio:boolean;durationSec?:number}
+
+export function selectMasterVideoGeometry(infos:ProbeInfo[],defaultFps:number):ProbeInfo{
+  if(!infos.length)throw new Error('Cannot select master video geometry without source probes.');
+  const ranked=[...infos].sort((a,b)=>(b.width*b.height)-(a.width*a.height)||b.width-a.width||b.height-a.height||b.fps-a.fps);
+  const selected=ranked[0];
+  return{...selected,fps:Math.max(1,defaultFps||selected.fps)};
+}
 
 export async function exportTimeline(project:FilmProject,machine:AppMachineSettings,signal?:AbortSignal):Promise<string>{
   throwIfAborted(signal);
@@ -24,8 +31,9 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
     sources.push({clip,path});
   }
 
-  const first=await probeVideo(machine.ffmpeg.ffprobePath,sources[0].path,signal);
-  const master={...first,fps:Math.max(1,project.settings.defaultFps||first.fps)};
+  const sourceInfos:ProbeInfo[]=[];
+  for(const source of sources)sourceInfos.push(await probeVideo(machine.ffmpeg.ffprobePath,source.path,signal));
+  const master=selectMasterVideoGeometry(sourceInfos,project.settings.defaultFps);
   const h264Encoder=await chooseH264Encoder(machine,signal);
   const [cacheDir,exportDir]=await Promise.all([
     ensureSafeDirectory(join(project.rootPath,'cache'),join(project.rootPath,'cache',`export-${randomUUID()}`),'timeline export cache directory'),
@@ -36,7 +44,7 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
     for(let i=0;i<sources.length;i++){
       const target=await assertSafeWritePath(cacheDir,join(cacheDir,`${String(i).padStart(4,'0')}.mp4`),'normalized export clip');
       throwIfAborted(signal);
-      const info=await probeVideo(machine.ffmpeg.ffprobePath,sources[i].path,signal);
+      const info=sourceInfos[i];
       await normalizeClip(machine,sources[i].path,target,sources[i].clip,info,master,h264Encoder,signal);
       normalized.push(target);
     }
@@ -61,18 +69,18 @@ export async function exportTimeline(project:FilmProject,machine:AppMachineSetti
   }
 }
 
-async function normalizeClip(machine:AppMachineSettings,input:string,output:string,clip:TimelineClip,info:ProbeInfo,master:ProbeInfo,h264Encoder:'h264_nvenc'|'libx264',signal?:AbortSignal):Promise<void>{
-  throwIfAborted(signal);
+export function buildNormalizeClipArgs(input:string,output:string,clip:TimelineClip,info:ProbeInfo,master:ProbeInfo,h264Encoder:'h264_nvenc'|'libx264'):string[]{
   if(clip.trimOutSec!=null&&clip.trimOutSec<=clip.trimInSec)throw new Error(`Invalid timeline trim: out (${clip.trimOutSec}s) must be greater than in (${clip.trimInSec}s).`);
   if(info.durationSec!=null&&clip.trimInSec>=info.durationSec)throw new Error(`Invalid timeline trim: in (${clip.trimInSec}s) is beyond media duration (${info.durationSec.toFixed(3)}s).`);
   if(info.durationSec!=null&&clip.trimOutSec!=null&&clip.trimOutSec>info.durationSec+0.02)throw new Error(`Invalid timeline trim: out (${clip.trimOutSec}s) exceeds media duration (${info.durationSec.toFixed(3)}s).`);
   if(!Number.isFinite(clip.volume)||clip.volume<0)throw new Error(`Invalid timeline volume: ${clip.volume}`);
-  const args:string[]=['-y'];
+  const args:string[]=['-y','-i',input];
+  if(!info.hasAudio)args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000');
+  // Keep seeking after every input so -ss is an output seek. This decodes to the
+  // requested timestamp instead of snapping the editorial trim to a prior keyframe.
   if(clip.trimInSec>0)args.push('-ss',String(clip.trimInSec));
-  args.push('-i',input);
   const duration=clip.trimOutSec!=null?clip.trimOutSec-clip.trimInSec:undefined;
   if(duration!=null&&duration>0)args.push('-t',String(duration));
-  if(!info.hasAudio)args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000');
   const vf=`scale=${master.width}:${master.height}:force_original_aspect_ratio=decrease,pad=${master.width}:${master.height}:(ow-iw)/2:(oh-ih)/2,fps=${master.fps}`;
   args.push('-vf',vf);
   if(h264Encoder==='h264_nvenc')args.push('-c:v','h264_nvenc','-preset','p6','-cq','16','-b:v','0');
@@ -81,7 +89,12 @@ async function normalizeClip(machine:AppMachineSettings,input:string,output:stri
   if(info.hasAudio)args.push('-af',`volume=${Math.max(0,clip.volume)}`);
   else args.push('-shortest');
   args.push('-c:a','aac','-b:a','256k','-ar','48000','-ac','2',output);
-  await run(machine.ffmpeg.path,args,60*60_000,signal);
+  return args;
+}
+
+async function normalizeClip(machine:AppMachineSettings,input:string,output:string,clip:TimelineClip,info:ProbeInfo,master:ProbeInfo,h264Encoder:'h264_nvenc'|'libx264',signal?:AbortSignal):Promise<void>{
+  throwIfAborted(signal);
+  await run(machine.ffmpeg.path,buildNormalizeClipArgs(input,output,clip,info,master,h264Encoder),60*60_000,signal);
 }
 
 async function chooseH264Encoder(machine:AppMachineSettings,signal?:AbortSignal):Promise<'h264_nvenc'|'libx264'>{
