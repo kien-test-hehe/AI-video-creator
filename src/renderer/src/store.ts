@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AppMachineSettings, AutomationStatus, FilmProject, QueueSnapshot, SystemProbe } from '../../shared/types';
+import type { AppMachineSettings, AutomationStatus, FilmProject, QueueSnapshot, Shot, SystemProbe } from '../../shared/types';
 import { shotProjectRenderInputKey } from '../../shared/shot-signature';
 import { invalidateObservedFinalState } from '../../shared/production-state';
 
@@ -12,6 +12,23 @@ interface AppState{
 }
 let projectTimer:ReturnType<typeof setTimeout>|undefined,machineTimer:ReturnType<typeof setTimeout>|undefined;
 let projectEditRevision=0,machineEditRevision=0,busyCount=0,projectWriteLockCount=0;
+
+export function syncRuntimeShotFields(local:Shot,server:Shot,projectDirty:boolean):void{
+  local.latestAttemptRenderId=server.latestAttemptRenderId;
+  local.canonicalRenderId=server.canonicalRenderId;
+  if(!projectDirty){
+    local.plannedStartStateId=server.plannedStartStateId;
+    local.plannedEndStateId=server.plannedEndStateId;
+    local.actualStartStateId=server.actualStartStateId;
+    local.observedFinalStateId=server.observedFinalStateId;
+    // startFrameAssetId may be renderer-owned when the project is dirty. Once the
+    // renderer is clean, main-process truth must win in both directions, including
+    // clearing a frame whose propagated actual-start state was invalidated.
+    local.startFrameAssetId=server.startFrameAssetId;
+  }
+  local.status=server.status;
+  local.latestRenderId=server.latestRenderId;
+}
 
 export const useAppStore=create<AppState>((set,get)=>({
   project:null,machine:null,activeView:'studio',queue:{jobs:[]},busy:false,projectWriteLocked:false,projectDirty:false,machineDirty:false,
@@ -34,17 +51,7 @@ export const useAppStore=create<AppState>((set,get)=>({
       const localInputKey=shotProjectRenderInputKey(next,shot);
       const serverInputKey=shotProjectRenderInputKey(mainProject,server);
       if(state.projectDirty&&localInputKey!==serverInputKey)continue;
-      shot.latestAttemptRenderId=server.latestAttemptRenderId;
-      shot.canonicalRenderId=server.canonicalRenderId;
-      if(!state.projectDirty){
-        shot.plannedStartStateId=server.plannedStartStateId;
-        shot.plannedEndStateId=server.plannedEndStateId;
-        shot.actualStartStateId=server.actualStartStateId;
-        shot.observedFinalStateId=server.observedFinalStateId;
-        if(server.actualStartStateId)shot.startFrameAssetId=server.startFrameAssetId;
-      }
-      shot.status=server.status;
-      shot.latestRenderId=server.latestRenderId;
+      syncRuntimeShotFields(shot,server,state.projectDirty);
     }
     const serverProfiles=new Map(mainProject.settings.workflowProfiles.map(profile=>[profile.id,profile]));
     next.settings.workflowProfiles=next.settings.workflowProfiles.map(local=>{
