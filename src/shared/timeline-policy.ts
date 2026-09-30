@@ -119,7 +119,13 @@ export function capcutHandoffInputKey(project:FilmProject):string{
       approvalStateKey:timelineTakeApprovalInputKey(project,clip.renderOutputId),
       useIssue:timelineClipUseIssue(project,clip)
     })),
-    shots:project.shots.filter(shot=>shotIds.has(shot.id)).map(shot=>({id:shot.id,title:shot.title,dialogue:shot.dialogue,continuityNotes:shot.continuityNotes})).sort((a,b)=>a.id.localeCompare(b.id)),
+    shots:project.shots.filter(shot=>shotIds.has(shot.id)).map(shot=>({
+      id:shot.id,title:shot.title,dialogue:shot.dialogue,continuityNotes:shot.continuityNotes,
+      referencedAssetIds:[...new Set([
+        ...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),
+        shot.locationAssetId,shot.startFrameAssetId,shot.endFrameAssetId,shot.referenceVideoAssetId,shot.audioAssetId
+      ].filter((id):id is string=>Boolean(id)))].sort()
+    })).sort((a,b)=>a.id.localeCompare(b.id)),
     outputs:project.renderOutputs.filter(output=>outputIds.has(output.id)).map(output=>({id:output.id,jobId:output.jobId,shotId:output.shotId,path:output.path,filename:output.filename,mediaType:output.mediaType,technicalQc:output.technicalQc})).sort((a,b)=>a.id.localeCompare(b.id)),
     assets:capcutReferencedAssetIds(project)
       .map(id=>project.assets.find(asset=>asset.id===id))
