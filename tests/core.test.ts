@@ -2597,3 +2597,102 @@ describe('timeline provenance next-five hardening',()=>{
     }finally{await rm(root,{recursive:true,force:true});}
   });
 });
+
+
+describe('destructive mutation and human-task integrity next-five',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const makeShot=(id:string,index:number):Shot=>({
+    id,sceneId:'scene-integrity',index,title:id,prompt:id,camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:index}
+  });
+
+  it('keeps a shared physical asset file when another asset record still references the same project path',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-shared-asset-delete-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Shared asset');
+      const relativePath=join('assets','reference','shared.png'),absolute=join(root,relativePath);
+      await mkdir(join(root,'assets','reference'),{recursive:true});await writeFile(absolute,'shared-bytes','utf8');
+      await service.mutate(project=>{
+        const createdAt='2026-01-01T00:00:00.000Z';
+        project.assets.push(
+          {id:'asset-a',kind:'reference',name:'A',sourcePath:'shared.png',projectPath:relativePath,tags:[],notes:'',createdAt},
+          {id:'asset-b',kind:'reference',name:'B',sourcePath:'shared.png',projectPath:relativePath,tags:[],notes:'',createdAt}
+        );
+      });
+      const saved=await service.deleteAsset('asset-a');
+      expect(saved.assets.map(asset=>asset.id)).toEqual(['asset-b']);
+      expect(await readFile(absolute,'utf8')).toBe('shared-bytes');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('cascades asset deletion through derived continuity states even when descendants no longer carry the asset id',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-asset-state-cascade-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Asset cascade');
+      const relativePath=join('assets','keyframe','source.png'),absolute=join(root,relativePath);
+      await mkdir(join(root,'assets','keyframe'),{recursive:true});await writeFile(absolute,'frame','utf8');
+      await service.mutate(project=>{
+        project.scenes.push({id:'scene-integrity',index:1,heading:'',body:'',shotIds:['a','b']});
+        const a=makeShot('a',1),b=makeShot('b',2);a.observedFinalStateId='final-a';b.actualStartStateId='start-b';b.latestRenderId='historical';b.canonicalRenderId='historical';b.status='rendered';
+        project.shots.push(a,b);
+        project.assets.push({id:'asset-frame',kind:'keyframe',name:'Frame',sourcePath:'source.png',projectPath:relativePath,tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'});
+        project.shotStates.push(
+          {id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',frameAssetId:'asset-frame',characters:[],props:[],environment:{},camera:{},actionPhase:'done',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'},
+          {id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'current',derivedFromStateId:'final-a',characters:[],props:[],environment:{lighting:'warm'},camera:{},actionPhase:'next',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'}
+        );
+      });
+      const saved=await service.deleteAsset('asset-frame');
+      expect(saved.shotStates.find(state=>state.id==='final-a')?.status).toBe('stale');
+      expect(saved.shotStates.find(state=>state.id==='start-b')?.status).toBe('stale');
+      expect(saved.shots.find(shot=>shot.id==='a')?.observedFinalStateId).toBeUndefined();
+      expect(saved.shots.find(shot=>shot.id==='b')?.actualStartStateId).toBeUndefined();
+      expect(saved.shots.find(shot=>shot.id==='b')?.canonicalRenderId).toBeUndefined();
+      expect(saved.shots.find(shot=>shot.id==='b')?.latestRenderId).toBeUndefined();
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('dismisses open human reviews tied to a deleted asset and removes the dangling asset reference',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-asset-task-delete-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Asset task');
+      const relativePath=join('assets','reference','review.png'),absolute=join(root,relativePath);
+      await mkdir(join(root,'assets','reference'),{recursive:true});await writeFile(absolute,'review','utf8');
+      await service.mutate(project=>{project.assets.push({id:'review-asset',kind:'reference',name:'Review',sourcePath:'review.png',projectPath:relativePath,tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'});});
+      const withTask=await createHumanTask(service,{projectRoot:root,type:'approve-asset',title:'Approve reference',reason:'Check identity anchors.',relatedAssetIds:['review-asset']});
+      const taskId=withTask.humanTasks.find(task=>task.status==='open')!.id;
+      const saved=await service.deleteAsset('review-asset'),task=saved.humanTasks.find(item=>item.id===taskId)!;
+      expect(task.status).toBe('dismissed');
+      expect(task.resolution).toMatch(/related asset .* was deleted/i);
+      expect(task.relatedAssetIds).toEqual([]);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('refuses to resolve or rewrite an already-closed human task',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-human-task-once-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Task once');
+      const created=await createHumanTask(service,{projectRoot:root,type:'manual-qc',title:'Manual check',reason:'Inspect once.'});
+      const taskId=created.humanTasks.find(task=>task.status==='open')!.id;
+      await resolveHumanTask(service,{projectRoot:root,taskId,status:'dismissed',resolution:'No longer required.'});
+      await expect(resolveHumanTask(service,{projectRoot:root,taskId,status:'resolved',resolution:'Rewrite history.'})).rejects.toThrow(/already dismissed|cannot be resolved again/i);
+      const task=service.getCurrent()!.humanTasks.find(item=>item.id===taskId)!;
+      expect(task.status).toBe('dismissed');expect(task.resolution).toBe('No longer required.');
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('rejects a shot-scoped human task that points at another shot render output',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-cross-shot-task-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Cross-shot task');
+      await service.mutate(project=>{
+        project.scenes.push({id:'scene-integrity',index:1,heading:'',body:'',shotIds:['a','b']});
+        project.shots.push(makeShot('a',1),makeShot('b',2));
+        project.renderOutputs.push({id:'out-b',jobId:'orphaned',shotId:'b',path:join(root,'renders','out-b.mp4'),filename:'out-b.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'});
+      });
+      await expect(createHumanTask(service,{
+        projectRoot:root,type:'manual-qc',shotId:'a',title:'Wrong-shot review',reason:'Should be rejected.',relatedRenderOutputIds:['out-b']
+      })).rejects.toThrow(/shot a cannot reference render output out-b from shot b/i);
+      expect(service.getCurrent()!.humanTasks).toHaveLength(0);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
