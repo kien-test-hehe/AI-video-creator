@@ -7,7 +7,7 @@ import { BUILTIN_WORKFLOW_PROFILES, MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '
 import { duplicateTimelineOrderKey, timelineOutputIssue } from '../../shared/timeline-policy';
 import { assertSafeJsonPath, assertSafeObjectKey } from '../../shared/safe-object';
 import { WORKFLOW_BINDING_CLASS_TYPE_LIMIT, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_JSON_PATH_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT, WORKFLOW_BINDING_TITLE_LIMIT, WORKFLOW_PROFILE_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../../shared/workflow-limits';
-import { defaultSequentialDependencies } from '../../shared/production-state';
+import { assertAcyclicShotDependencies, defaultSequentialDependencies, invalidateStateCascade } from '../../shared/production-state';
 
 const ASSET_KINDS = new Set<AssetKind>(['character','location','prop','wardrobe','reference','keyframe','audio','video','image']);
 const MODEL_FAMILIES = new Set<ModelFamily>(['ltx-2.5-fast','ltx-2.3','hunyuan-video-1.5','wan-2.2-5b','framepack','custom']);
@@ -95,6 +95,7 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
   const humanTasks = boundedArray(source.humanTasks,'human tasks',100_000).map(value=>sanitizeHumanTask(value,shotIds,assetIds,outputById));
   const humanTaskIds=new Set(humanTasks.map(task=>task.id));
   const cutRevisions = boundedArray(source.cutRevisions,'cut revisions',10_000).map(value=>sanitizeCutRevision(value,new Set(timeline.map(clip=>clip.id))));
+  const unsafeActualStartStateIds:string[]=[];
 
   assertUniqueIds('scene',scenes);
   assertUniqueIds('asset',assets);
@@ -104,6 +105,7 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
   assertUniqueIds('timeline clip',timeline);
   assertUniqueIds('shot state',shotStates);
   assertUniqueIds('shot dependency',shotDependencies);
+  assertAcyclicShotDependencies(shots,scenes,shotDependencies);
   assertUniqueIds('shot QC result',qcResults);
   assertUniqueIds('human task',humanTasks);
   assertUniqueIds('cut revision',cutRevisions);
@@ -139,6 +141,10 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
       const stateId=shot[key],state=stateId?stateById.get(stateId):undefined;
       if(stateId&&(!state||state.shotId!==shot.id||state.role!==role))throw new Error(`Shot ${shot.id} ${String(key)} references an invalid ${role} state: ${stateId}`);
     }
+    const actualStart=shot.actualStartStateId?stateById.get(shot.actualStartStateId):undefined;
+    if(actualStart&&actualStart.source!=='human'&&actualStart.status!=='current'&&actualStart.frameAssetId&&shot.startFrameAssetId===actualStart.frameAssetId){
+      unsafeActualStartStateIds.push(actualStart.id);
+    }
   }
 
   const jobShotById=new Map(renderJobs.map(job=>[job.id,job.shotId] as const)),outputsByJobShot=new Map<string,RenderOutput[]>();
@@ -147,7 +153,7 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
     const key=`${output.jobId}\u0000${output.shotId}`,list=outputsByJobShot.get(key)??[];list.push(output);outputsByJobShot.set(key,list);
   }
   for(const job of renderJobs)job.outputs=outputsByJobShot.get(`${job.id}\u0000${job.shotId}`)??[];
-  return {
+  const project:FilmProject={
     schemaVersion: 3,
     id,
     name: str(source.name, 'Untitled Film', 240),
@@ -162,6 +168,10 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
     },
     scenes, assets, shots, renderJobs, renderOutputs, timeline, shotStates, shotDependencies, qcResults, humanTasks, cutRevisions, settings
   };
+  if(unsafeActualStartStateIds.length){
+    invalidateStateCascade(project,unsafeActualStartStateIds,'Legacy project contained an unreviewed propagated start frame that could have been used as generation conditioning; downstream derived state was invalidated on load.');
+  }
+  return project;
 }
 
 function sanitizeProjectSettings(value: unknown): ProjectSettings {

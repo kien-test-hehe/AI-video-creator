@@ -3,7 +3,7 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AutomationRunRequest, AutomationStatus, FilmProject, HumanTaskType, QcLayer, RenderOutput, Shot } from '../../shared/types';
-import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
+import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, productionShotOrder, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
 import { RenderQueueService } from './render-queue';
@@ -69,11 +69,12 @@ export class ProductionRuntimeService extends EventEmitter{
     if(this.status.running)throw new Error('Autonomous production is already running.');
     const project=this.projects.getCurrent();if(!project)throw new Error('Open a project first.');
     if(project.rootPath!==request.projectRoot)throw new Error('Automation request does not match the open project.');
-    const ordered=orderedShots(project);
+    const ordered=productionShotOrder(project);
     const requested=request.shotIds?.length?new Set(request.shotIds):undefined;
     this.targetShotIds=ordered.filter(shot=>!requested||requested.has(shot.id)).map(shot=>shot.id);
     if(requested&&this.targetShotIds.length!==requested.size)throw new Error('Automation request contains an unknown shot id.');
     if(!this.targetShotIds.length)throw new Error('There are no shots to automate.');
+    assertExternalDependenciesReady(project,new Set(this.targetShotIds));
     this.maxAutoRetries=Math.max(0,Math.min(5,Math.trunc(request.maxAutoRetries??2)));
     this.buildTimeline=request.buildTimeline!==false;
     this.status={running:true,paused:false,phase:'preflight',projectRoot:project.rootPath,message:'Preparing local production routes…',startedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),completedShotIds:[],retryCounts:{},blockedHumanTaskIds:[]};
@@ -206,8 +207,10 @@ export class ProductionRuntimeService extends EventEmitter{
   }
 
   private nextIncompleteShot(project:FilmProject):Shot|undefined{
-    for(const id of this.targetShotIds){
-      const shot=project.shots.find(item=>item.id===id);if(!shot)continue;
+    const targets=new Set(this.targetShotIds);
+    assertExternalDependenciesReady(project,targets);
+    for(const shot of productionShotOrder(project)){
+      if(!targets.has(shot.id))continue;
       if(shot.canonicalRenderId&&canonicalTakeReadiness(project,shot.id,shot.canonicalRenderId).ready){
         if(!this.status.completedShotIds.includes(shot.id))this.status.completedShotIds.push(shot.id);
         continue;
@@ -348,10 +351,9 @@ export class ProductionRuntimeService extends EventEmitter{
     const needsEnd=shot.generation.mode==='flf2v';
 
     if(needsStart&&!shot.startFrameAssetId){
-      const actualStartStateId=shot.actualStartStateId;
-      const propagated=actualStartStateId?project.shotStates.find(state=>state.id===actualStartStateId&&state.status!=='stale'):undefined;
-      if(propagated?.frameAssetId&&project.assets.some(asset=>asset.id===propagated.frameAssetId)){
-        await this.projects.mutate(next=>{const target=next.shots.find(item=>item.id===shotId);if(target&&!target.startFrameAssetId){target.startFrameAssetId=propagated.frameAssetId;target.latestRenderId=undefined;target.canonicalRenderId=undefined;invalidateObservedFinalState(next,target.id,'Actual propagated start frame became the generation start reference.');}});
+      const propagatedFrameAssetId=currentActualStartFrameAssetId(project,shot);
+      if(propagatedFrameAssetId){
+        await this.projects.mutate(next=>{const target=next.shots.find(item=>item.id===shotId);if(target&&!target.startFrameAssetId){target.startFrameAssetId=propagatedFrameAssetId;target.latestRenderId=undefined;target.canonicalRenderId=undefined;invalidateObservedFinalState(next,target.id,'Approved/current propagated start frame became the generation start reference.');}});
       }else{
         const profile=selectImageProfile(project);
         if(profile){
@@ -412,16 +414,8 @@ export class ProductionRuntimeService extends EventEmitter{
 
   private async finish():Promise<void>{
     if(this.buildTimeline){
-      this.setStatus({phase:'building-timeline',currentShotId:undefined,message:'Building canonical timeline.'});
-      await this.projects.mutate(next=>{
-        const ordered=orderedShots(next);
-        const selected=ordered.flatMap(shot=>{
-          if(!shot.canonicalRenderId||!canonicalTakeReadiness(next,shot.id,shot.canonicalRenderId).ready)return[];
-          return[{id:randomUUID(),shotId:shot.id,renderOutputId:shot.canonicalRenderId,track:0,order:0,trimInSec:0,volume:1,approval:'canonical' as const}];
-        });
-        selected.forEach((clip,index)=>clip.order=index);
-        next.timeline=selected;
-      });
+      this.setStatus({phase:'building-timeline',currentShotId:undefined,message:'Building canonical timeline without replacing human edits.'});
+      await this.projects.mutate(next=>{buildAutomationTimelineIfEmpty(next);});
     }
     this.status.running=false;this.status.paused=false;
     this.setStatus({phase:'complete',currentShotId:undefined,message:`Autonomous production complete: ${this.status.completedShotIds.length}/${this.targetShotIds.length} shots canonical.`,blockedHumanTaskIds:[]});
@@ -438,13 +432,35 @@ export class ProductionRuntimeService extends EventEmitter{
   }
 }
 
+export function assertExternalDependenciesReady(project:FilmProject,targetShotIds:ReadonlySet<string>):void{
+  const blockers:string[]=[];
+  for(const edge of project.shotDependencies){
+    if(edge.relation==='parallel'||!targetShotIds.has(edge.toShotId)||targetShotIds.has(edge.fromShotId))continue;
+    const upstream=project.shots.find(shot=>shot.id===edge.fromShotId);
+    const ready=Boolean(upstream?.canonicalRenderId&&canonicalTakeReadiness(project,upstream.id,upstream.canonicalRenderId).ready);
+    if(!ready)blockers.push(`${edge.fromShotId} → ${edge.toShotId}`);
+  }
+  if(blockers.length)throw new Error(`Requested AUTO RUN subset has unresolved upstream dependencies outside the selection: ${blockers.slice(0,16).join(', ')}. Render/canonicalize the upstream shots or include them in the run.`);
+}
+
+export function buildAutomationTimelineIfEmpty(project:FilmProject):boolean{
+  if(project.timeline.length)return false;
+  const selected=editorialOrderedShots(project).flatMap(shot=>{
+    if(!shot.canonicalRenderId||!canonicalTakeReadiness(project,shot.id,shot.canonicalRenderId).ready)return[];
+    return[{id:randomUUID(),shotId:shot.id,renderOutputId:shot.canonicalRenderId,track:0,order:0,trimInSec:0,volume:1,approval:'canonical' as const}];
+  });
+  selected.forEach((clip,index)=>clip.order=index);
+  project.timeline=selected;
+  return true;
+}
+
 function selectImageProfile(project:FilmProject){
   return[...project.settings.workflowProfiles]
     .filter(profile=>profile.enabled&&(profile.purpose??'video')==='image'&&Boolean(profile.workflowPath)&&profile.validation?.structuralStatus==='valid'&&Boolean(profile.validation.sourceSha256)&&Boolean(profile.validation.runtimeFingerprint))
     .sort((a,b)=>Number(Boolean(b.validation?.lastSuccessfulRenderAt))-Number(Boolean(a.validation?.lastSuccessfulRenderAt))||(b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||a.id.localeCompare(b.id))[0];
 }
 
-function orderedShots(project:FilmProject):Shot[]{
+function editorialOrderedShots(project:FilmProject):Shot[]{
   return[...project.shots].sort((a,b)=>{const sceneA=project.scenes.find(scene=>scene.id===a.sceneId)?.index??0,sceneB=project.scenes.find(scene=>scene.id===b.sceneId)?.index??0;return sceneA-sceneB||a.index-b.index||a.id.localeCompare(b.id);});
 }
 

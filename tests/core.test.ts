@@ -4,6 +4,7 @@ import { applyBindings, detectWorkflowFormat, suggestBindings, uiWorkflowToApi, 
 import { assertLocalUrl } from '../src/main/services/local-url';
 import { assertPathInside, assertRelativeProjectPath } from '../src/main/services/path-safety';
 import { chooseModelForShot } from '../src/shared/routing';
+import { MODEL_DEFAULTS } from '../src/shared/defaults';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
 import { directorText } from '../src/main/services/director-service';
@@ -43,11 +44,12 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
-import { DEFAULT_CONTINUITY_FIELDS, OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, continuityFrameForShot, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, latestShotQcResult, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
+import { DEFAULT_CONTINUITY_FIELDS, OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, continuityFrameForShot, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, latestShotQcResult, productionShotOrder, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 import { advisePreviz } from '../src/main/services/previz-service';
 import { observedStateDraftFromVisionResult } from '../src/main/services/automatic-qc-service';
 import { AutomationJournal } from '../src/main/services/automation-journal';
+import { assertExternalDependenciesReady, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -1446,7 +1448,7 @@ describe('production state core',()=>{
     const next=project.shots.find(shot=>shot.id==='shot-b')!,state=project.shotStates.find(item=>item.id===next.actualStartStateId)!;
     expect(next.startFrameAssetId).toBe('frame-a');
     expect(state.derivedFromStateId).toBe('state-final-a');
-    expect(state.status).toBe('unreviewed');
+    expect(state.status).toBe('current');
     expect(state.environment.lighting).toBe('warm');
     expect(state.camera).toEqual({screenDirection:'left-to-right'});
 
@@ -2222,5 +2224,100 @@ describe('field-scoped continuity frame propagation',()=>{
     expect(nextState.environment.lighting).toBe('warm');
     expect(nextState.frameAssetId).toBeUndefined();
     expect(target.startFrameAssetId).toBeUndefined();
+  });
+});
+
+
+describe('next-five production hardening',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const shot=(id:string,index:number):Shot=>({
+    id,sceneId:'scene',index,title:id,prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:index}
+  });
+  const projectBase=():FilmProject=>({
+    schemaVersion:3,id:'next-five',name:'Next Five',rootPath:'/tmp/next-five',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Next Five',logline:'',script:'',notes:''},
+    scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['a','b','c']}],
+    assets:[],shots:[shot('a',1),shot('b',2),shot('c',3)],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  });
+
+  it('never exposes an unreviewed actual-start frame as a generation conditioning frame',()=>{
+    const project=projectBase(),target=project.shots[1];
+    project.assets.push({id:'frame',kind:'keyframe',name:'Frame',sourcePath:'frame.jpg',projectPath:'assets/keyframe/frame.jpg',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'});
+    target.actualStartStateId='start-b';
+    project.shotStates.push({id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',frameAssetId:'frame',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'});
+    expect(currentActualStartFrameAssetId(project,target)).toBeUndefined();
+    project.shotStates[0].status='current';
+    expect(currentActualStartFrameAssetId(project,target)).toBe('frame');
+  });
+
+  it('marks deterministic full-frame propagation current but leaves metadata-only propagation unreviewed',()=>{
+    const full=projectBase();
+    full.assets.push({id:'frame',kind:'keyframe',name:'Frame',sourcePath:'frame.jpg',projectPath:'assets/keyframe/frame.jpg',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'});
+    full.shots[0].observedFinalStateId='final-a';
+    full.shotStates.push({id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',frameAssetId:'frame',characters:[],props:[],environment:{lighting:'warm'},camera:{shotSize:'wide'},actionPhase:'done',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'});
+    full.shotDependencies=[{id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:[...DEFAULT_CONTINUITY_FIELDS],createdAt:'2026-01-01T00:00:00.000Z'}];
+    propagateObservedFinalState(full,'a');
+    expect(full.shotStates.find(state=>state.id===full.shots[1].actualStartStateId)?.status).toBe('current');
+
+    const metadata=projectBase();
+    metadata.shots[0].observedFinalStateId='final-a';
+    metadata.shotStates.push({id:'final-a',shotId:'a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{lighting:'warm'},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'});
+    metadata.shotDependencies=[{id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['lighting'],createdAt:'2026-01-01T00:00:00.000Z'}];
+    propagateObservedFinalState(metadata,'a');
+    expect(metadata.shotStates.find(state=>state.id===metadata.shots[1].actualStartStateId)?.status).toBe('unreviewed');
+  });
+
+  it('preserves an existing human-owned timeline instead of rebuilding it at AUTO completion',()=>{
+    const project=projectBase();
+    project.timeline=[{id:'human-cut',shotId:'a',renderOutputId:'human-output',track:3,order:7,trimInSec:1.25,trimOutSec:2.75,volume:.42,approval:'human-override',approvalReason:'Director cut'}];
+    const before=structuredClone(project.timeline);
+    expect(buildAutomationTimelineIfEmpty(project)).toBe(false);
+    expect(project.timeline).toEqual(before);
+  });
+
+  it('uses a supported Wan 2.2 5B landscape default instead of 1280x720',()=>{
+    expect(MODEL_DEFAULTS['wan-2.2-5b']).toMatchObject({width:1280,height:704});
+  });
+
+  it('topologically schedules dependencies even when storyboard indices point the other way',()=>{
+    const project=projectBase();
+    project.shots[0].index=3;project.shots[1].index=1;project.shots[2].index=2;
+    project.shotDependencies=[
+      {id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'bc',fromShotId:'b',toShotId:'c',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}
+    ];
+    expect(productionShotOrder(project).map(item=>item.id)).toEqual(['a','b','c']);
+  });
+
+  it('blocks a partial AUTO RUN when an unresolved upstream dependency is outside the selection',()=>{
+    const project=projectBase();
+    project.shotDependencies=[{id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}];
+    expect(()=>assertExternalDependenciesReady(project,new Set(['b']))).toThrow(/unresolved upstream dependencies/i);
+    expect(()=>assertExternalDependenciesReady(project,new Set(['a','b']))).not.toThrow();
+  });
+
+  it('rejects cyclic dependency graphs during portable-project validation',()=>{
+    const project=projectBase() as any;
+    project.shotDependencies=[
+      {id:'ab',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'ba',fromShotId:'b',toShotId:'a',relation:'continuity',strength:'soft',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}
+    ];
+    expect(()=>loadPortableProject(project,'/tmp/next-five')).toThrow(/dependency graph contains a cycle/i);
+  });
+
+  it('clears a legacy start-frame link when it came from an unreviewed propagated state',()=>{
+    const project=projectBase() as any;
+    project.assets=[{id:'frame',kind:'keyframe',name:'Frame',sourcePath:'frame.jpg',projectPath:'assets/keyframe/frame.jpg',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}];
+    project.shots[1].startFrameAssetId='frame';
+    project.shots[1].actualStartStateId='start-b';
+    project.shots[1].latestRenderId=undefined;
+    project.shots[1].canonicalRenderId=undefined;
+    project.shotStates=[{id:'start-b',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',frameAssetId:'frame',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:00.000Z'}];
+    const loaded=loadPortableProject(project,'/tmp/next-five').project;
+    expect(loaded.shots.find(item=>item.id==='b')?.startFrameAssetId).toBeUndefined();
+    expect(loaded.shots.find(item=>item.id==='b')?.actualStartStateId).toBeUndefined();
+    expect(loaded.shotStates.find(item=>item.id==='start-b')?.status).toBe('stale');
   });
 });
