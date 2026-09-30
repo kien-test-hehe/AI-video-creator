@@ -1,6 +1,6 @@
 import type { AppMachineSettings, CharacterContinuityState, FilmProject, PropContinuityState, QcIssue, QcStatus, Shot, ShotDependency } from '../../shared/types';
 import { analyzeImagesWithLocalVision, LocalVisionUnavailableError } from './local-vision-service';
-import { productionFingerprint } from '../../shared/production-state';
+import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, productionFingerprint } from '../../shared/production-state';
 
 export interface AutoQcEvaluation{status:QcStatus;issues:QcIssue[];note?:string;}
 export interface ObservedStateDraft{
@@ -21,6 +21,10 @@ export function observedStateDraftFingerprint(draft:ObservedStateDraft):string{
     dialogueState:draft.dialogueState,
     confidence:draft.confidence
   }));
+}
+
+export function observedStateReviewTitle(shotTitle:string,draft:ObservedStateDraft):string{
+  return `${OBSERVED_STATE_CONFIDENCE_TASK_PREFIX}${shotTitle} · ${observedStateDraftFingerprint(draft)}`;
 }
 
 const statuses=new Set<QcStatus>(['pass','fail','unknown','human-verify']);
