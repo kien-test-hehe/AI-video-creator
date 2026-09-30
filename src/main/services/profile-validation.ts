@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { AppMachineSettings, FilmProject, Shot, WorkflowProfile } from '../../shared/types';
+import type { AppMachineSettings, FilmProject, WorkflowProfile } from '../../shared/types';
 import { ProjectService } from './project-service';
 import { assertExistingPathInside, assertPathInside } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
@@ -8,7 +8,7 @@ import { validateWanGpProfile } from './wangp-engine';
 import { probeSystem } from './system-probe';
 import { ComfyClient } from './comfy-client';
 import { shotProjectRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
-import { workflowCapabilityErrors } from '../../shared/workflow-capabilities';
+import { workflowCapabilityErrors, type WorkflowCapabilityShot } from '../../shared/workflow-capabilities';
 
 export async function validateAndRecordProfile(projects: ProjectService, machine: AppMachineSettings, profileId: string): Promise<FilmProject> {
   const project = projects.getCurrent();
@@ -67,7 +67,7 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
   });
 }
 
-export function profileCompatibilityErrors(profile: WorkflowProfile, shot: Shot): string[] {
+export function profileCompatibilityErrors(profile: WorkflowProfile, shot: WorkflowCapabilityShot): string[] {
   return workflowCapabilityErrors(profile,shot);
 }
 
