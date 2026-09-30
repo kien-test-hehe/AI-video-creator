@@ -1,4 +1,4 @@
-import type { Shot, WorkflowCapabilities, WorkflowProfile } from './types';
+import type { WorkflowCapabilities, WorkflowProfile } from './types';
 
 const GENERIC_KEYS=['referenceImage1','referenceImage2','referenceImage3','referenceImage4'] as const;
 
