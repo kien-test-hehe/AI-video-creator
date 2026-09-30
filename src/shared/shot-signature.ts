@@ -111,7 +111,9 @@ function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile
       (b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||
       a.id.localeCompare(b.id)
     );
-  return compatible[0]??candidates.find(profile=>profile.validation?.structuralStatus==='valid')??candidates[0];
+  // Automatic routing truth must match main-process routeWorkflow(): an
+  // incompatible or unvalidated profile is not an effective production route.
+  return compatible[0];
 }
 
 export function shotProjectRenderInputKeyForProfile(project:FilmProject,shot:Shot,profile:WorkflowProfile|undefined):string{
