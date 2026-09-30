@@ -46,11 +46,11 @@ export async function analyzeImagesWithLocalVision(machine:AppMachineSettings,in
   if(!res.ok){
     const detail=(await readResponseTextLimited(res,'Local visual evaluator error',1024*1024)).slice(0,1200);
     if(res.status===400||res.status===404||res.status===422)throw new LocalVisionUnavailableError(`Configured local model may not support image input (HTTP ${res.status}): ${detail}`);
-    throw new Error(`Local visual evaluator HTTP ${res.status}: ${detail}`);
+    throw new LocalVisionUnavailableError(`Local visual evaluator HTTP ${res.status}: ${detail}`);
   }
   const payload=await readResponseJsonLimited<ChatResponse>(res,'Local visual evaluator response',8*1024*1024);
   const text=payload.choices?.[0]?.message?.content;
-  if(!text)throw new Error('Local visual evaluator returned no message content.');
+  if(!text)throw new LocalVisionUnavailableError('Local visual evaluator returned no message content.');
   try{return parseLocalVisionJsonObject(text);}
   catch(firstError){
     let repair:Response;
@@ -73,11 +73,11 @@ export async function analyzeImagesWithLocalVision(machine:AppMachineSettings,in
     }catch(error){throw new LocalVisionUnavailableError(`Local visual evaluator JSON repair request failed: ${error instanceof Error?error.message:String(error)}`);}
     if(!repair.ok){
       const detail=(await readResponseTextLimited(repair,'Local visual evaluator JSON repair error',1024*1024)).slice(0,1200);
-      throw new Error(`Local visual evaluator JSON repair HTTP ${repair.status}: ${detail}`);
+      throw new LocalVisionUnavailableError(`Local visual evaluator JSON repair HTTP ${repair.status}: ${detail}`);
     }
     const repairedPayload=await readResponseJsonLimited<ChatResponse>(repair,'Local visual evaluator JSON repair response',8*1024*1024);
     const repairedText=repairedPayload.choices?.[0]?.message?.content;
-    if(!repairedText)throw new Error('Local visual evaluator JSON repair returned no message content.');
+    if(!repairedText)throw new LocalVisionUnavailableError('Local visual evaluator JSON repair returned no message content.');
     try{return parseLocalVisionJsonObject(repairedText);}
     catch(secondError){
       throw new LocalVisionUnavailableError(`Local visual evaluator returned malformed JSON twice. First: ${firstError instanceof Error?firstError.message:String(firstError)}. Repair: ${secondError instanceof Error?secondError.message:String(secondError)}`);
