@@ -3,7 +3,7 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AutomationRunRequest, AutomationStatus, FilmProject, HumanTaskType, QcLayer, RenderOutput, Shot } from '../../shared/types';
-import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, isObservedStateApprovalResolution, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
+import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, renderOutputProductionInputKey, shotQcInputKey } from '../../shared/production-state';
 import { ProjectService } from './project-service';
 import { AppSettingsService } from './app-settings-service';
 import { RenderQueueService } from './render-queue';
@@ -245,7 +245,7 @@ export class ProductionRuntimeService extends EventEmitter{
       project=this.projects.getCurrent()!;shot=project.shots.find(item=>item.id===shotId)!;
       const draft=await extractObservedStateDraft(this.settings.get(),project,shot,stableFinalFrame);
       const confidenceReviewTitle=`${OBSERVED_STATE_CONFIDENCE_TASK_PREFIX}${shot.title}`;
-      const confidenceApproved=project.humanTasks.some(task=>task.shotId===shotId&&task.type==='manual-qc'&&task.title===confidenceReviewTitle&&task.status==='resolved'&&task.relatedRenderOutputIds.includes(outputId)&&isObservedStateApprovalResolution(task.resolution));
+      const confidenceApproved=project.humanTasks.some(task=>isApprovedObservedStateReview(task,shotId,confidenceReviewTitle,outputId));
       if(draft.confidence<0.6&&!confidenceApproved){
         await this.ensureHumanTask(
           shot,'manual-qc',confidenceReviewTitle,
