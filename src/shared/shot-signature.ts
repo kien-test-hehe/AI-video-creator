@@ -101,7 +101,11 @@ export function canRefreshProfileValidationFromRender(profile:WorkflowProfile|un
 }
 
 function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile|undefined{
-  if(shot.generation.workflowProfileId)return project.settings.workflowProfiles.find(profile=>profile.id===shot.generation.workflowProfileId);
+  if(shot.generation.workflowProfileId){
+    const explicit=project.settings.workflowProfiles.find(profile=>profile.id===shot.generation.workflowProfileId);
+    if(!explicit||!explicit.enabled||(explicit.purpose??'video')!=='video'||!explicit.workflowPath||explicit.validation?.structuralStatus!=='valid'||workflowCapabilityErrors(explicit,shot).length)return undefined;
+    return explicit;
+  }
   const candidates=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.modelFamily===shot.generation.modelFamily&&profile.mode===shot.generation.mode&&Boolean(profile.workflowPath));
   const compatible=candidates
     .filter(profile=>profile.validation?.structuralStatus==='valid'&&workflowCapabilityErrors(profile,shot).length===0)
@@ -111,13 +115,15 @@ function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile
       (b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||
       a.id.localeCompare(b.id)
     );
-  return compatible[0]??candidates.find(profile=>profile.validation?.structuralStatus==='valid')??candidates[0];
+  // Automatic routing truth must match main-process routeWorkflow(): an
+  // incompatible or unvalidated profile is not an effective production route.
+  return compatible[0];
 }
 
 export function shotProjectRenderInputKeyForProfile(project:FilmProject,shot:Shot,profile:WorkflowProfile|undefined):string{
   const ids=[...shot.characterAssetIds,...shot.propAssetIds,...(shot.referenceAssetIds??[]),shot.locationAssetId].filter((id):id is string=>Boolean(id));
   const promptAssets=[...new Set(ids)].map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({
-    id:asset!.id,kind:asset!.kind,name:asset!.name,notes:asset!.notes
+    id:asset!.id,kind:asset!.kind,name:asset!.name,notes:asset!.notes,continuity:asset!.continuity
   })).sort((a,b)=>a.id.localeCompare(b.id));
   const actualStart=currentGenerationState(project,shot.actualStartStateId);
   return JSON.stringify({

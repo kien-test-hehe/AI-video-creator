@@ -1,7 +1,7 @@
 import { useState, type DragEvent } from 'react';
 import { MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../../shared/defaults';
-import type { DirectorShotDraft, ModelFamily, Shot } from '../../../shared/types';
-import { filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForDirectorDraft } from '../../../shared/director-signature';
+import type { DirectorShotDraft, Shot } from '../../../shared/types';
+import { filterDirectorAssetIds, resolveDirectorProposalRoutes, sceneDirectorInputKey } from '../../../shared/director-signature';
 import { useAppStore } from '../store';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { Card, Empty, Page, Pill } from '../components/Ui';
@@ -55,24 +55,24 @@ export function Storyboard(){
         return;
       }
       if(current.shots.length+proposal.drafts.length>100_000)throw new Error('Director proposal would exceed the 100000-shot project safety limit.');
+      // Validate the whole proposal before mutating anything. Apply is all-or-nothing:
+      // a human-approved eight-shot proposal must never silently become seven shots.
+      resolveDirectorProposalRoutes(current,proposal.drafts);
       updateProject(p=>{
         const scene=p.scenes.find(s=>s.id===sceneId);
         if(!scene||sceneDirectorInputKey(p,scene)!==proposal.signature)throw new Error('Director proposal became stale before it could be applied.');
-        let index=p.shots.filter(s=>s.sceneId===sceneId).length,added=0;
-        for(const draft of proposal.drafts){
-          const requested=draft.preferredModel as ModelFamily|undefined;
-          const route=validatedVideoRouteForDirectorDraft(p,requested,draft)??validatedVideoRouteForDirectorDraft(p,PRIMARY_VIDEO_MODEL,draft);
-          const validatedModel=route?.modelFamily;
-          if(!validatedModel||!route)continue;
-          index+=1;added+=1;const d=MODEL_DEFAULTS[validatedModel],id=crypto.randomUUID();
+        const resolved=resolveDirectorProposalRoutes(p,proposal.drafts);
+        let index=p.shots.filter(s=>s.sceneId===sceneId).length;
+        for(const{draft,route,includeAudio}of resolved){
+          const validatedModel=route.modelFamily;
+          index+=1;const d=MODEL_DEFAULTS[validatedModel],id=crypto.randomUUID();
           const characterAssetIds=filterDirectorAssetIds(p,'character',draft.characterAssetIds||[]).slice(0,16);
           const referenceAssetIds=filterDirectorAssetIds(p,'reference',draft.referenceAssetIds||[]).slice(0,16);
           const propAssetIds=filterDirectorAssetIds(p,'prop',draft.propAssetIds||[]).slice(0,16);
           const locationAssetId=filterDirectorAssetIds(p,'location',draft.locationAssetId?[draft.locationAssetId]:[])[0];
-          const shot:Shot={id,sceneId,index,title:draft.title||('Shot '+scene.index+'.'+index),prompt:draft.prompt,camera:draft.camera,action:draft.action,dialogue:draft.dialogue,continuityNotes:draft.continuityNotes,characterAssetIds,locationAssetId,propAssetIds,referenceAssetIds,status:'draft',generation:{modelFamily:validatedModel,mode:route.mode,quality:draft.quality,width:d.width||768,height:d.height||432,frames:d.frames||97,fps:d.fps||24,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??false,workflowProfileId:route.id}};
+          const shot:Shot={id,sceneId,index,title:draft.title||('Shot '+scene.index+'.'+index),prompt:draft.prompt,camera:draft.camera,action:draft.action,dialogue:draft.dialogue,continuityNotes:draft.continuityNotes,characterAssetIds,locationAssetId,propAssetIds,referenceAssetIds,status:'draft',generation:{modelFamily:validatedModel,mode:route.mode,quality:draft.quality,width:d.width||768,height:d.height||432,frames:d.frames||97,fps:d.fps||24,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio,workflowProfileId:route.id}};
           p.shots.push(shot);scene.shotIds.push(id);
         }
-        if(!added)throw new Error('Director proposal contains no shot compatible with the currently validated local video routes.');
         rebuildDefaultSequentialDependencies(p,[sceneId]);
       });
       setDirectorProposals(items=>{const next={...items};delete next[sceneId];return next;});

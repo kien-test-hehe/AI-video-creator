@@ -1,10 +1,19 @@
-import type { AppMachineSettings, ContinuityReview, DirectorShotDraft, FilmProject, Scene, Shot } from '../../shared/types';
+import type { AppMachineSettings, Asset, ContinuityReview, DirectorShotDraft, FilmProject, Scene, Shot } from '../../shared/types';
 import { assertLocalUrl, fetchLocalUrl } from './local-url';
 import { readResponseJsonLimited, readResponseTextLimited } from './http-response';
-import { continuityPredecessorShots } from '../../shared/director-signature';
+import { continuityPredecessorShots, directorProfileCanServeDraft } from '../../shared/director-signature';
 
 interface ChatResponse{choices?:Array<{message?:{content?:string}}>}
 export class LocalDirectorJsonError extends Error{}
+
+export const DIRECTOR_PREDECESSOR_CONTEXT_LIMIT=16;
+
+export function directorAssetContinuityContext(asset:Asset):string{
+  const notes=asset.notes?` | notes=${clipText(asset.notes,600)}`:'';
+  const continuity=asset.continuity?` | continuityBible=${clipText(JSON.stringify(asset.continuity),2400)}`:'';
+  const tags=asset.tags.length?` | tags=${asset.tags.slice(0,12).join(',')}`:'';
+  return `${asset.kind} | id=${asset.id} | name=${clipText(asset.name,240)}${notes}${continuity}${tags}`;
+}
 
 export function boundedDirectorAssetIds(value:unknown,allowed:Set<string>,max=16):string[]{
   if(!Array.isArray(value))return[];
@@ -44,8 +53,8 @@ export async function planSceneWithLocalDirector(project:FilmProject,scene:Scene
     .sort((a,b)=>b.score-a.score||a.asset.name.localeCompare(b.asset.name))
     .slice(0,40)
     .map(item=>item.asset);
-  const assetContext=relevantAssets.map(a=>`${a.kind} | id=${a.id} | name=${clipText(a.name,240)}${a.notes?` | continuity=${clipText(a.notes,600)}`:''}${a.tags.length?` | tags=${a.tags.slice(0,12).join(',')}`:''}`).join('\n');
-  const availableModels=[...new Set(project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid').map(profile=>profile.modelFamily))];
+  const assetContext=relevantAssets.map(directorAssetContinuityContext).join('\n');
+  const availableModels=[...new Set(project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&directorProfileCanServeDraft(profile)).map(profile=>profile.modelFamily))];
   const modelInstruction=availableModels.length?`preferredModel must be one of: ${availableModels.join(' | ')}. Use an empty string if no preference is necessary.`:'Set preferredModel to an empty string because no validated video route is currently available.';
   const system='You are a film director and storyboard planner for a local generative-video pipeline. Return strict JSON only. Plan shots that can be generated independently while preserving continuity. Avoid redundant coverage. Each visual prompt must describe subject identity, environment, lighting, composition and motion. Camera language should be practical and concise. You may ONLY reference asset ids supplied by the user.';
   const user=`FILM: ${clipText(project.story.title,500)}\nLOGLINE: ${clipText(project.story.logline,2000)}\nSTORY BIBLE: ${clipText(project.story.notes,8000)}\n\nSCENE ${scene.index}: ${clipText(scene.heading,1000)}\n${clipText(scene.body,16000)}\n\nKNOWN ASSETS (most scene-relevant, capped):\n${assetContext||'(none)'}\n\n${modelInstruction}\nReturn {"shots":[{"title":"...","prompt":"...","camera":"...","action":"...","dialogue":"...","continuityNotes":"...","quality":"preview|balanced|hero","preferredModel":"validated-model-or-empty","characterAssetIds":["exact-known-id"],"locationAssetId":"exact-known-id-or-empty","referenceAssetIds":["exact-known-id"],"propAssetIds":["exact-known-id"]}]}. Use 2-8 shots depending on scene complexity.`;
@@ -67,9 +76,9 @@ export async function reviewShotWithLocalDirector(project:FilmProject,shot:Shot,
   const base=assertLocalUrl(cfg.baseUrl,true);const url=new URL('chat/completions',base.href.endsWith('/')?base.href:`${base.href}/`);
   const scene=project.scenes.find(s=>s.id===shot.sceneId);const predecessors=continuityPredecessorShots(project,shot);
   const ids=new Set([...(shot.characterAssetIds||[]),...(shot.referenceAssetIds||[]),...(shot.propAssetIds||[])]);if(shot.locationAssetId)ids.add(shot.locationAssetId);if(shot.startFrameAssetId)ids.add(shot.startFrameAssetId);if(shot.endFrameAssetId)ids.add(shot.endFrameAssetId);
-  const assets=[...ids].map(id=>project.assets.find(a=>a.id===id)).filter(Boolean).map(a=>`${a!.kind} ${clipText(a!.name,240)}: ${clipText(a!.notes||'(no continuity description)',800)}`).join('\n');
+  const assets=[...ids].map(id=>project.assets.find(a=>a.id===id)).filter((asset):asset is Asset=>Boolean(asset)).map(directorAssetContinuityContext).join('\n');
   const system='You are a continuity supervisor for AI-generated film shots. Return strict JSON only. Find concrete continuity risks from the provided text/reference metadata; do not claim that you visually inspected rendered pixels.';
-  const predecessorContext=predecessors.slice(0,4).map((prior,index)=>`UPSTREAM ${index+1}: ${clipText(prior.title,500)}\nPrompt: ${clipText(prior.prompt,6000)}\nAction: ${clipText(prior.action,3000)}\nContinuity: ${clipText(prior.continuityNotes,4000)}`).join('\n\n');
+  const predecessorContext=predecessors.slice(0,DIRECTOR_PREDECESSOR_CONTEXT_LIMIT).map((prior,index)=>`UPSTREAM ${index+1}: ${clipText(prior.title,500)}\nPrompt: ${clipText(prior.prompt,6000)}\nAction: ${clipText(prior.action,3000)}\nContinuity: ${clipText(prior.continuityNotes,4000)}`).join('\n\n');
   const user=`SCENE: ${clipText(scene?.heading||'',1000)}\n${clipText(scene?.body||'',12000)}\n\nUPSTREAM CONTINUITY SHOTS:\n${predecessorContext||'(none)'}\n\nCURRENT SHOT:\n${clipText(shot.title,500)}\nPrompt: ${clipText(shot.prompt,8000)}\nCamera: ${clipText(shot.camera,2000)}\nAction: ${clipText(shot.action,4000)}\nDialogue/audio: ${clipText(shot.dialogue,4000)}\nContinuity: ${clipText(shot.continuityNotes,5000)}\n\nATTACHED ASSET METADATA:\n${assets||'(none)'}\n\nReturn {"issues":["specific issue"],"suggestedContinuityNotes":"concise notes","promptAddendum":"only extra constraints"}. If there is no meaningful issue, return empty fields.`;
   const parsed=await requestDirectorJson({...cfg,temperature:Math.min(cfg.temperature,0.4)},url,system,user);
   return{issues:Array.isArray(parsed.issues)?parsed.issues.slice(0,12).map((value:unknown)=>directorText(value,'',4096)).filter(Boolean):[],suggestedContinuityNotes:directorText(parsed.suggestedContinuityNotes,'',100_000),promptAddendum:directorText(parsed.promptAddendum,'',100_000)};
