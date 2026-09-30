@@ -1,4 +1,5 @@
-import type { RenderOutput } from './types';
+import type { FilmProject, RenderOutput } from './types';
+import { currentProductionInputKeyForOutput, renderOutputProductionInputKey } from './production-state';
 
 export type TakeUseContext='timeline'|'preferred';
 
@@ -15,4 +16,16 @@ export function takeNeedsConfirmation(output:RenderOutput):boolean{
 
 export function latestPassingVideoTake(outputs:RenderOutput[]):RenderOutput|undefined{
   return [...outputs].filter(output=>output.mediaType==='video'&&output.technicalQc?.passed===true).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+
+export function latestCurrentPassingVideoTake(project:FilmProject,shotId:string):RenderOutput|undefined{
+  const shot=project.shots.find(item=>item.id===shotId);if(!shot)return undefined;
+  return [...project.renderOutputs]
+    .filter(output=>output.shotId===shotId&&output.mediaType==='video'&&output.technicalQc?.passed===true)
+    .sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||b.id.localeCompare(a.id))
+    .find(output=>{
+      const recorded=renderOutputProductionInputKey(project,output),current=currentProductionInputKeyForOutput(project,shot,output);
+      return Boolean(recorded&&current&&recorded===current);
+    });
 }

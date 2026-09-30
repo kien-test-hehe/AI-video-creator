@@ -11,16 +11,16 @@ import { directorText } from '../src/main/services/director-service';
 import { parseVolumeDetectPeak, technicalQcStructuralIssues } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
-import { alternateShotTitle, appendProjectText, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioNextStep, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
+import { alternateShotTitle, appendProjectText, canonicalReadyOutputForShot, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioNextStep, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
 import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
 import { continuityPredecessorShots, continuityReviewInputKey, filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../src/shared/director-signature';
-import { latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
+import { latestCurrentPassingVideoTake, latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../src/shared/recovery-policy';
-import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineClipUseIssue, timelineExportInputKey, timelineOutputIssue } from '../src/shared/timeline-policy';
+import { capcutHandoffInputKey, compareTimelineClips, duplicateTimelineOrderKey, timelineClipUseIssue, timelineExportInputKey, timelineOutputIssue, timelineTakeApprovalInputKey } from '../src/shared/timeline-policy';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { comfyNodeCatalogFingerprint, fingerprintWanGpSourceTree, sha256File } from '../src/main/services/runtime-fingerprint';
@@ -714,8 +714,21 @@ describe('Studio workflow routing and timeline drag',()=>{
    expect(studioWorkflowIssue(resolved,shot)).toMatch(/disabled/i);
  });
  it('inserts a rendered take at the requested canonical timeline position',()=>{
-   const project={shots:[{id:'s1'},{id:'s2'}],renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'}],timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}]} as unknown as FilmProject;
-   expect(insertTimelineOutput(project,'o2','a','test override')).toBe(true);const canonical=[...project.timeline].sort(compareTimelineClips);expect(canonical.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(canonical.map(clip=>clip.order)).toEqual([0,1]);
+   const makeShot=(id:string,index:number):Shot=>({id,sceneId:'scene',index,title:id,prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:index,negativePrompt:'',includeAudio:false}});
+   const project={
+     schemaVersion:3,id:'timeline-drag',name:'Timeline drag',rootPath:'/tmp/timeline-drag',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+     story:{title:'Timeline drag',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['s1','s2']}],assets:[],shots:[makeShot('s1',1),makeShot('s2',2)],renderJobs:[],
+     renderOutputs:[
+       {id:'o1',jobId:'orphaned',shotId:'s1',path:'/tmp/timeline-drag/o1.mp4',filename:'o1.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'},
+       {id:'o2',jobId:'orphaned',shotId:'s2',path:'/tmp/timeline-drag/o2.mp4',filename:'o2.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:02.000Z'}
+     ],
+     timeline:[{id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1}],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+     settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+   } as FilmProject;
+   expect(insertTimelineOutput(project,'o2','a','test override')).toBe(true);
+   const canonical=[...project.timeline].sort(compareTimelineClips);
+   expect(canonical.map(clip=>clip.renderOutputId)).toEqual(['o2','o1']);expect(canonical.map(clip=>clip.order)).toEqual([0,1]);
+   expect(canonical[0].approval).toBe('human-override');expect(canonical[0].approvalInputKey).toBeTruthy();
  });
  it('refuses timeline insertion once the canonical 100000-clip limit is reached',()=>{
    const timeline:any[]=[];timeline.length=100_000;
@@ -883,15 +896,24 @@ describe('foreground artifact input signatures',()=>{
   });
 });
 describe('multi-track timeline editing',()=>{
+  const timelineShot=(id:string,index:number):Shot=>({id,sceneId:'scene',index,title:id,prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:index,negativePrompt:'',includeAudio:false}});
   const project=()=>({
-    shots:[{id:'s1'},{id:'s2'},{id:'s3'}],
-    renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'},{id:'o3',shotId:'s3',mediaType:'video'}],
+    schemaVersion:3,id:'timeline-edit',name:'Timeline',rootPath:'/tmp/timeline-edit',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Timeline',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['s1','s2','s3']}],assets:[],
+    shots:[timelineShot('s1',1),timelineShot('s2',2),timelineShot('s3',3)],renderJobs:[],
+    renderOutputs:[
+      {id:'o1',jobId:'orphaned',shotId:'s1',path:'/tmp/o1.mp4',filename:'o1.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'o2',jobId:'orphaned',shotId:'s2',path:'/tmp/o2.mp4',filename:'o2.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'o3',jobId:'orphaned',shotId:'s3',path:'/tmp/o3.mp4',filename:'o3.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'}
+    ],
     timeline:[
       {id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},
       {id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},
       {id:'c',shotId:'s3',renderOutputId:'o3',track:1,order:0,trimInSec:0,volume:1}
-    ]
-  }) as any as FilmProject;
+    ],
+    shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  }) as FilmProject;
   it('reorders only within one track and refuses cross-track drag reorder',()=>{
     const p=project();expect(reorderTimeline(p,'b','a')).toBe(true);
     expect(p.timeline.find(c=>c.id==='b')?.order).toBe(0);expect(p.timeline.find(c=>c.id==='a')?.order).toBe(1);expect(p.timeline.find(c=>c.id==='c')?.order).toBe(0);
@@ -929,9 +951,11 @@ describe('canonical timeline integrity',()=>{
     expect(timelineClipUseIssue(project,canonical)).toBeUndefined();
     expect(timelineClipUseIssue(project,{...canonical,approval:'legacy'})).toMatch(/legacy take approval/i);
     expect(timelineClipUseIssue(project,{...canonical,approval:'human-override',approvalReason:undefined})).toMatch(/without a recorded reason/i);
-    expect(timelineClipUseIssue(project,{...canonical,approval:'human-override',approvalReason:'Human accepted continuity mismatch.'})).toBeUndefined();
+    const humanOverride={...canonical,approval:'human-override' as const,approvalReason:'Human accepted continuity mismatch.',approvalInputKey:timelineTakeApprovalInputKey(project,'o1')};
+    expect(timelineClipUseIssue(project,humanOverride)).toBeUndefined();
     project.qcResults.push({id:'qs2',shotId:'s1',renderOutputId:'o1',layer:'semantic',status:'fail',issues:[],inputKey:shotQcInputKey(project,'s1','o1','semantic'),createdAt:'2026-01-01T00:00:02.000Z'} as any);
     expect(timelineClipUseIssue(project,canonical)).toMatch(/no longer canonical-ready.*semantic QC is fail/i);
+    expect(timelineClipUseIssue(project,humanOverride)).toMatch(/human override is stale/i);
   });
 });
 describe('technical QC structural invariants',()=>{
@@ -2486,5 +2510,90 @@ describe('state provenance next-five hardening',()=>{
     const task={shotId:'b',type:'manual-qc' as const,title:firstTitle,status:'resolved' as const,relatedRenderOutputIds:['out-b'],resolution:`${OBSERVED_STATE_APPROVAL_PREFIX} human checked draft`};
     expect(isApprovedObservedStateReview(task,'b',firstTitle,'out-b')).toBe(true);
     expect(isApprovedObservedStateReview(task,'b',secondTitle,'out-b')).toBe(false);
+  });
+});
+
+
+describe('timeline provenance next-five hardening',()=>{
+  const makeProject=():FilmProject=>{
+    const shot:Shot={
+      id:'timeline-shot',sceneId:'timeline-scene',index:1,title:'Timeline shot',prompt:'original prompt',camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:99,negativePrompt:'',includeAudio:false},
+      latestRenderId:'timeline-output',canonicalRenderId:'timeline-output'
+    };
+    const project:FilmProject={
+      schemaVersion:3,id:'timeline-provenance',name:'Timeline provenance',rootPath:'/tmp/timeline-provenance',
+      createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'Timeline provenance',logline:'',script:'',notes:''},
+      scenes:[{id:'timeline-scene',index:1,heading:'',body:'',shotIds:[shot.id]}],assets:[],shots:[shot],renderJobs:[],
+      renderOutputs:[{id:'timeline-output',jobId:'orphaned',shotId:shot.id,path:'/tmp/timeline-provenance/renders/timeline-output.mp4',filename:'timeline-output.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:01.000Z',passed:true,issues:[],warnings:[]}}],
+      timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    };
+    project.renderOutputs[0].productionInputKey=shotProductionInputKey(project,shot);
+    project.qcResults.push(
+      {id:'timeline-qv',shotId:shot.id,renderOutputId:'timeline-output',layer:'visual',status:'pass',issues:[],inputKey:shotQcInputKey(project,shot.id,'timeline-output','visual'),createdAt:'2026-01-01T00:00:02.000Z'},
+      {id:'timeline-qs',shotId:shot.id,renderOutputId:'timeline-output',layer:'semantic',status:'pass',issues:[],inputKey:shotQcInputKey(project,shot.id,'timeline-output','semantic'),createdAt:'2026-01-01T00:00:02.000Z'}
+    );
+    project.timeline=[{id:'timeline-clip',shotId:shot.id,renderOutputId:'timeline-output',track:0,order:0,trimInSec:0,volume:1,approval:'canonical'}];
+    return project;
+  };
+
+  it('invalidates a human timeline override when its exact shot/QC provenance changes',()=>{
+    const project=makeProject(),clip=project.timeline[0];
+    clip.approval='human-override';clip.approvalReason='Human accepted this non-standard take.';
+    clip.approvalInputKey=timelineTakeApprovalInputKey(project,clip.renderOutputId);
+    expect(timelineClipUseIssue(project,clip)).toBeUndefined();
+    project.shots[0].prompt='changed after approval';
+    expect(timelineClipUseIssue(project,clip)).toMatch(/human override is stale/i);
+  });
+
+  it('changes the timeline export signature when canonical readiness changes without timeline edits',()=>{
+    const project=makeProject(),before=timelineExportInputKey(project);
+    project.shots[0].prompt='render inputs changed while export is running';
+    expect(timelineExportInputKey(project)).not.toBe(before);
+    expect(canonicalTakeReadiness(project,'timeline-shot','timeline-output').ready).toBe(false);
+  });
+
+  it('changes the CapCut handoff signature when canonical readiness changes without manifest-visible shot edits',()=>{
+    const project=makeProject(),before=capcutHandoffInputKey(project);
+    project.shots[0].prompt='render inputs changed while handoff is running';
+    expect(capcutHandoffInputKey(project)).not.toBe(before);
+    expect(canonicalTakeReadiness(project,'timeline-shot','timeline-output').ready).toBe(false);
+  });
+
+  it('refuses stale canonical ids when selecting takes for automatic timeline building',()=>{
+    const project=makeProject(),shot=project.shots[0];
+    expect(canonicalReadyOutputForShot(project,shot)?.id).toBe('timeline-output');
+    shot.prompt='canonical id survived but render inputs changed';
+    expect(shot.canonicalRenderId).toBe('timeline-output');
+    expect(canonicalReadyOutputForShot(project,shot)).toBeUndefined();
+  });
+
+  it('selects a fallback latest take only from current production provenance',async()=>{
+    const project=makeProject(),shot=project.shots[0],currentKey=project.renderOutputs[0].productionInputKey!;
+    project.renderOutputs=[
+      {id:'current-old',jobId:'orphaned',shotId:shot.id,path:'/tmp/timeline-provenance/renders/current-old.mp4',filename:'current-old.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:03.000Z',productionInputKey:currentKey,technicalQc:{checkedAt:'2026-01-01T00:00:03.000Z',passed:true,issues:[],warnings:[]}},
+      {id:'stale-new',jobId:'orphaned',shotId:shot.id,path:'/tmp/timeline-provenance/renders/stale-new.mp4',filename:'stale-new.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:05.000Z',productionInputKey:'stale-production-input',technicalQc:{checkedAt:'2026-01-01T00:00:05.000Z',passed:true,issues:[],warnings:[]}}
+    ];
+    expect(latestCurrentPassingVideoTake(project,shot.id)?.id).toBe('current-old');
+
+    const root=await mkdtemp(join(tmpdir(),'cineforge-delete-fallback-provenance-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Fallback provenance');
+      await service.mutate(next=>{
+        next.scenes=[{id:'timeline-scene',index:1,heading:'',body:'',shotIds:['timeline-shot']}];
+        const target=structuredClone(shot);target.latestRenderId='delete-me';target.canonicalRenderId=undefined;next.shots=[target];
+        const key=shotProductionInputKey(next,target);
+        next.renderOutputs=[
+          {id:'current-old',jobId:'orphaned',shotId:target.id,path:join(root,'renders','current-old.mp4'),filename:'current-old.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:03.000Z',productionInputKey:key,technicalQc:{checkedAt:'2026-01-01T00:00:03.000Z',passed:true,issues:[],warnings:[]}},
+          {id:'stale-new',jobId:'orphaned',shotId:target.id,path:join(root,'renders','stale-new.mp4'),filename:'stale-new.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:05.000Z',productionInputKey:'stale-production-input',technicalQc:{checkedAt:'2026-01-01T00:00:05.000Z',passed:true,issues:[],warnings:[]}},
+          {id:'delete-me',jobId:'orphaned',shotId:target.id,path:join(root,'renders','delete-me.mp4'),filename:'delete-me.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:06.000Z',productionInputKey:key,technicalQc:{checkedAt:'2026-01-01T00:00:06.000Z',passed:true,issues:[],warnings:[]}}
+        ];
+      });
+      const saved=await service.deleteRenderOutput('delete-me');
+      expect(saved.shots[0].latestRenderId).toBe('current-old');
+    }finally{await rm(root,{recursive:true,force:true});}
   });
 });

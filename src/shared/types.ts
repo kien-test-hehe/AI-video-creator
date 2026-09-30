@@ -269,7 +269,7 @@ export interface RenderJob {
   modelFamily:ModelFamily;workflowProfileId?:UUID;comfyPromptId?:string;backendPid?:number;lastHeartbeatAt?:ISODate;
   error?:string;outputs:RenderOutput[];spec?:RenderJobSpec;
 }
-export interface TimelineClip { id:UUID;shotId:UUID;renderOutputId:UUID;track:number;order:number;trimInSec:number;trimOutSec?:number;volume:number;approval?:'legacy'|'canonical'|'human-override';approvalReason?:string; }
+export interface TimelineClip { id:UUID;shotId:UUID;renderOutputId:UUID;track:number;order:number;trimInSec:number;trimOutSec?:number;volume:number;approval?:'legacy'|'canonical'|'human-override';approvalReason?:string;approvalInputKey?:string; }
 export interface FilmProject {
   schemaVersion:3;
   id:UUID;

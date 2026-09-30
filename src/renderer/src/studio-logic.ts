@@ -1,6 +1,6 @@
 import { MODEL_DEFAULTS } from '../../shared/defaults';
 import type { FilmProject, PreflightReport, Shot, WorkflowProfile } from '../../shared/types';
-import { compareTimelineClips } from '../../shared/timeline-policy';
+import { compareTimelineClips, timelineTakeApprovalInputKey } from '../../shared/timeline-policy';
 import { canonicalTakeReadiness } from '../../shared/production-state';
 
 
@@ -118,9 +118,17 @@ export function insertTimelineOutput(project:FilmProject,outputId:string,beforeC
   const inserted={
     id:crypto.randomUUID(),shotId:output.shotId,renderOutputId:output.id,track,order:index,trimInSec:0,volume:1,
     approval:approvalIssue?'human-override' as const:'canonical' as const,
-    approvalReason:approvalIssue?overrideReason:undefined
+    approvalReason:approvalIssue?overrideReason:undefined,
+    approvalInputKey:approvalIssue?timelineTakeApprovalInputKey(project,output.id):undefined
   };
   ordered.splice(index,0,inserted);ordered.forEach((clip,order)=>clip.order=order);project.timeline.push(inserted);return true;
+}
+
+export function canonicalReadyOutputForShot(project:FilmProject,shot:Shot){
+  if(!shot.canonicalRenderId)return undefined;
+  const output=project.renderOutputs.find(item=>item.id===shot.canonicalRenderId&&item.shotId===shot.id&&item.mediaType==='video');
+  if(!output)return undefined;
+  return canonicalTakeReadiness(project,shot.id,output.id).ready?output:undefined;
 }
 
 export function alternateShotTitle(title:string):string{
