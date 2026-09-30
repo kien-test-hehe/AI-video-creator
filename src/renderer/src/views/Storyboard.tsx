@@ -1,7 +1,7 @@
 import { useState, type DragEvent } from 'react';
 import { MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from '../../../shared/defaults';
 import type { DirectorShotDraft, ModelFamily, Shot } from '../../../shared/types';
-import { filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForModel } from '../../../shared/director-signature';
+import { filterDirectorAssetIds, sceneDirectorInputKey, validatedVideoRouteForDirectorDraft } from '../../../shared/director-signature';
 import { useAppStore } from '../store';
 import { autoAssignAssetToShot } from '../asset-assignment';
 import { Card, Empty, Page, Pill } from '../components/Ui';
@@ -61,7 +61,7 @@ export function Storyboard(){
         let index=p.shots.filter(s=>s.sceneId===sceneId).length,added=0;
         for(const draft of proposal.drafts){
           const requested=draft.preferredModel as ModelFamily|undefined;
-          const route=validatedVideoRouteForModel(p,requested)??validatedVideoRouteForModel(p,PRIMARY_VIDEO_MODEL)??p.settings.workflowProfiles.find(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
+          const route=validatedVideoRouteForDirectorDraft(p,requested,draft)??validatedVideoRouteForDirectorDraft(p,PRIMARY_VIDEO_MODEL,draft);
           const validatedModel=route?.modelFamily;
           if(!validatedModel||!route)continue;
           index+=1;added+=1;const d=MODEL_DEFAULTS[validatedModel],id=crypto.randomUUID();
