@@ -1,6 +1,7 @@
 import type { AppMachineSettings, CharacterContinuityState, FilmProject, PropContinuityState, QcIssue, QcStatus, Shot, ShotDependency } from '../../shared/types';
 import { analyzeImagesWithLocalVision, LocalVisionUnavailableError } from './local-vision-service';
 import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, productionFingerprint } from '../../shared/production-state';
+import { assertExistingRelativeProjectPath } from './path-safety';
 
 export interface AutoQcEvaluation{status:QcStatus;issues:QcIssue[];note?:string;}
 export interface ObservedStateDraft{
@@ -49,10 +50,17 @@ function unavailable(error:unknown,code:string):AutoQcEvaluation{
   return{status:'human-verify',issues:[{code,severity:'warning',message:`Automatic QC could not make a trustworthy decision: ${message}`}]};
 }
 
+function evenlySample<T>(items:T[],limit:number):T[]{
+  if(limit<=0)return[];
+  if(items.length<=limit)return[...items];
+  if(limit===1)return[items[Math.floor((items.length-1)/2)]];
+  return Array.from({length:limit},(_,index)=>items[Math.round(index*(items.length-1)/(limit-1))]);
+}
+
 export async function evaluateVisualQc(machine:AppMachineSettings,shot:Shot,framePaths:string[]):Promise<AutoQcEvaluation>{
   try{
     const raw=await analyzeImagesWithLocalVision(machine,
-      `Frames are chronological samples from one generated video take for shot "${text(shot.title,300)}". Inspect visual integrity only: identity drift, severe anatomy/geometry failure, flicker, subject disappearance, accidental cuts, corrupted frames, extreme warping, unreadable composition, or motion collapse. Do not judge story intent here. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","observed":"..."}],"note":"..."}. PASS only if no major/blocker defect is visible.`,framePaths);
+      `Frames are chronological samples from one generated video take for shot "${text(shot.title,300)}". Inspect visual integrity only: identity drift, severe anatomy/geometry failure, subject disappearance, accidental cuts, corrupted frames, extreme warping, unreadable composition, or obvious motion collapse. Sparse frames cannot prove fine-grained flicker or smooth motion; use human-verify when a temporal claim is not supported by the samples. Do not judge story intent here. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","observed":"..."}],"note":"..."}. PASS only if no major/blocker defect is visible and no important temporal uncertainty remains.`,framePaths);
     return normalizeEvaluation(raw,'Visual integrity is uncertain from the sampled frames.');
   }catch(error){if(error instanceof LocalVisionUnavailableError)return unavailable(error,'VISUAL_REVIEW_REQUIRED');throw error;}
 }
@@ -63,10 +71,39 @@ export async function evaluateSemanticQc(machine:AppMachineSettings,project:Film
     const assetContract=assetIds.map(id=>project.assets.find(asset=>asset.id===id)).filter(Boolean).map(asset=>({
       id:asset!.id,kind:asset!.kind,name:asset!.name,notes:text(asset!.notes,3000),continuity:asset!.continuity
     }));
+    const visualKinds=new Set(['character','location','prop','wardrobe','reference','keyframe','image']);
+    const referenceEntries:Array<{label:string;path:string}>=[];
+    for(const id of assetIds){
+      if(referenceEntries.length>=4)break;
+      const asset=project.assets.find(item=>item.id===id);
+      if(!asset||!visualKinds.has(asset.kind))continue;
+      const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`semantic QC reference for ${asset.name}`).catch(()=>undefined);
+      if(path)referenceEntries.push({label:`${asset.kind}:${asset.name} [${asset.id}]`,path});
+    }
+    const frameBudget=Math.max(1,8-referenceEntries.length);
+    const sampledFrames=evenlySample(framePaths,frameBudget);
+    const imageLegend=[
+      ...referenceEntries.map((entry,index)=>`Image ${index+1}: REFERENCE ${entry.label}`),
+      ...sampledFrames.map((_,index)=>`Image ${referenceEntries.length+index+1}: GENERATED chronological frame ${index+1}/${sampledFrames.length}`)
+    ].join('\n');
     const contract=`TITLE: ${text(shot.title,500)}\nPROMPT: ${text(shot.prompt,8000)}\nCAMERA: ${text(shot.camera,2000)}\nACTION: ${text(shot.action,4000)}\nDIALOGUE/AUDIO INTENT: ${text(shot.dialogue,3000)}\nCONTINUITY NOTES: ${text(shot.continuityNotes,4000)}\nASSET BIBLE: ${text(JSON.stringify(assetContract),20_000)}`;
     const raw=await analyzeImagesWithLocalVision(machine,
-      `These chronological frames must satisfy this shot contract:\n${contract}\nJudge only evidence visible in the supplied frames. Check required subject, location, broad action progression, composition/camera intent and obvious prop/wardrobe requirements. If motion/action cannot be established from sparse frames, use human-verify rather than guessing. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","expected":"...","observed":"..."}],"note":"..."}.`,framePaths);
-    return normalizeEvaluation(raw,'Shot intent cannot be verified confidently from sampled frames.');
+      `${imageLegend}\n\nGenerated frames must satisfy this shot contract:\n${contract}\nJudge only evidence visible in the supplied images. Compare generated subjects/locations/props against supplied REFERENCE images where available. Check required subject identity, location, broad visible action state, composition/camera intent and obvious prop/wardrobe requirements. Do not infer dialogue correctness, audio quality, lip-sync, fine temporal motion or camera movement from still samples. If those are important to the shot, use human-verify. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","expected":"...","observed":"..."}],"note":"..."}.`,
+      [...referenceEntries.map(entry=>entry.path),...sampledFrames]
+    );
+    const evaluation=normalizeEvaluation(raw,'Shot intent cannot be verified confidently from sampled frames.');
+    const needsAudioReview=Boolean(shot.dialogue.trim()||shot.generation.includeAudio);
+    if(needsAudioReview&&evaluation.status!=='fail'){
+      return{
+        status:'human-verify',
+        issues:[
+          ...evaluation.issues,
+          {code:'AUDIO_SEMANTICS_UNVERIFIED',severity:'warning',message:'The shot contains dialogue/audio intent, but image-only semantic QC cannot verify spoken content, lip-sync, timing, or audio quality.'}
+        ].slice(0,32),
+        note:evaluation.note
+      };
+    }
+    return evaluation;
   }catch(error){if(error instanceof LocalVisionUnavailableError)return unavailable(error,'SEMANTIC_REVIEW_REQUIRED');throw error;}
 }
 
@@ -136,7 +173,7 @@ export function observedStateDraftFromVisionResult(project:FilmProject,shot:Shot
       shotSize:text(raw?.camera?.shotSize,500)||undefined,
       angle:text(raw?.camera?.angle,1000)||undefined,
       screenDirection:text(raw?.camera?.screenDirection,1000)||undefined,
-      movement:text(raw?.camera?.movement,1000)||undefined,
+      movement:undefined,
       lensMm:Number.isFinite(Number(raw?.camera?.lensMm))&&Number(raw.camera.lensMm)>0?Number(raw.camera.lensMm):undefined,
       notes:text(raw?.camera?.notes,3000)||undefined
     },
