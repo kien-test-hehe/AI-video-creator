@@ -95,10 +95,10 @@ export const useAppStore=create<AppState>((set,get)=>({
   setView:activeView=>set({activeView}),selectShot:selectedShotId=>set({selectedShotId}),setQueue:queue=>set({queue}),setAutomation:automation=>set({automation}),setProbe:probe=>set({probe}),setBusy:busy=>{busyCount=Math.max(0,busyCount+(busy?1:-1));set({busy:busyCount>0});},setError:error=>set({error}),setNotice:notice=>set({notice})
 }));
 
-function profileConfigKey(profile:FilmProject['settings']['workflowProfiles'][number]):string{
+export function profileConfigKey(profile:FilmProject['settings']['workflowProfiles'][number]):string{
   return JSON.stringify({
     runtime:profile.runtime,purpose:profile.purpose,name:profile.name,modelFamily:profile.modelFamily,mode:profile.mode,
-    workflowPath:profile.workflowPath,workflowFormat:profile.workflowFormat,bindings:profile.bindings,enabled:profile.enabled,
+    workflowPath:profile.workflowPath,workflowFormat:profile.workflowFormat,bindings:profile.bindings,capabilities:profile.capabilities,enabled:profile.enabled,
     notes:profile.notes,modelFingerprint:profile.modelFingerprint
   });
 }
