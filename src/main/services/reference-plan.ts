@@ -40,7 +40,10 @@ export function planShotReferences(shot:Shot,profile:WorkflowProfile):ShotRefere
   const uniqueCandidates=[...new Set(genericCandidates)];
   const genericArray=keys.has('referenceImages');
   const genericBindingKeys=genericArray?[]:GENERIC_KEYS.filter(key=>keys.has(key));
-  const genericCapacity=genericArray?16:genericBindingKeys.length;
+  // A valid shot can contain up to 16 characters + 1 location + 16 props/wardrobe +
+  // 16 explicit references. Array bindings are specifically the escape hatch for
+  // workflows that can consume more than the fixed dedicated/scalar slots.
+  const genericCapacity=genericArray?Math.min(uniqueCandidates.length,64):genericBindingKeys.length;
   const genericIds=uniqueCandidates.slice(0,genericCapacity);
   const unservedIds=uniqueCandidates.slice(genericCapacity);
 
