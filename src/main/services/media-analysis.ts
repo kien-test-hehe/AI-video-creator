@@ -30,6 +30,12 @@ export async function extractVideoFrame(machine:AppMachineSettings,input:string,
   return output;
 }
 
+export function qcContactFrameFractions(durationSec:number):number[]{
+  return durationSec<1
+    ?[0.08,0.2,0.34,0.48,0.62,0.76,0.9,0.97]
+    :[0.04,0.16,0.29,0.42,0.55,0.68,0.81,0.94];
+}
+
 export async function sampleVideoFrames(machine:AppMachineSettings,input:string,outputDir:string):Promise<SampledVideoFrames>{
   const durationSec=await probeVideoDuration(machine,input);
   await mkdir(outputDir,{recursive:true});
@@ -44,7 +50,7 @@ export async function sampleVideoFrames(machine:AppMachineSettings,input:string,
     finalCandidates.push(path);
   }
   const finalFrame=finalCandidates[Math.max(0,finalCandidates.length-2)]||firstFrame;
-  const fractions=durationSec<1?[0.2,0.55,0.85]:[0.08,0.35,0.65,0.9];
+  const fractions=qcContactFrameFractions(durationSec);
   const contactFrames:string[]=[];
   for(let index=0;index<fractions.length;index++){
     const path=join(outputDir,`sample-${index+1}.jpg`);

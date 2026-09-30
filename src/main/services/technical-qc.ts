@@ -16,14 +16,21 @@ export async function technicalQcVideo(machine:AppMachineSettings,path:string,sh
     const findings=technicalQcVisualFindings(duration,visual);
     issues.push(...findings.issues);warnings.push(...findings.warnings);
   }catch(error){issues.push(`Visual QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
-  let audioPeakDb:number|undefined,audioSilent=false;
+  let audioPeakDb:number|undefined,audioSilent=false,audioIntegratedLufs:number|undefined,maxSilenceSec:number|undefined,totalSilenceSec:number|undefined;
   if(probe.hasAudio){
     try{const peak=await detectPeak(machine.ffmpeg.path,path);audioPeakDb=peak.peakDb;audioSilent=peak.silent;}
-    catch(error){issues.push(`Audio QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
+    catch(error){issues.push(`Audio peak QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
+    try{
+      const audio=await detectAudioProblems(machine.ffmpeg.path,path);
+      audioIntegratedLufs=audio.integratedLufs;maxSilenceSec=audio.maxSilenceSec;totalSilenceSec=audio.totalSilenceSec;
+      const findings=technicalAudioFindings(shot,duration,audio);
+      issues.push(...findings.issues);warnings.push(...findings.warnings);
+    }catch(error){issues.push(`Audio temporal QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
   }
-  if(shot?.generation.includeAudio&&probe.hasAudio&&audioSilent)issues.push('Shot requested audio, but the output audio stream is silent.');
-  if(audioPeakDb!=null&&audioPeakDb>-0.1)warnings.push(`Audio peak is ${audioPeakDb.toFixed(1)} dB; clipping risk.`);
-  return{checkedAt:new Date().toISOString(),passed:issues.length===0,warnings:warnings.slice(0,128).map(value=>value.slice(0,4096)),durationSec:duration,width:probe.video?.width,height:probe.video?.height,fps:probe.video?.fps,hasAudio:probe.hasAudio,audioPeakDb,issues:issues.slice(0,128).map(value=>value.slice(0,4096))};
+  const expectsAudio=Boolean(shot&&(shot.generation.includeAudio||shot.dialogue.trim()));
+  if(expectsAudio&&probe.hasAudio&&audioSilent)issues.push('Shot expects audible dialogue/audio, but the output audio stream is silent.');
+  if(audioPeakDb!=null&&audioPeakDb>-0.1)warnings.push(`Audio peak is ${audioPeakDb.toFixed(1)} dBFS; clipping risk.`);
+  return{checkedAt:new Date().toISOString(),passed:issues.length===0,warnings:warnings.slice(0,128).map(value=>value.slice(0,4096)),durationSec:duration,width:probe.video?.width,height:probe.video?.height,fps:probe.video?.fps,hasAudio:probe.hasAudio,audioPeakDb,audioIntegratedLufs,maxSilenceSec,totalSilenceSec,issues:issues.slice(0,128).map(value=>value.slice(0,4096))};
 }
 
 export function technicalQcStructuralIssues(
@@ -40,7 +47,7 @@ export function technicalQcStructuralIssues(
     if(probe.video.width!==shot.generation.width||probe.video.height!==shot.generation.height)issues.push(`Resolution is ${probe.video.width}×${probe.video.height}; expected ${shot.generation.width}×${shot.generation.height}.`);
     if(Math.abs(probe.video.fps-shot.generation.fps)>0.5)issues.push(`FPS is ${probe.video.fps.toFixed(2)}; expected ${shot.generation.fps}.`);
   }
-  if(shot.generation.includeAudio&&!probe.hasAudio)issues.push('Shot requested audio but output has no audio stream.');
+  if((shot.generation.includeAudio||shot.dialogue.trim())&&!probe.hasAudio)issues.push('Shot expects dialogue/audio but output has no audio stream.');
   return issues;
 }
 
@@ -48,6 +55,45 @@ export function parseVolumeDetectPeak(text:string):{peakDb?:number;silent:boolea
   if(/max_volume:\s*-inf\s*dB/i.test(text))return{silent:true};
   const match=text.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/i);
   return{peakDb:match?Number(match[1]):undefined,silent:false};
+}
+
+export interface AudioProblemMetrics{
+  integratedLufs?:number;
+  maxSilenceSec:number;
+  totalSilenceSec:number;
+}
+
+export function parseAudioProblemMetrics(text:string):AudioProblemMetrics{
+  const silenceDurations=[...text.matchAll(/silence_duration\s*:\s*([0-9]+(?:\.[0-9]+)?)/gi)]
+    .map(match=>Number(match[1])).filter(Number.isFinite);
+  const lufs=[...text.matchAll(/\bI:\s*(-?\d+(?:\.\d+)?)\s*LUFS/gi)]
+    .map(match=>Number(match[1])).filter(Number.isFinite);
+  return{
+    integratedLufs:lufs.length?lufs[lufs.length-1]:undefined,
+    maxSilenceSec:silenceDurations.length?Math.max(...silenceDurations):0,
+    totalSilenceSec:silenceDurations.reduce((sum,value)=>sum+value,0)
+  };
+}
+
+export function technicalAudioFindings(
+  shot:Shot|undefined,
+  durationSec:number|undefined,
+  audio:AudioProblemMetrics
+):{issues:string[];warnings:string[]}{
+  const issues:string[]=[],warnings:string[]=[];
+  const expectsAudio=Boolean(shot&&(shot.generation.includeAudio||shot.dialogue.trim()));
+  if(expectsAudio&&durationSec&&durationSec>0){
+    if(audio.totalSilenceSec>=Math.max(1.5,durationSec*.8)){
+      issues.push(`Audio is mostly silent (${audio.totalSilenceSec.toFixed(2)}s detected silence across ${durationSec.toFixed(2)}s) despite dialogue/audio intent.`);
+    }else if(audio.maxSilenceSec>=Math.max(2.5,durationSec*.65)){
+      warnings.push(`Long silent span detected (${audio.maxSilenceSec.toFixed(2)}s). Verify that the pause is intentional.`);
+    }
+  }
+  if(audio.integratedLufs!=null){
+    if(audio.integratedLufs>-8)warnings.push(`Integrated loudness is ${audio.integratedLufs.toFixed(1)} LUFS; the take is unusually hot and may need normalization.`);
+    else if(audio.integratedLufs<-32)warnings.push(`Integrated loudness is ${audio.integratedLufs.toFixed(1)} LUFS; dialogue/audio may be too quiet.`);
+  }
+  return{issues,warnings};
 }
 
 async function probeMedia(ffprobe:string,path:string):Promise<{durationSec?:number;video?:{width:number;height:number;fps:number};hasAudio:boolean}>{
@@ -106,4 +152,13 @@ async function detectVisualProblems(ffmpeg:string,path:string):Promise<VisualPro
 async function detectPeak(ffmpeg:string,path:string):Promise<{peakDb?:number;silent:boolean}>{
   const result=await execFileAsync(ffmpeg,['-hide_banner','-nostats','-i',path,'-vn','-af','volumedetect','-f','null','-'],{timeout:120_000,maxBuffer:8*1024*1024});
   return parseVolumeDetectPeak(String(result.stderr||''));
+}
+
+async function detectAudioProblems(ffmpeg:string,path:string):Promise<AudioProblemMetrics>{
+  const result=await execFileAsync(
+    ffmpeg,
+    ['-hide_banner','-nostats','-i',path,'-vn','-af','silencedetect=noise=-50dB:d=0.4,ebur128=framelog=verbose:peak=true','-f','null','-'],
+    {timeout:180_000,maxBuffer:24*1024*1024}
+  );
+  return parseAudioProblemMetrics(String(result.stderr||''));
 }

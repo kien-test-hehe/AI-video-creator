@@ -27,6 +27,28 @@ async function probeDirectorModel(machine:AppMachineSettings):Promise<{available
   }
 }
 
+export function videoRouteQualification(project:FilmProject|undefined):{
+  structuralCount:number;
+  runtimeQualifiedCount:number;
+  level:WorkstationReadinessItem['level'];
+  detail:string;
+  action?:string;
+}{
+  if(!project)return{structuralCount:0,runtimeQualifiedCount:0,level:'warning',detail:'Open a project to inspect local video-route qualification.'};
+  const profiles=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
+  const runtimeQualified=profiles.filter(profile=>Boolean(profile.validation?.lastSuccessfulRenderAt));
+  if(runtimeQualified.length)return{
+    structuralCount:profiles.length,runtimeQualifiedCount:runtimeQualified.length,level:'ready',
+    detail:`${runtimeQualified.length} video profile(s) have completed a technical runtime render on this workstation/project. This proves executable routing, not creative/semantic production quality.`
+  };
+  if(profiles.length)return{
+    structuralCount:profiles.length,runtimeQualifiedCount:0,level:'blocked',
+    detail:`${profiles.length} structurally valid video profile(s), but none has completed a technical runtime qualification render yet.`,
+    action:'Run one short qualification render per intended production route before treating the workstation as production-ready.'
+  };
+  return{structuralCount:0,runtimeQualifiedCount:0,level:'blocked',detail:'No enabled structurally valid video workflow profile is available.',action:'Provision/import and validate at least one local video workflow.'};
+}
+
 export async function assessWorkstationReadiness(project:FilmProject|undefined,machine:AppMachineSettings):Promise<WorkstationReadiness>{
   const [probe,directorModel]=await Promise.all([probeSystem(project,machine),probeDirectorModel(machine)]);
   const items:WorkstationReadinessItem[]=[];
@@ -49,12 +71,9 @@ export async function assessWorkstationReadiness(project:FilmProject|undefined,m
   const localRuntimeReady=probe.wangp.available||probe.comfy.reachable;
   add('runtime','Local generation runtime',localRuntimeReady?'ready':'blocked',probe.wangp.available?'WanGP is ready.':probe.comfy.reachable?'ComfyUI is reachable.':'Neither WanGP nor ComfyUI is ready.','Run setup.cmd or configure a dedicated local ComfyUI instance.');
 
-  const profiles=(project?.settings.workflowProfiles??[]).filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
-  const validatedProfiles=profiles.filter(profile=>Boolean(profile.validation?.lastSuccessfulRenderAt));
-  if(!project)add('profiles','Production profiles','warning','Open a project to inspect production workflow qualification.');
-  else if(validatedProfiles.length)add('profiles','Production profiles','ready',`${validatedProfiles.length} video profile(s) have a recorded successful render on this workstation/project.`);
-  else if(profiles.length)add('profiles','Production profiles','warning',`${profiles.length} structurally valid video profile(s), but none has a recorded successful render yet.`,'Run one short qualification render per intended production route.');
-  else add('profiles','Production profiles','blocked','No enabled structurally valid video workflow profile is available.','Provision/import and validate at least one local video workflow.');
+  const routeQualification=videoRouteQualification(project);
+  const validatedProfiles=(project?.settings.workflowProfiles??[]).filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&Boolean(profile.validation?.lastSuccessfulRenderAt));
+  add('profiles','Video route qualification',routeQualification.level,routeQualification.detail,routeQualification.action);
 
   const autoQcAvailable=directorModel.available;
   add(
