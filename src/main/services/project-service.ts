@@ -277,15 +277,18 @@ export class ProjectService {
   async deleteAsset(assetId:string):Promise<FilmProject>{
     const current=this.current;if(!current)throw new Error('Open a project first.');
     const asset=current.assets.find(item=>item.id===assetId);if(!asset)throw new Error('Asset not found.');
-    const origin={id:current.id,rootPath:current.rootPath};
-    let absolute:string|undefined;
-    try{absolute=await assertExistingRelativeProjectPath(current.rootPath,asset.projectPath,'assets',`asset path for ${asset.name}`);}
+    const origin={id:current.id,rootPath:current.rootPath},snapshotPath=asset.projectPath;
+    let absolute:string|undefined,deletePhysicalFile=false;
+    try{absolute=await assertExistingRelativeProjectPath(current.rootPath,snapshotPath,'assets',`asset path for ${asset.name}`);}
     catch(error:any){if(error?.code!=='ENOENT')throw error;}
     const updated=await this.mutate(project=>{
       if(project.id!==origin.id||project.rootPath!==origin.rootPath)throw new Error('Project changed while deleting the asset. Delete was cancelled.');
+      const liveAsset=project.assets.find(item=>item.id===assetId);if(!liveAsset)throw new Error('Asset changed or was already deleted. Delete was cancelled.');
+      if(liveAsset.projectPath!==snapshotPath)throw new Error('Asset storage path changed while deleting it. Delete was cancelled.');
+      deletePhysicalFile=!project.assets.some(item=>item.id!==assetId&&resolve(project.rootPath,item.projectPath)===resolve(project.rootPath,liveAsset.projectPath));
       const before=new Map(project.shots.map(shot=>[shot.id,shotProjectRenderInputKey(project,shot)]));
       project.assets=project.assets.filter(item=>item.id!==assetId);
-      const affectedStateIds=new Set<string>();
+      const affectedStateIds=new Set<string>(),staleReason=`Referenced asset ${assetId} was deleted.`;
       for(const state of project.shotStates){
         let affected=false;
         if(state.frameAssetId===assetId){state.frameAssetId=undefined;affected=true;}
@@ -299,7 +302,15 @@ export class ProjectService {
           if(prop.holderCharacterAssetId===assetId){prop.holderCharacterAssetId=undefined;affected=true;}
         }
         if(state.environment.locationAssetId===assetId){state.environment.locationAssetId=undefined;affected=true;}
-        if(affected){state.status='stale';state.staleReason=`Referenced asset ${assetId} was deleted.`;affectedStateIds.add(state.id);}
+        if(affected)affectedStateIds.add(state.id);
+      }
+      if(affectedStateIds.size)invalidateStateCascade(project,affectedStateIds,staleReason);
+      const taskNow=new Date().toISOString();
+      for(const task of project.humanTasks){
+        if(!task.relatedAssetIds.includes(assetId))continue;
+        task.relatedAssetIds=task.relatedAssetIds.filter(id=>id!==assetId);
+        if(task.status!=='open')continue;
+        task.status='dismissed';task.resolvedAt=taskNow;task.resolution=`Automatically dismissed because related asset ${assetId} was deleted.`;
       }
       for(const shot of project.shots){
         shot.characterAssetIds=shot.characterAssetIds.filter(id=>id!==assetId);
@@ -310,18 +321,14 @@ export class ProjectService {
         if(shot.endFrameAssetId===assetId)shot.endFrameAssetId=undefined;
         if(shot.referenceVideoAssetId===assetId)shot.referenceVideoAssetId=undefined;
         if(shot.audioAssetId===assetId)shot.audioAssetId=undefined;
-        if(shot.plannedStartStateId&&affectedStateIds.has(shot.plannedStartStateId))shot.plannedStartStateId=undefined;
-        if(shot.plannedEndStateId&&affectedStateIds.has(shot.plannedEndStateId))shot.plannedEndStateId=undefined;
-        if(shot.actualStartStateId&&affectedStateIds.has(shot.actualStartStateId))shot.actualStartStateId=undefined;
-        if(shot.observedFinalStateId&&affectedStateIds.has(shot.observedFinalStateId))shot.observedFinalStateId=undefined;
         if(before.get(shot.id)!==shotProjectRenderInputKey(project,shot)){
           shot.latestRenderId=undefined;shot.canonicalRenderId=undefined;
-          invalidateObservedFinalState(project,shot.id,`Referenced asset ${assetId} was deleted.`);
+          invalidateObservedFinalState(project,shot.id,staleReason);
           if(['rendered','failed'].includes(shot.status))shot.status='ready';
         }
       }
     });
-    if(absolute)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete asset file after removing it from the project: ${absolute}`,error));
+    if(absolute&&deletePhysicalFile)await rm(absolute,{force:true}).catch(error=>console.warn(`Could not delete asset file after removing it from the project: ${absolute}`,error));
     return updated;
   }
 
