@@ -4,7 +4,35 @@ import { readResponseJsonLimited, readResponseTextLimited } from './http-respons
 import { continuityPredecessorShots } from '../../shared/director-signature';
 
 interface ChatResponse{choices?:Array<{message?:{content?:string}}>}
-function parseJsonObject(text:string):any{const cleaned=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');const first=cleaned.indexOf('{'),last=cleaned.lastIndexOf('}');if(first<0||last<first)throw new Error('Local director did not return JSON.');return JSON.parse(cleaned.slice(first,last+1));}
+export class LocalDirectorJsonError extends Error{}
+
+export function parseDirectorJsonObject(text:string):any{
+  const cleaned=text.trim().replace(/^\`\`\`(?:json)?\s*/i,'').replace(/\s*\`\`\`$/,'');
+  const first=cleaned.indexOf('{'),last=cleaned.lastIndexOf('}');
+  if(first<0||last<first)throw new LocalDirectorJsonError('Local Director did not return a JSON object.');
+  try{return JSON.parse(cleaned.slice(first,last+1));}
+  catch(error){throw new LocalDirectorJsonError(`Local Director returned malformed JSON: ${error instanceof Error?error.message:String(error)}`);}
+}
+
+async function requestDirectorJson(cfg:AppMachineSettings['director'],url:URL,system:string,user:string):Promise<any>{
+  for(let attempt=0;attempt<2;attempt++){
+    const repair=attempt===1;
+    const prompt=repair?`${user}\n\nYour previous response was not parseable JSON. Return exactly one syntactically valid JSON object with no markdown, comments or trailing text.`:user;
+    const res=await fetchLocalUrl(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:cfg.model,temperature:repair?Math.min(cfg.temperature,.2):cfg.temperature,messages:[{role:'system',content:system},{role:'user',content:prompt}]}),signal:AbortSignal.timeout(180_000)});
+    if(!res.ok)throw new Error(`Local Director HTTP ${res.status}: ${(await readResponseTextLimited(res,'Local Director error',1024*1024)).slice(0,1000)}`);
+    const payload=await readResponseJsonLimited<ChatResponse>(res,'Local Director response',8*1024*1024);
+    const content=payload.choices?.[0]?.message?.content;
+    if(!content)throw new Error('Local Director returned no message content.');
+    try{return parseDirectorJsonObject(content);}
+    catch(error){if(!(error instanceof LocalDirectorJsonError)||repair)throw error;}
+  }
+  throw new LocalDirectorJsonError('Local Director did not return valid JSON after one repair attempt.');
+}
+
+function knownIds(value:unknown,allowed:Set<string>,limit=16):string[]{
+  if(!Array.isArray(value))return[];
+  return [...new Set(value.map(String).filter(id=>allowed.has(id)))].slice(0,limit);
+}
 
 export async function planSceneWithLocalDirector(project:FilmProject,scene:Scene,machine:AppMachineSettings):Promise<DirectorShotDraft[]>{
   const cfg=machine.director;if(!cfg.model.trim())throw new Error('Set a local Director model in Machine Settings first.');
@@ -21,17 +49,14 @@ export async function planSceneWithLocalDirector(project:FilmProject,scene:Scene
   const modelInstruction=availableModels.length?`preferredModel must be one of: ${availableModels.join(' | ')}. Use an empty string if no preference is necessary.`:'Set preferredModel to an empty string because no validated video route is currently available.';
   const system='You are a film director and storyboard planner for a local generative-video pipeline. Return strict JSON only. Plan shots that can be generated independently while preserving continuity. Avoid redundant coverage. Each visual prompt must describe subject identity, environment, lighting, composition and motion. Camera language should be practical and concise. You may ONLY reference asset ids supplied by the user.';
   const user=`FILM: ${clipText(project.story.title,500)}\nLOGLINE: ${clipText(project.story.logline,2000)}\nSTORY BIBLE: ${clipText(project.story.notes,8000)}\n\nSCENE ${scene.index}: ${clipText(scene.heading,1000)}\n${clipText(scene.body,16000)}\n\nKNOWN ASSETS (most scene-relevant, capped):\n${assetContext||'(none)'}\n\n${modelInstruction}\nReturn {"shots":[{"title":"...","prompt":"...","camera":"...","action":"...","dialogue":"...","continuityNotes":"...","quality":"preview|balanced|hero","preferredModel":"validated-model-or-empty","characterAssetIds":["exact-known-id"],"locationAssetId":"exact-known-id-or-empty","referenceAssetIds":["exact-known-id"],"propAssetIds":["exact-known-id"]}]}. Use 2-8 shots depending on scene complexity.`;
-  const res=await fetchLocalUrl(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:cfg.model,temperature:cfg.temperature,messages:[{role:'system',content:system},{role:'user',content:user}]}),signal:AbortSignal.timeout(180_000)});
-  if(!res.ok)throw new Error(`Local Director HTTP ${res.status}: ${(await readResponseTextLimited(res,'Local Director error',1024*1024)).slice(0,1000)}`);
-  const payload=await readResponseJsonLimited<ChatResponse>(res,'Local Director response',8*1024*1024);const content=payload.choices?.[0]?.message?.content;if(!content)throw new Error('Local Director returned no message content.');
-  const parsed=parseJsonObject(content);if(!Array.isArray(parsed.shots))throw new Error('Local Director JSON is missing shots[].');
+  const parsed=await requestDirectorJson(cfg,url,system,user);if(!Array.isArray(parsed.shots))throw new Error('Local Director JSON is missing shots[].');
   const idsFor=(...kinds:string[])=>new Set(relevantAssets.filter(asset=>kinds.includes(asset.kind)).map(asset=>asset.id));
   const characterIds=idsFor('character'),locationIds=idsFor('location'),referenceIds=idsFor('reference'),propIds=idsFor('prop','wardrobe');
   const validModels=new Set(availableModels);
-  return parsed.shots.slice(0,12).map((s:any,i:number)=>{
-    const chars=Array.isArray(s.characterAssetIds)?s.characterAssetIds.map(String).filter((id:string)=>characterIds.has(id)).slice(0,4):[];
-    const refs=Array.isArray(s.referenceAssetIds)?s.referenceAssetIds.map(String).filter((id:string)=>referenceIds.has(id)).slice(0,4):[];
-    const props=Array.isArray(s.propAssetIds)?s.propAssetIds.map(String).filter((id:string)=>propIds.has(id)).slice(0,2):[];
+  return parsed.shots.slice(0,8).map((s:any,i:number)=>{
+    const chars=knownIds(s.characterAssetIds,characterIds);
+    const refs=knownIds(s.referenceAssetIds,referenceIds);
+    const props=knownIds(s.propAssetIds,propIds);
     const location=typeof s.locationAssetId==='string'&&locationIds.has(s.locationAssetId)?s.locationAssetId:undefined;
     return{title:directorText(s.title,`Shot ${scene.index}.${i+1}`,2000),prompt:directorText(s.prompt,scene.body,200_000),camera:directorText(s.camera,'',20_000),action:directorText(s.action,'',100_000),dialogue:directorText(s.dialogue,'',100_000),continuityNotes:directorText(s.continuityNotes,'',100_000),quality:['preview','balanced','hero'].includes(s.quality)?s.quality:'balanced',preferredModel:validModels.has(s.preferredModel)?s.preferredModel:undefined,characterAssetIds:chars,locationAssetId:location,referenceAssetIds:refs,propAssetIds:props} as DirectorShotDraft;
   });
@@ -46,10 +71,8 @@ export async function reviewShotWithLocalDirector(project:FilmProject,shot:Shot,
   const system='You are a continuity supervisor for AI-generated film shots. Return strict JSON only. Find concrete continuity risks from the provided text/reference metadata; do not claim that you visually inspected rendered pixels.';
   const predecessorContext=predecessors.slice(0,4).map((prior,index)=>`UPSTREAM ${index+1}: ${clipText(prior.title,500)}\nPrompt: ${clipText(prior.prompt,6000)}\nAction: ${clipText(prior.action,3000)}\nContinuity: ${clipText(prior.continuityNotes,4000)}`).join('\n\n');
   const user=`SCENE: ${clipText(scene?.heading||'',1000)}\n${clipText(scene?.body||'',12000)}\n\nUPSTREAM CONTINUITY SHOTS:\n${predecessorContext||'(none)'}\n\nCURRENT SHOT:\n${clipText(shot.title,500)}\nPrompt: ${clipText(shot.prompt,8000)}\nCamera: ${clipText(shot.camera,2000)}\nAction: ${clipText(shot.action,4000)}\nDialogue/audio: ${clipText(shot.dialogue,4000)}\nContinuity: ${clipText(shot.continuityNotes,5000)}\n\nATTACHED ASSET METADATA:\n${assets||'(none)'}\n\nReturn {"issues":["specific issue"],"suggestedContinuityNotes":"concise notes","promptAddendum":"only extra constraints"}. If there is no meaningful issue, return empty fields.`;
-  const res=await fetchLocalUrl(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:cfg.model,temperature:Math.min(cfg.temperature,0.4),messages:[{role:'system',content:system},{role:'user',content:user}]}),signal:AbortSignal.timeout(180_000)});
-  if(!res.ok)throw new Error(`Local Director HTTP ${res.status}: ${(await readResponseTextLimited(res,'Local Director error',1024*1024)).slice(0,1000)}`);
-  const payload=await readResponseJsonLimited<ChatResponse>(res,'Local Director response',8*1024*1024);const content=payload.choices?.[0]?.message?.content;if(!content)throw new Error('Local Director returned no message content.');
-  const parsed=parseJsonObject(content);return{issues:Array.isArray(parsed.issues)?parsed.issues.slice(0,12).map((value:unknown)=>directorText(value,'',4096)).filter(Boolean):[],suggestedContinuityNotes:directorText(parsed.suggestedContinuityNotes,'',100_000),promptAddendum:directorText(parsed.promptAddendum,'',100_000)};
+  const parsed=await requestDirectorJson({...cfg,temperature:Math.min(cfg.temperature,0.4)},url,system,user);
+  return{issues:Array.isArray(parsed.issues)?parsed.issues.slice(0,12).map((value:unknown)=>directorText(value,'',4096)).filter(Boolean):[],suggestedContinuityNotes:directorText(parsed.suggestedContinuityNotes,'',100_000),promptAddendum:directorText(parsed.promptAddendum,'',100_000)};
 }
 
 export function directorText(value:unknown,fallback:string,max:number):string{
