@@ -3401,3 +3401,102 @@ describe('final audit integration hardening',()=>{
     expect(compact).toMatch(/canonicalTakeReadiness/);
   });
 });
+
+
+describe('final Director/profile consistency',()=>{
+  const baseShot=():Shot=>({
+    id:'director-shot',sceneId:'scene',index:1,title:'Director shot',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+    generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:1280,height:704,frames:121,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+  });
+  const profile=(id:string,modelFamily:WorkflowProfile['modelFamily'],bindings:WorkflowProfile['bindings'],capabilities?:WorkflowProfile['capabilities']):WorkflowProfile=>({
+    id,runtime:'wangp',purpose:'video',name:id,modelFamily,mode:'i2v',workflowPath:`workflows/${id}.json`,workflowFormat:'wangp-settings',
+    bindings,capabilities,enabled:true,validation:{structuralStatus:'valid'}
+  });
+  const projectBase=():FilmProject=>({
+    schemaVersion:3,id:'director-consistency',name:'Director consistency',rootPath:'/tmp/director-consistency',
+    createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Film',logline:'Logline',script:'',notes:'Bible'},scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'Scene body',shotIds:['director-shot']}],
+    assets:[],shots:[baseShot()],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  });
+  const draft=(patch:Partial<DirectorShotDraft>={}):DirectorShotDraft=>({
+    title:'Draft',prompt:'draft prompt',camera:'static',action:'',dialogue:'',continuityNotes:'',quality:'balanced',
+    characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],...patch
+  });
+
+  it('treats workflow capability edits as renderer profile-config changes',()=>{
+    const a=profile('cap-profile','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'}],{maxGenericReferences:4,supportsStartImage:true});
+    const b=structuredClone(a);b.capabilities={...b.capabilities,maxGenericReferences:8};
+    expect(profileConfigKey(a)).not.toBe(profileConfigKey(b));
+  });
+
+  it('does not let an incompatible automatic profile affect render-input truth',()=>{
+    const project=projectBase(),shot=project.shots[0];
+    project.settings.workflowProfiles=[
+      profile('incompatible','ltx-2.5-fast',[],{maxGenericReferences:0,supportsStartImage:false})
+    ];
+    const before=shotProjectRenderInputKey(project,shot);
+    project.settings.workflowProfiles[0].bindings=[{key:'referenceImages',jsonPath:'refs'}];
+    project.settings.workflowProfiles[0].capabilities={maxGenericReferences:16,supportsStartImage:false};
+    expect(shotProjectRenderInputKey(project,shot)).toBe(before);
+    project.settings.workflowProfiles.push(
+      profile('compatible','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'},{key:'includeAudio',jsonPath:'generate_audio'}],{supportsStartImage:true,supportsGeneratedAudio:true})
+    );
+    expect(shotProjectRenderInputKey(project,shot)).not.toBe(before);
+  });
+
+  it('resolves Director drafts across every validated compatible model instead of only preferred/primary',()=>{
+    const project=projectBase();
+    project.settings.workflowProfiles=[
+      profile('ltx-too-small','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'},{key:'includeAudio',jsonPath:'generate_audio'}],{supportsStartImage:true,supportsGeneratedAudio:true,maxGenericReferences:0}),
+      profile('wan-compatible','wan-2.2-5b',[{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}],{supportsStartImage:true,maxGenericReferences:8})
+    ];
+    const proposed=draft({preferredModel:'ltx-2.5-fast',referenceAssetIds:['ref-1']});
+    const resolved=resolveDirectorDraftRoute(project,proposed);
+    expect(resolved?.route.id).toBe('wan-compatible');
+    expect(resolved?.includeAudio).toBe(false);
+  });
+
+  it('routes dialogue drafts only through a generated-audio-capable route and preserves that generation intent',()=>{
+    const project=projectBase();
+    project.settings.workflowProfiles=[
+      profile('wan-silent','wan-2.2-5b',[{key:'startImage',jsonPath:'image'}],{supportsStartImage:true,supportsGeneratedAudio:false}),
+      profile('ltx-audio','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'},{key:'includeAudio',jsonPath:'generate_audio'}],{supportsStartImage:true,supportsGeneratedAudio:true})
+    ];
+    const proposed=draft({preferredModel:'wan-2.2-5b',dialogue:'Hello there.'});
+    const resolved=resolveDirectorDraftRoute(project,proposed);
+    expect(directorDraftIncludeAudio(proposed,'wan-2.2-5b')).toBe(true);
+    expect(resolved?.route.id).toBe('ltx-audio');
+    expect(resolved?.includeAudio).toBe(true);
+  });
+
+  it('rejects a Director proposal atomically when any proposed shot lacks a compatible route',()=>{
+    const project=projectBase();
+    project.settings.workflowProfiles=[
+      profile('ltx-limited','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'},{key:'includeAudio',jsonPath:'generate_audio'}],{supportsStartImage:true,supportsGeneratedAudio:true,maxGenericReferences:0})
+    ];
+    const good=draft({title:'Good'});
+    const bad=draft({title:'Unroutable',referenceAssetIds:['ref-1']});
+    expect(()=>resolveDirectorProposalRoutes(project,[good,bad])).toThrow(/cannot be applied atomically.*Unroutable/i);
+    expect(resolveDirectorProposalRoutes(project,[good])).toHaveLength(1);
+  });
+
+  it('makes structured asset continuity part of Director planning and review provenance',()=>{
+    const project=projectBase(),shot=project.shots[0],scene=project.scenes[0];
+    const asset:Asset={
+      id:'hero',kind:'character',name:'Hero',sourcePath:'hero.png',projectPath:'assets/character/hero.png',tags:['hero'],notes:'Keep recognizable',
+      continuity:{identityAnchors:['scar over left eyebrow'],forbiddenChanges:['no beard'],appearance:'black coat',geometry:'tall',state:'dry',lighting:'cool rim',spatialRules:'screen left'},
+      createdAt:'2026-01-01T00:00:00.000Z'
+    };
+    project.assets=[asset];shot.characterAssetIds=['hero'];
+    const sceneBefore=sceneDirectorInputKey(project,scene),reviewBefore=continuityReviewInputKey(project,shot);
+    const context=directorAssetContinuityContext(asset);
+    expect(context).toMatch(/continuityBible=/);
+    expect(context).toMatch(/scar over left eyebrow/);
+    expect(DIRECTOR_PREDECESSOR_CONTEXT_LIMIT).toBeGreaterThanOrEqual(16);
+    asset.continuity!.identityAnchors=['different identity anchor'];
+    expect(sceneDirectorInputKey(project,scene)).not.toBe(sceneBefore);
+    expect(continuityReviewInputKey(project,shot)).not.toBe(reviewBefore);
+  });
+});
