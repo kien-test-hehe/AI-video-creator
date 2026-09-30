@@ -613,7 +613,8 @@ function sanitizeTimelineClip(value: unknown, shotIds: Set<string>, outputs: Map
     track:clampInt(source.track,0,128,0),order:clampInt(source.order,0,1_000_000,0),
     trimInSec:trimIn,trimOutSec:trimOut,volume:clampNumber(source.volume,0,8,1),
     approval:enumOrDefault(source.approval,new Set(['legacy','canonical','human-override'] as const),'legacy','timeline take approval'),
-    approvalReason:str(source.approvalReason,'',10_000)||undefined
+    approvalReason:str(source.approvalReason,'',10_000)||undefined,
+    approvalInputKey:str(source.approvalInputKey,'',256)||undefined
   };
 }
 
