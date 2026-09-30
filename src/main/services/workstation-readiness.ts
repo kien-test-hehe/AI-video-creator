@@ -1,8 +1,34 @@
 import type { AppMachineSettings, FilmProject, WorkstationReadiness, WorkstationReadinessItem } from '../../shared/types';
 import { probeSystem } from './system-probe';
+import { assertLocalUrl, fetchLocalUrl } from './local-url';
+import { readResponseJsonLimited } from './http-response';
+
+interface DirectorModelList{data?:Array<{id?:string}>;}
+
+export function directorModelListContains(payload:unknown,model:string):boolean{
+  if(!payload||typeof payload!=='object'||!Array.isArray((payload as DirectorModelList).data))return false;
+  const target=model.trim().toLowerCase();
+  return (payload as DirectorModelList).data!.some(item=>typeof item?.id==='string'&&item.id.trim().toLowerCase()===target);
+}
+
+async function probeDirectorModel(machine:AppMachineSettings):Promise<{available:boolean;detail:string}>{
+  const model=machine.director.model.trim();
+  if(!model)return{available:false,detail:'No local Director/VLM model is configured.'};
+  try{
+    const base=assertLocalUrl(machine.director.baseUrl,true);
+    const url=new URL('models',base.href.endsWith('/')?base.href:`${base.href}/`);
+    const response=await fetchLocalUrl(url,{method:'GET',signal:AbortSignal.timeout(5000)});
+    if(!response.ok)return{available:false,detail:`Director/VLM endpoint returned HTTP ${response.status} while checking model availability.`};
+    const payload=await readResponseJsonLimited<DirectorModelList>(response,'Director/VLM model list',2*1024*1024);
+    if(!directorModelListContains(payload,model))return{available:false,detail:`Director/VLM endpoint is reachable, but configured model “${model}” is not listed.`};
+    return{available:true,detail:`Local Director/VLM endpoint and configured model “${model}” are reachable. Image-input compatibility is still verified fail-safe on each QC request.`};
+  }catch(error){
+    return{available:false,detail:`Director/VLM model check failed: ${error instanceof Error?error.message:String(error)}`};
+  }
+}
 
 export async function assessWorkstationReadiness(project:FilmProject|undefined,machine:AppMachineSettings):Promise<WorkstationReadiness>{
-  const probe=await probeSystem(project,machine);
+  const [probe,directorModel]=await Promise.all([probeSystem(project,machine),probeDirectorModel(machine)]);
   const items:WorkstationReadinessItem[]=[];
   const add=(id:string,label:string,level:WorkstationReadinessItem['level'],detail:string,action?:string)=>items.push({id,label,level,detail,action});
 
@@ -30,8 +56,12 @@ export async function assessWorkstationReadiness(project:FilmProject|undefined,m
   else if(profiles.length)add('profiles','Production profiles','warning',`${profiles.length} structurally valid video profile(s), but none has a recorded successful render yet.`,'Run one short qualification render per intended production route.');
   else add('profiles','Production profiles','blocked','No enabled structurally valid video workflow profile is available.','Provision/import and validate at least one local video workflow.');
 
-  const autoQcAvailable=Boolean(machine.director.model.trim());
-  add('auto-qc','Automatic visual QC',autoQcAvailable?'ready':'warning',autoQcAvailable?`Local multimodal Director model configured: ${machine.director.model}.`:'No local Director/VLM model is configured. CineForge will fail safely to Human Review for visual/semantic QC.','Configure a local OpenAI-compatible multimodal model in Machine Settings.');
+  const autoQcAvailable=directorModel.available;
+  add(
+    'auto-qc','Automatic visual QC',autoQcAvailable?'ready':'warning',
+    autoQcAvailable?directorModel.detail:`${directorModel.detail} CineForge will fail safely to Human Review for visual/semantic QC.`,
+    autoQcAvailable?undefined:'Start/configure a local OpenAI-compatible multimodal model and make sure the configured model id is available.'
+  );
 
   add('blender','Blender previz',probe.blender?.available?'ready':'warning',probe.blender?.available?(probe.blender.version||'Blender detected.'):'Blender was not detected. Required previz shots will become Human Tasks instead of blocking the app.','Install Blender or keep previz optional.');
   add('capcut','CapCut finishing',probe.capcut.installed?'ready':'warning',probe.capcut.installed?`CapCut detected${probe.capcut.path?` at ${probe.capcut.path}`:''}.`:'CapCut was not detected. Local master export still works; finishing handoff can be used after CapCut is installed.');

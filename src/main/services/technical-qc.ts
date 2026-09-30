@@ -13,8 +13,8 @@ export async function technicalQcVideo(machine:AppMachineSettings,path:string,sh
 
   try{
     const visual=await detectVisualProblems(machine.ffmpeg.path,path);
-    if(visual.black)warnings.push('Black segment ≥0.5s detected; verify that the blackout/fade is intentional.');
-    if(visual.freeze)warnings.push('Frozen segment ≥2s detected; verify that the held frame is intentional.');
+    const findings=technicalQcVisualFindings(duration,visual);
+    issues.push(...findings.issues);warnings.push(...findings.warnings);
   }catch(error){issues.push(`Visual QC could not complete: ${error instanceof Error?error.message:String(error)}`);}
   let audioPeakDb:number|undefined,audioSilent=false;
   if(probe.hasAudio){
@@ -34,7 +34,7 @@ export function technicalQcStructuralIssues(
   if(probe.durationSec==null)issues.push('Video duration could not be measured.');
   else{
     const expected=shot.generation.frames/Math.max(1,shot.generation.fps);
-    if(Math.abs(probe.durationSec-expected)>Math.max(0.75,expected*0.2))issues.push(`Duration ${probe.durationSec.toFixed(2)}s differs materially from expected ${expected.toFixed(2)}s.`);
+    if(Math.abs(probe.durationSec-expected)>Math.max(0.5,expected*0.1))issues.push(`Duration ${probe.durationSec.toFixed(2)}s differs materially from expected ${expected.toFixed(2)}s.`);
   }
   if(probe.video){
     if(probe.video.width!==shot.generation.width||probe.video.height!==shot.generation.height)issues.push(`Resolution is ${probe.video.width}×${probe.video.height}; expected ${shot.generation.width}×${shot.generation.height}.`);
@@ -57,10 +57,50 @@ async function probeMedia(ffprobe:string,path:string):Promise<{durationSec?:numb
   return{durationSec:Number.isFinite(duration)?duration:undefined,video:video?{width:Number(video.width)||0,height:Number(video.height)||0,fps:Number.isFinite(fps)?fps:0}:undefined,hasAudio:Boolean(parsed.streams?.some((s:any)=>s.codec_type==='audio'))};
 }
 
-async function detectVisualProblems(ffmpeg:string,path:string):Promise<{black:boolean;freeze:boolean}>{
+export interface VisualProblemDurations{
+  blackDetected:boolean;
+  freezeDetected:boolean;
+  maxBlackSec:number;
+  maxFreezeSec:number;
+}
+
+export function parseVisualProblemDurations(text:string):VisualProblemDurations{
+  const values=(pattern:RegExp)=>[...text.matchAll(pattern)].map(match=>Number(match[1])).filter(Number.isFinite);
+  const black=values(/black_duration\s*:\s*([0-9]+(?:\.[0-9]+)?)/gi);
+  const freeze=values(/freeze_duration\s*:\s*([0-9]+(?:\.[0-9]+)?)/gi);
+  const blackDetected=/black_start\s*:/i.test(text);
+  const freezeDetected=/freeze_start\s*:/i.test(text);
+  return{
+    blackDetected,
+    freezeDetected,
+    maxBlackSec:black.length?Math.max(...black):(blackDetected?0.5:0),
+    maxFreezeSec:freeze.length?Math.max(...freeze):(freezeDetected?2:0)
+  };
+}
+
+export function technicalQcVisualFindings(
+  durationSec:number|undefined,
+  visual:VisualProblemDurations
+):{issues:string[];warnings:string[]}{
+  const issues:string[]=[],warnings:string[]=[];
+  if(visual.blackDetected){
+    const materialThreshold=durationSec!=null?Math.max(1,durationSec*.2):1.5;
+    const detail=`Black segment up to ${visual.maxBlackSec.toFixed(2)}s detected.`;
+    if(visual.maxBlackSec>=materialThreshold)issues.push(`${detail} This is a material blackout for a generated source take; rerender or trim it before canonical use.`);
+    else warnings.push(`${detail} Verify that the blackout/fade is intentional.`);
+  }
+  if(visual.freezeDetected){
+    const materialThreshold=durationSec!=null?Math.max(2,durationSec*.4):3;
+    const detail=`Frozen segment up to ${visual.maxFreezeSec.toFixed(2)}s detected.`;
+    if(visual.maxFreezeSec>=materialThreshold)issues.push(`${detail} This is a material freeze for a generated source take; rerender or trim it before canonical use.`);
+    else warnings.push(`${detail} Verify that the held frame is intentional.`);
+  }
+  return{issues,warnings};
+}
+
+async function detectVisualProblems(ffmpeg:string,path:string):Promise<VisualProblemDurations>{
   const result=await execFileAsync(ffmpeg,['-hide_banner','-nostats','-i',path,'-vf','blackdetect=d=0.5:pix_th=0.10,freezedetect=n=-60dB:d=2','-an','-f','null','-'],{timeout:180_000,maxBuffer:16*1024*1024});
-  const stderr=String(result.stderr||'');
-  return{black:/black_start:/i.test(stderr),freeze:/freeze_start:/i.test(stderr)};
+  return parseVisualProblemDurations(String(result.stderr||''));
 }
 
 async function detectPeak(ffmpeg:string,path:string):Promise<{peakDb?:number;silent:boolean}>{

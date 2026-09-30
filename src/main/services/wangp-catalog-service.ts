@@ -10,6 +10,7 @@ import { ProjectService } from './project-service';
 import { validateAndRecordProfile } from './profile-validation';
 import { analyzeWanGpBindings } from './wangp-engine';
 import { shotProjectRenderInputKey } from '../../shared/shot-signature';
+import { invalidateObservedFinalState } from '../../shared/production-state';
 
 const execFileAsync=promisify(execFile);
 const BRIDGE_MARKER='CINEFORGE_JSON:';
@@ -83,10 +84,12 @@ export function upsertManagedProfile(project:FilmProject,profile:WorkflowProfile
   if(index>=0)project.settings.workflowProfiles[index]=profile;else project.settings.workflowProfiles.push(profile);
 }
 
-function invalidateChangedRoutes(project:FilmProject,before:Map<string,string>):void{
+export function invalidateChangedRoutes(project:FilmProject,before:Map<string,string>):void{
   for(const shot of project.shots){
     if(before.get(shot.id)===shotProjectRenderInputKey(project,shot))continue;
     shot.latestRenderId=undefined;
+    shot.canonicalRenderId=undefined;
+    invalidateObservedFinalState(project,shot.id,'Workflow/profile routing changed; prior rendered and observed continuity truth is stale.');
     if(['rendered','failed'].includes(shot.status))shot.status='ready';
   }
 }

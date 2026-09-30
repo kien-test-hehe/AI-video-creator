@@ -8,7 +8,7 @@ import { MODEL_DEFAULTS } from '../src/shared/defaults';
 import { deriveHardwarePlan } from '../src/main/services/hardware-advisor';
 import { routeWorkflow } from '../src/main/services/model-router';
 import { directorText } from '../src/main/services/director-service';
-import { parseVolumeDetectPeak, technicalQcStructuralIssues } from '../src/main/services/technical-qc';
+import { parseVisualProblemDurations, parseVolumeDetectPeak, technicalQcStructuralIssues, technicalQcVisualFindings } from '../src/main/services/technical-qc';
 import type { AppMachineSettings, Asset, FilmProject, RenderJobSpec, RenderOutput, Shot, WorkflowProfile } from '../src/shared/types';
 import { autoAssignAssetToShot } from '../src/renderer/src/asset-assignment';
 import { alternateShotTitle, appendProjectText, canonicalReadyOutputForShot, insertTimelineOutput, isStudioWorkflowReady, reorderTimeline, resolveStudioWorkflow, routeShotToWorkflow, studioNextStep, studioPreflightState, studioWorkflowIssue, timelineInsertIssue } from '../src/renderer/src/studio-logic';
@@ -30,7 +30,7 @@ import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, record
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
 import { generateKeyframe, keyframePrompt } from '../src/main/services/keyframe-service';
-import { upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
+import { invalidateChangedRoutes, upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
 import { collectComfyHistoryOutputRefs } from '../src/main/services/comfy-output';
@@ -51,6 +51,7 @@ import { evaluateContinuityQc, observedStateDraftFingerprint, observedStateDraft
 import { AutomationJournal } from '../src/main/services/automation-journal';
 import { assertExternalDependenciesReady, automationTaskDisposition, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
 import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../src/shared/retry-policy';
+import { directorModelListContains } from '../src/main/services/workstation-readiness';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -2790,5 +2791,75 @@ describe('post-P1 renderer and persisted-link integrity',()=>{
       inputKey:'persisted-key',createdAt:'2026-01-01T00:00:03.000Z',humanOverrideTaskId:'task-wrong-type'
     });
     expect(()=>loadPortableProject(project,'/tmp/link-integrity')).toThrow(/incompatible human task type choose-take/i);
+  });
+});
+ 
+
+
+describe('runtime route, technical QC and readiness hardening',()=>{
+  const generation={modelFamily:'wan-2.2-5b' as const,mode:'i2v' as const,quality:'balanced' as const,width:1280,height:704,frames:97,fps:24,steps:20,cfg:5,seed:1,negativePrompt:'',includeAudio:false};
+
+  it('invalidates canonical and observed continuity truth when managed route inputs change',()=>{
+    const profile:WorkflowProfile={
+      id:'profile-a',runtime:'wangp',purpose:'video',name:'A',modelFamily:'wan-2.2-5b',mode:'i2v',
+      workflowPath:'/tmp/workflow-a.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,
+      validation:{structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime-a'}
+    };
+    const shot:Shot={
+      id:'shot-a',sceneId:'scene-a',index:1,title:'A',prompt:'prompt',camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',
+      generation:{...generation,workflowProfileId:'profile-a'},latestRenderId:'out-a',canonicalRenderId:'out-a',observedFinalStateId:'final-a'
+    };
+    const project={
+      schemaVersion:3,id:'route-invalidation',name:'Route invalidation',rootPath:'/tmp/route-invalidation',
+      createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'Route invalidation',logline:'',script:'',notes:''},scenes:[{id:'scene-a',index:1,heading:'',body:'',shotIds:['shot-a']}],
+      assets:[],shots:[shot],renderJobs:[],renderOutputs:[
+        {id:'out-a',jobId:'job-a',shotId:'shot-a',path:'/tmp/out-a.mp4',filename:'out-a.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'}
+      ],timeline:[],
+      shotStates:[{id:'final-a',shotId:'shot-a',role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'done',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'}],
+      shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[profile]}
+    } as FilmProject;
+    const before=new Map([[shot.id,shotProjectRenderInputKey(project,shot)]]);
+    project.settings.workflowProfiles[0].workflowPath='/tmp/workflow-b.json';
+    invalidateChangedRoutes(project,before);
+    expect(shot.latestRenderId).toBeUndefined();
+    expect(shot.canonicalRenderId).toBeUndefined();
+    expect(shot.observedFinalStateId).toBeUndefined();
+    expect(project.shotStates.find(state=>state.id==='final-a')?.status).toBe('stale');
+    expect(shot.status).toBe('ready');
+  });
+
+  it('parses black/freeze durations and fails only material defects while warning on shorter ones',()=>{
+    const parsed=parseVisualProblemDurations([
+      '[blackdetect] black_start:0 black_end:1.20 black_duration:1.20',
+      '[freezedetect] freeze_start:2.0',
+      '[freezedetect] freeze_end:4.5 freeze_duration:2.50'
+    ].join('\n'));
+    expect(parsed).toMatchObject({blackDetected:true,freezeDetected:true,maxBlackSec:1.2,maxFreezeSec:2.5});
+    const short=technicalQcVisualFindings(10,{blackDetected:true,freezeDetected:true,maxBlackSec:.5,maxFreezeSec:2});
+    expect(short.issues).toEqual([]);
+    expect(short.warnings).toHaveLength(2);
+    const material=technicalQcVisualFindings(5,parsed);
+    expect(material.issues).toHaveLength(2);
+    expect(material.warnings).toEqual([]);
+  });
+
+  it('treats a roughly ten-percent duration miss as a technical failure instead of allowing the old twenty-percent window',()=>{
+    const shot:Shot={
+      id:'duration-shot',sceneId:'scene',index:1,title:'Duration',prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,width:768,height:432,frames:96,fps:24}
+    };
+    const issues=technicalQcStructuralIssues(shot,{durationSec:4.6,video:{width:768,height:432,fps:24},hasAudio:false});
+    expect(issues.join(' ')).toMatch(/Duration 4\.60s differs materially from expected 4\.00s/i);
+    expect(technicalQcStructuralIssues(shot,{durationSec:4.4,video:{width:768,height:432,fps:24},hasAudio:false})).toEqual([]);
+  });
+
+  it('does not call a configured Director model ready unless the local model list actually contains it',()=>{
+    expect(directorModelListContains({data:[{id:'qwen3-vl:4b'},{id:'other'}]},'qwen3-vl:4b')).toBe(true);
+    expect(directorModelListContains({data:[{id:'other'}]},'qwen3-vl:4b')).toBe(false);
+    expect(directorModelListContains({models:[{name:'qwen3-vl:4b'}]},'qwen3-vl:4b')).toBe(false);
+    expect(directorModelListContains(null,'qwen3-vl:4b')).toBe(false);
   });
 });
