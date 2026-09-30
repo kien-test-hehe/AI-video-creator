@@ -51,6 +51,7 @@ import { evaluateContinuityQc, observedStateDraftFingerprint, observedStateDraft
 import { AutomationJournal } from '../src/main/services/automation-journal';
 import { assertExternalDependenciesReady, automationTaskDisposition, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
 import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../src/shared/retry-policy';
+import { directorModelListContains } from '../src/main/services/workstation-readiness';
 
 const api: ApiWorkflow = {
   '1': { class_type: 'CLIPTextEncode', inputs: { text: 'old' }, _meta: { title: 'Positive Prompt' } },
@@ -2792,8 +2793,7 @@ describe('post-P1 renderer and persisted-link integrity',()=>{
     expect(()=>loadPortableProject(project,'/tmp/link-integrity')).toThrow(/incompatible human task type choose-take/i);
   });
 });
-
-import { directorModelListContains } from '../src/main/services/workstation-readiness';
+ 
 
 
 describe('runtime route, technical QC and readiness hardening',()=>{
