@@ -84,6 +84,7 @@ export function workflowExecutionKey(profile:WorkflowProfile|undefined):string{
     workflowPath:profile.workflowPath,
     workflowFormat:profile.workflowFormat,
     bindings:profile.bindings,
+    capabilities:profile.capabilities,
     enabled:profile.enabled,
     modelFingerprint:profile.modelFingerprint
   });
