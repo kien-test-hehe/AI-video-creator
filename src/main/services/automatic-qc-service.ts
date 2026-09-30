@@ -1,4 +1,4 @@
-import type { AppMachineSettings, CharacterContinuityState, FilmProject, PropContinuityState, QcIssue, QcStatus, Shot } from '../../shared/types';
+import type { AppMachineSettings, CharacterContinuityState, FilmProject, PropContinuityState, QcIssue, QcStatus, Shot, ShotDependency } from '../../shared/types';
 import { analyzeImagesWithLocalVision, LocalVisionUnavailableError } from './local-vision-service';
 
 export interface AutoQcEvaluation{status:QcStatus;issues:QcIssue[];note?:string;}
@@ -53,16 +53,32 @@ export async function evaluateSemanticQc(machine:AppMachineSettings,project:Film
   }catch(error){if(error instanceof LocalVisionUnavailableError)return unavailable(error,'SEMANTIC_REVIEW_REQUIRED');throw error;}
 }
 
-export async function evaluateContinuityQc(machine:AppMachineSettings,project:FilmProject,shot:Shot,previousFinalPath:string|undefined,currentFirstPath:string|undefined):Promise<AutoQcEvaluation>{
-  const incoming=project.shotDependencies.filter(edge=>edge.toShotId===shot.id&&edge.relation!=='parallel'&&edge.propagate.length>0);
-  if(!incoming.length)return{status:'pass',issues:[]};
-  if(!previousFinalPath||!currentFirstPath)return{status:'human-verify',issues:[{code:'CONTINUITY_FRAMES_MISSING',severity:'warning',message:'Automatic continuity QC needs both the upstream observed-final frame and the current rendered first frame.'}]};
-  const edgeSummary=incoming.map(edge=>`${edge.fromShotId} -> ${edge.toShotId}: ${edge.propagate.join(', ')}`).join('\n');
-  try{
-    const raw=await analyzeImagesWithLocalVision(machine,
-      `Image 1 is the actual observed final frame of an upstream shot. Image 2 is the first rendered frame of the current shot "${text(shot.title,300)}". Continuity fields required by the active dependency graph:\n${edgeSummary}\nCompare identity, wardrobe, held props/object state, location, lighting, screen direction and action phase only where requested. Minor generative texture variation is not a failure. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","expected":"...","observed":"..."}],"note":"..."}.`,[previousFinalPath,currentFirstPath]);
-    return normalizeEvaluation(raw,'Cross-shot continuity is uncertain.');
-  }catch(error){if(error instanceof LocalVisionUnavailableError)return unavailable(error,'CONTINUITY_REVIEW_REQUIRED');throw error;}
+export interface ContinuityQcComparison{edge:ShotDependency;previousFinalPath?:string;}
+
+export async function evaluateContinuityQc(machine:AppMachineSettings,project:FilmProject,shot:Shot,comparisons:ContinuityQcComparison[],currentFirstPath:string|undefined):Promise<AutoQcEvaluation>{
+  if(!comparisons.length)return{status:'pass',issues:[]};
+  if(!currentFirstPath)return{status:'human-verify',issues:[{code:'CONTINUITY_CURRENT_FRAME_MISSING',severity:'warning',message:'Automatic continuity QC needs the current rendered first frame.'}]};
+  const evaluations:AutoQcEvaluation[]=[];
+  for(const comparison of comparisons){
+    const edge=comparison.edge;
+    if(!comparison.previousFinalPath){
+      evaluations.push({status:'human-verify',issues:[{code:'CONTINUITY_UPSTREAM_FRAME_MISSING',severity:'warning',message:`Automatic continuity QC could not resolve the observed-final frame for upstream shot ${edge.fromShotId}.`}]});
+      continue;
+    }
+    const prior=project.shots.find(item=>item.id===edge.fromShotId);
+    const edgeSummary=`${edge.fromShotId} -> ${edge.toShotId} [${edge.strength}]: ${edge.propagate.join(', ')}`;
+    try{
+      const raw=await analyzeImagesWithLocalVision(machine,
+        `Image 1 is the actual observed final frame of upstream shot "${text(prior?.title||edge.fromShotId,300)}". Image 2 is the first rendered frame of current shot "${text(shot.title,300)}". Evaluate ONLY this continuity dependency: ${edgeSummary}. Compare only the requested continuity fields. Camera/screen direction must be judged only when camera is explicitly propagated. Minor generative texture variation is not a failure. Return {"status":"pass|fail|human-verify","issues":[{"code":"...","severity":"info|warning|major|blocker","message":"...","expected":"...","observed":"..."}],"note":"..."}.`,[comparison.previousFinalPath,currentFirstPath]);
+      const evaluation=normalizeEvaluation(raw,'Cross-shot continuity is uncertain.');
+      evaluations.push({...evaluation,issues:evaluation.issues.map(issue=>({...issue,code:`${edge.id}:${issue.code}`.slice(0,128),message:`[${prior?.title||edge.fromShotId}] ${issue.message}`.slice(0,4096)}))});
+    }catch(error){
+      if(error instanceof LocalVisionUnavailableError)evaluations.push(unavailable(error,'CONTINUITY_REVIEW_REQUIRED'));
+      else throw error;
+    }
+  }
+  const status:QcStatus=evaluations.some(item=>item.status==='fail')?'fail':evaluations.some(item=>item.status==='human-verify'||item.status==='unknown')?'human-verify':'pass';
+  return{status,issues:evaluations.flatMap(item=>item.issues).slice(0,128)};
 }
 
 export async function selectStableFinalFrame(machine:AppMachineSettings,candidates:string[]):Promise<string>{
