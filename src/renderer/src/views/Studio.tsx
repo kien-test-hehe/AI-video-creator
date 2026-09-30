@@ -11,7 +11,7 @@ import { Empty, Pill } from '../components/Ui';
 import { CompactStudio } from './CompactStudio';
 import { compareTimelineClips } from '../../../shared/timeline-policy';
 import { takeUseConfirmationMessage } from '../../../shared/take-policy';
-import { OBSERVED_STATE_APPROVAL_PREFIX, isObservedStateConfidenceTaskTitle } from '../../../shared/production-state';
+import { OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, isObservedStateConfidenceTaskTitle } from '../../../shared/production-state';
 
 type Point={x:number;y:number};
 type StudioNodeKind='story'|'assets'|'system'|'scene'|'shot'|'workflow'|'queue'|'timeline'|'capcut';
@@ -349,7 +349,7 @@ function StudioAdvanced(){
 
   const openHumanTasks=[...project.humanTasks].filter(task=>task.status==='open').sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
   const validVideoWorkflowCount=project.settings.workflowProfiles.filter(profile=>profile.enabled&&Boolean(profile.workflowPath)&&(profile.purpose??'video')==='video'&&profile.validation?.structuralStatus==='valid').length;
-  const canonicalCount=project.shots.filter(shot=>Boolean(shot.canonicalRenderId)).length;
+  const canonicalCount=project.shots.filter(shot=>Boolean(shot.canonicalRenderId&&canonicalTakeReadiness(project,shot.id,shot.canonicalRenderId).ready)).length;
   const guide=studioNextStep({sceneCount:project.scenes.length,shotCount:project.shots.length,validVideoWorkflowCount,readinessKnown:Boolean(readiness),readinessReady:Boolean(readiness?.readyForProduction),preflightState,openHumanTasks:openHumanTasks.length,automationRunning:Boolean(automation?.running),canonicalCount,timelineCount:project.timeline.length});
   const runGuideAction=()=>{
     switch(guide.action){
@@ -479,7 +479,7 @@ function GraphNode({node,project,selected,active,locked,onPointerDown,onPointerM
     <button className="studio-node-body" draggable={routeableProfile} title={profile?(routeableProfile?'Drag onto a shot to route it. Single-click inspects; double-click opens Settings.':'Inspect here. Validate and enable this workflow before drag-routing.'):shot?'Drop assets or validated workflows here. Single-click inspects; double-click opens the full workshop.':'Single-click inspects; double-click opens the detailed workspace.'} onDragStart={routeableProfile&&profile?event=>{event.stopPropagation();onStartWorkflowDrag(event,profile.id);}:undefined} onClick={()=>onActivate(node)} onDoubleClick={()=>{const view=openView[node.kind];if(view)onOpen(view);}}>
       {visual&&<img loading="lazy" className="studio-node-thumb" src={projectMediaUrl(visual.projectPath)} alt=""/>}
       <strong>{node.title}</strong><small>{node.subtitle}</small>
-      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{shot.previz?.requirement==='required'&&shot.previz.status!=='ready'?<Pill>previz</Pill>:null}{shot.canonicalRenderId?<Pill>canonical</Pill>:<Pill>QC pending</Pill>}{openTasks>0&&<Pill>{openTasks} human</Pill>}{!route?<Pill>no route</Pill>:routeReady?<Pill>validated route</Pill>:<Pill>route blocked</Pill>}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
+      {shot&&<div className="studio-node-meta"><Pill>{shot.status}</Pill>{shot.previz?.requirement==='required'&&shot.previz.status!=='ready'?<Pill>previz</Pill>:null}{shot.canonicalRenderId&&canonicalTakeReadiness(project,shot.id,shot.canonicalRenderId).ready?<Pill>canonical</Pill>:<Pill>{shot.canonicalRenderId?'canonical stale':'QC pending'}</Pill>}{openTasks>0&&<Pill>{openTasks} human</Pill>}{!route?<Pill>no route</Pill>:routeReady?<Pill>validated route</Pill>:<Pill>route blocked</Pill>}<span>{shot.generation.modelFamily}</span><span>{shot.generation.mode}</span></div>}
       {shot&&<div className="studio-ref-meter"><span>C{shot.characterAssetIds.length}</span><span>{shot.locationAssetId?'LOC':'NO LOC'}</span><span>REF{shot.referenceAssetIds?.length??0}</span><span>P{shot.propAssetIds.length}</span><span>{shot.startFrameAssetId?'START':'—'}</span><span>{shot.endFrameAssetId?'END':'—'}</span></div>}
       {profile&&<div className="studio-node-meta"><Pill>{profile.enabled?'enabled':'off'}</Pill><span>{profile.validation?.structuralStatus||'unvalidated'}</span>{routeableProfile&&<span>drag-route</span>}</div>}
       {node.kind==='queue'&&<div className="studio-node-meta"><span>{project.renderJobs.filter(job=>job.status==='done').length} completed</span><span>{project.renderOutputs.length} outputs</span></div>}
@@ -616,7 +616,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
     <div className="studio-inspector-actions"><button className="ghost" onClick={()=>changeModel(chooseModelForShot(shot,{validatedModels:project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&Boolean(profile.workflowPath)&&profile.validation?.structuralStatus==='valid').map(profile=>profile.modelFamily)}))}>Auto route</button><button className="ghost" disabled={continuityBusy} onClick={reviewContinuity}>{continuityBusy?'Reviewing metadata…':'Metadata continuity review'}</button></div>
     <div className={`studio-route-status ${routeReady?'ready':route?'warn':'bad'}`}><span>VIDEO ROUTE</span><strong>{route?.name||'No matching workflow'}</strong><small>{routeIssue||'profile validated · runtime/files rechecked on queue'}</small></div>
     <div className="studio-production-state">
-      <div className="studio-panel-head compact"><div><span className="eyebrow">PRODUCTION STATE</span><strong>{shot.canonicalRenderId?'Canonical':'In progress'}</strong></div></div>
+      <div className="studio-panel-head compact"><div><span className="eyebrow">PRODUCTION STATE</span><strong>{shot.canonicalRenderId?(canonicalTakeReadiness(project,shot.id,shot.canonicalRenderId).ready?'Canonical':'Canonical stale'):'In progress'}</strong></div></div>
       <div className="studio-state-grid">
         <div><span>Actual start</span><Pill>{actualStart?.status||'missing'}</Pill></div>
         <div><span>Observed final</span><Pill>{observedFinal?.status||'missing'}</Pill></div>

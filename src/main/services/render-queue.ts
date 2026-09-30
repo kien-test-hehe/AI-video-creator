@@ -92,8 +92,7 @@ export class RenderQueueService extends EventEmitter {
       const shot=project.shots.find(s=>s.id===id);if(!shot)throw new Error(`Shot not found: ${id}`);
       if(request.skipIfRendered&&shot.latestRenderId){
         const preferred=project.renderOutputs.find(output=>output.id===shot.latestRenderId&&output.shotId===shot.id&&output.mediaType==='video');
-        const currentInputKey=preferred?currentProductionInputKeyForOutput(project,shot,preferred):undefined;
-        if(preferred&&currentInputKey&&renderOutputProductionInputKey(project,preferred)===currentInputKey){
+        if(preferred&&renderCanSatisfySkipIfRendered(project,shot,preferred)){
           try{await assertExistingPathInside(join(project.rootPath,'renders'),preferred.path,`preferred render for ${shot.title}`);continue;}
           catch(error:any){if(error?.code!=='ENOENT')throw error;}
         }
@@ -931,6 +930,12 @@ function assetLine(asset:Asset|undefined,label:string):string{
   const bible=continuity?(continuity.length>20_000?continuity.slice(0,20_000):continuity):'';
   return`${label}: ${asset.name}${asset.notes.trim()?` — ${asset.notes.trim()}`:''}${bible?`\nStructured continuity bible: ${bible}`:''}`;
 }
+export function renderCanSatisfySkipIfRendered(project:FilmProject,shot:Shot,output:RenderOutput):boolean{
+  if(output.shotId!==shot.id||output.mediaType!=='video'||output.technicalQc?.passed!==true)return false;
+  const currentInputKey=currentProductionInputKeyForOutput(project,shot,output);
+  return Boolean(currentInputKey&&renderOutputProductionInputKey(project,output)===currentInputKey);
+}
+
 export function selectPreferredTechnicalVideo(videos:RenderOutput[],shot?:Shot):RenderOutput|undefined{
   const passing=videos.filter(output=>output.technicalQc?.passed===true);
   if(!passing.length)return undefined;

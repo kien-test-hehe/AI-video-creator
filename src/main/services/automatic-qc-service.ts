@@ -92,12 +92,15 @@ export async function evaluateSemanticQc(
 export interface SemanticReferenceImage{path:string;label:string;}
 
 export function semanticReferenceAssetIds(shot:Shot):string[]{
-  return [...new Set([
-    ...shot.characterAssetIds,
-    ...(shot.locationAssetId?[shot.locationAssetId]:[]),
-    ...shot.propAssetIds,
-    ...(shot.referenceAssetIds??[])
-  ])].slice(0,4);
+  const characters=shot.characterAssetIds??[],props=shot.propAssetIds??[],refs=shot.referenceAssetIds??[];
+  const primary=[
+    characters[0],
+    characters[1],
+    shot.locationAssetId,
+    props[0]??refs[0]
+  ].filter((id):id is string=>Boolean(id));
+  const overflow=[...characters.slice(2),...props.slice(1),...refs.filter(id=>id!==props[0])];
+  return [...new Set([...primary,...overflow])].slice(0,4);
 }
 
 export interface ContinuityQcComparison{edge:ShotDependency;previousFinalPath?:string;}
