@@ -883,15 +883,24 @@ describe('foreground artifact input signatures',()=>{
   });
 });
 describe('multi-track timeline editing',()=>{
+  const timelineShot=(id:string,index:number):Shot=>({id,sceneId:'scene',index,title:id,prompt:'',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'rendered',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:index,negativePrompt:'',includeAudio:false}});
   const project=()=>({
-    shots:[{id:'s1'},{id:'s2'},{id:'s3'}],
-    renderOutputs:[{id:'o1',shotId:'s1',mediaType:'video'},{id:'o2',shotId:'s2',mediaType:'video'},{id:'o3',shotId:'s3',mediaType:'video'}],
+    schemaVersion:3,id:'timeline-edit',name:'Timeline',rootPath:'/tmp/timeline-edit',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Timeline',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['s1','s2','s3']}],assets:[],
+    shots:[timelineShot('s1',1),timelineShot('s2',2),timelineShot('s3',3)],renderJobs:[],
+    renderOutputs:[
+      {id:'o1',jobId:'orphaned',shotId:'s1',path:'/tmp/o1.mp4',filename:'o1.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'o2',jobId:'orphaned',shotId:'s2',path:'/tmp/o2.mp4',filename:'o2.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'o3',jobId:'orphaned',shotId:'s3',path:'/tmp/o3.mp4',filename:'o3.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'}
+    ],
     timeline:[
       {id:'a',shotId:'s1',renderOutputId:'o1',track:0,order:0,trimInSec:0,volume:1},
       {id:'b',shotId:'s2',renderOutputId:'o2',track:0,order:1,trimInSec:0,volume:1},
       {id:'c',shotId:'s3',renderOutputId:'o3',track:1,order:0,trimInSec:0,volume:1}
-    ]
-  }) as any as FilmProject;
+    ],
+    shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  }) as FilmProject;
   it('reorders only within one track and refuses cross-track drag reorder',()=>{
     const p=project();expect(reorderTimeline(p,'b','a')).toBe(true);
     expect(p.timeline.find(c=>c.id==='b')?.order).toBe(0);expect(p.timeline.find(c=>c.id==='a')?.order).toBe(1);expect(p.timeline.find(c=>c.id==='c')?.order).toBe(0);
@@ -929,9 +938,11 @@ describe('canonical timeline integrity',()=>{
     expect(timelineClipUseIssue(project,canonical)).toBeUndefined();
     expect(timelineClipUseIssue(project,{...canonical,approval:'legacy'})).toMatch(/legacy take approval/i);
     expect(timelineClipUseIssue(project,{...canonical,approval:'human-override',approvalReason:undefined})).toMatch(/without a recorded reason/i);
-    expect(timelineClipUseIssue(project,{...canonical,approval:'human-override',approvalReason:'Human accepted continuity mismatch.'})).toBeUndefined();
+    const humanOverride={...canonical,approval:'human-override' as const,approvalReason:'Human accepted continuity mismatch.',approvalInputKey:timelineTakeApprovalInputKey(project,'o1')};
+    expect(timelineClipUseIssue(project,humanOverride)).toBeUndefined();
     project.qcResults.push({id:'qs2',shotId:'s1',renderOutputId:'o1',layer:'semantic',status:'fail',issues:[],inputKey:shotQcInputKey(project,'s1','o1','semantic'),createdAt:'2026-01-01T00:00:02.000Z'} as any);
     expect(timelineClipUseIssue(project,canonical)).toMatch(/no longer canonical-ready.*semantic QC is fail/i);
+    expect(timelineClipUseIssue(project,humanOverride)).toMatch(/human override is stale/i);
   });
 });
 describe('technical QC structural invariants',()=>{
