@@ -29,7 +29,7 @@ import { ProjectService, serializeProjectForStorage } from '../src/main/services
 import { createHumanTask, promoteCanonicalTake, recordObservedFinalState, recordShotQc, resolveHumanTask } from '../src/main/services/production-state-service';
 import { AdmissionGate } from '../src/main/services/admission-gate';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease } from '../src/main/services/keyframe-lease';
-import { generateKeyframe } from '../src/main/services/keyframe-service';
+import { generateKeyframe, keyframePrompt } from '../src/main/services/keyframe-service';
 import { upsertManagedProfile } from '../src/main/services/wangp-catalog-service';
 import { RenderLeaseStore } from '../src/main/services/render-lease';
 import { waitForComfyPromptRelease } from '../src/main/services/comfy-runner';
@@ -44,12 +44,12 @@ import { mapJsonHostPathsForWanGp } from '../src/main/services/runtime-path-mapp
 import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
-import { DEFAULT_CONTINUITY_FIELDS, OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, continuityFrameForShot, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, latestShotQcResult, productionShotOrder, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
+import { DEFAULT_CONTINUITY_FIELDS, OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, continuityFrameForShot, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, latestShotQcResult, productionShotOrder, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, requiresHumanContinuityMerge, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { useAppStore } from '../src/renderer/src/store';
 import { advisePreviz } from '../src/main/services/previz-service';
-import { evaluateContinuityQc, observedStateDraftFromVisionResult } from '../src/main/services/automatic-qc-service';
+import { evaluateContinuityQc, observedStateDraftFingerprint, observedStateDraftFromVisionResult, observedStateReviewTitle } from '../src/main/services/automatic-qc-service';
 import { AutomationJournal } from '../src/main/services/automation-journal';
-import { assertExternalDependenciesReady, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
+import { assertExternalDependenciesReady, automationTaskDisposition, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
 import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../src/shared/retry-policy';
 
 const api: ApiWorkflow = {
@@ -2380,5 +2380,111 @@ describe('P1 production policy hardening',()=>{
     expect(renderFailureAutoRetryDecision({status:'failed',error:'CUDA out of memory',message:'Failed'} as any).action).toBe('human');
     expect(renderFailureAutoRetryDecision({status:'failed',error:'Invalid node class_type Foo',message:'Failed'} as any).action).toBe('human');
     expect(renderFailureAutoRetryDecision({status:'failed',error:'mysterious deterministic crash',message:'Failed'} as any).action).toBe('human');
+  });
+});
+
+
+describe('state provenance next-five hardening',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:11,negativePrompt:'',includeAudio:false};
+  const shot=(id:string,index:number):Shot=>({
+    id,sceneId:'scene',index,title:id,prompt:'base prompt',camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:index+10}
+  });
+  const projectBase=():FilmProject=>({
+    schemaVersion:3,id:'state-next-five',name:'State Next Five',rootPath:'/tmp/state-next-five',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'State Next Five',logline:'',script:'',notes:''},
+    scenes:[{id:'scene',index:1,heading:'INT. ROOM',body:'',shotIds:['a','b','c']}],
+    assets:[],shots:[shot('a',1),shot('b',2),shot('c',3)],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  });
+
+  it('excludes unreviewed states from render prompts, keyframe prompts and generation signatures',()=>{
+    const project=projectBase(),target=project.shots[1];
+    target.actualStartStateId='unreviewed-start';
+    project.shotStates.push({
+      id:'unreviewed-start',shotId:'b',role:'actual-start',source:'generated',status:'unreviewed',
+      characters:[],props:[],environment:{notes:'UNTRUSTED_STATE_MARKER'},camera:{},actionPhase:'untrusted action',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'
+    });
+    const firstSignature=shotProjectRenderInputKey(project,target);
+    expect(buildRenderPrompt(project,target)).not.toContain('UNTRUSTED_STATE_MARKER');
+    expect(keyframePrompt(project,target,'start')).not.toContain('UNTRUSTED_STATE_MARKER');
+    project.shotStates[0].environment.notes='UNTRUSTED_STATE_CHANGED';
+    expect(shotProjectRenderInputKey(project,target)).toBe(firstSignature);
+    project.shotStates[0].status='current';
+    expect(buildRenderPrompt(project,target)).toContain('UNTRUSTED_STATE_CHANGED');
+    expect(keyframePrompt(project,target,'start')).toContain('UNTRUSTED_STATE_CHANGED');
+    expect(shotProjectRenderInputKey(project,target)).not.toBe(firstSignature);
+  });
+
+  it('requires current continuity QC before observed final state can become propagation truth',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-observed-continuity-gate-'));
+    const service=new ProjectService();
+    try{
+      await service.createAt(root,'Continuity gate');
+      await service.mutate(project=>{
+        project.scenes=[{id:'scene',index:1,heading:'',body:'',shotIds:['a','b']}];
+        const a=shot('a',1),b=shot('b',2);project.shots=[a,b];
+        project.shotDependencies=[{id:'a-b',fromShotId:'a',toShotId:'b',relation:'continuity',strength:'hard',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'}];
+        const output:RenderOutput={id:'out-b',jobId:'orphaned',shotId:'b',path:join(root,'renders','b.mp4'),filename:'b.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z',technicalQc:{checkedAt:'2026-01-01T00:00:01.000Z',passed:true,issues:[],warnings:[]}};
+        output.productionInputKey=shotProductionInputKey(project,b);project.renderOutputs.push(output);
+      });
+      for(const layer of ['visual','semantic'] as const){
+        const project=service.getCurrent()!,target=project.shots.find(item=>item.id==='b')!;
+        await recordShotQc(service,{projectRoot:root,shotId:'b',renderOutputId:'out-b',layer,status:'pass',issues:[],inputKey:shotQcInputKey(project,target.id,'out-b',layer)});
+      }
+      await expect(recordObservedFinalState(service,{projectRoot:root,shotId:'b',renderOutputId:'out-b',characters:[],props:[],environment:{},camera:{},actionPhase:'done',dialogueState:'unknown',confidence:.9})).rejects.toThrow(/continuity QC PASS/i);
+      {
+        const project=service.getCurrent()!,target=project.shots.find(item=>item.id==='b')!;
+        await recordShotQc(service,{projectRoot:root,shotId:'b',renderOutputId:'out-b',layer:'continuity',status:'pass',issues:[],inputKey:shotQcInputKey(project,target.id,'out-b','continuity')});
+      }
+      const updated=await recordObservedFinalState(service,{projectRoot:root,shotId:'b',renderOutputId:'out-b',characters:[],props:[],environment:{},camera:{},actionPhase:'done',dialogueState:'unknown',confidence:.9});
+      expect(updated.shots.find(item=>item.id==='b')?.observedFinalStateId).toBeTruthy();
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('does not silently choose one predecessor when multiple continuity sources converge',()=>{
+    const project=projectBase();
+    project.shotDependencies=[
+      {id:'a-c',fromShotId:'a',toShotId:'c',relation:'continuity',strength:'hard',propagate:['character'],createdAt:'2026-01-01T00:00:00.000Z'},
+      {id:'b-c',fromShotId:'b',toShotId:'c',relation:'continuity',strength:'soft',propagate:['prop'],createdAt:'2026-01-01T00:00:00.000Z'}
+    ];
+    for(const id of ['a','b']){
+      const source=project.shots.find(item=>item.id===id)!;source.observedFinalStateId=`final-${id}`;
+      project.shotStates.push({id:`final-${id}`,shotId:id,role:'observed-final',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'done',dialogueState:'',createdAt:'2026-01-01T00:00:01.000Z'});
+    }
+    expect(requiresHumanContinuityMerge(project,'c')).toBe(true);
+    expect(propagateObservedFinalState(project,'a')).toEqual([]);
+    expect(propagateObservedFinalState(project,'b')).toEqual([]);
+    expect(project.shots.find(item=>item.id==='c')?.actualStartStateId).toBeUndefined();
+
+    project.shots[2].actualStartStateId='generated-c';
+    project.shotStates.push({id:'generated-c',shotId:'c',role:'actual-start',source:'generated',status:'current',characters:[],props:[],environment:{},camera:{},actionPhase:'',dialogueState:'',createdAt:'2026-01-01T00:00:02.000Z'});
+    propagateObservedFinalState(project,'a');
+    expect(project.shotStates.find(item=>item.id==='generated-c')?.status).toBe('stale');
+    expect(project.shots[2].actualStartStateId).toBeUndefined();
+  });
+
+  it('dismisses stale automation blockers while preserving blockers that still match current provenance',()=>{
+    const project=projectBase(),target=project.shots[1];
+    const output:RenderOutput={id:'old-output',jobId:'orphaned',shotId:'b',path:'/tmp/state-next-five/old.mp4',filename:'old.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z',productionInputKey:'stale-input',technicalQc:{checkedAt:'2026-01-01T00:00:01.000Z',passed:true,issues:[],warnings:[]}};
+    project.renderOutputs.push(output);
+    const staleTask={id:'task-stale',type:'manual-qc' as const,status:'open' as const,shotId:'b',title:'Semantic QC needs corrective review',reason:'old',relatedAssetIds:[],relatedRenderOutputIds:['old-output'],createdAt:'2026-01-01T00:00:02.000Z'};
+    expect(automationTaskDisposition(project,target,staleTask)).toBe('dismissed');
+    const workflowTask={...staleTask,id:'task-workflow',type:'route-unsupported' as const,title:'Workflow input mismatch',relatedRenderOutputIds:[]};
+    expect(automationTaskDisposition(project,target,workflowTask)).toBe('dismissed');
+
+    target.startFrameAssetId='human-start';
+    const keyframeTask={...staleTask,id:'task-frame',type:'verify-keyframe' as const,title:'Start keyframe required',relatedRenderOutputIds:[]};
+    expect(automationTaskDisposition(project,target,keyframeTask)).toBe('resolved');
+  });
+
+  it('binds low-confidence observed-state approval to the exact extracted draft',()=>{
+    const first={characters:[],props:[],environment:{lighting:'warm'},camera:{},actionPhase:'door open',dialogueState:'unknown',confidence:.45};
+    const second={...first,actionPhase:'door closed'};
+    expect(observedStateDraftFingerprint(first)).not.toBe(observedStateDraftFingerprint(second));
+    const firstTitle=observedStateReviewTitle('Shot B',first),secondTitle=observedStateReviewTitle('Shot B',second);
+    const task={shotId:'b',type:'manual-qc' as const,title:firstTitle,status:'resolved' as const,relatedRenderOutputIds:['out-b'],resolution:`${OBSERVED_STATE_APPROVAL_PREFIX} human checked draft`};
+    expect(isApprovedObservedStateReview(task,'b',firstTitle,'out-b')).toBe(true);
+    expect(isApprovedObservedStateReview(task,'b',secondTitle,'out-b')).toBe(false);
   });
 });
