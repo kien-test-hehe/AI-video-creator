@@ -17,7 +17,6 @@ import { planShotReferences } from './reference-plan';
 import { currentGenerationState, keyframeProjectInputKey } from '../../shared/shot-signature';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
 import { KeyframeLeaseStore, recoverOrphanedKeyframeLease, type KeyframeLease } from './keyframe-lease';
-import { invalidateObservedFinalState } from '../../shared/production-state';
 
 export function keyframePrompt(project:FilmProject,shot:Shot,role:'start'|'end'):string{
   const temporal=role==='start'?'Create the opening hero frame before the described motion begins.':'Create the final hero frame after the described action has resolved.';
