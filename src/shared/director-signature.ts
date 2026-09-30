@@ -1,4 +1,6 @@
-import type { Asset, FilmProject, ModelFamily, Scene, Shot } from './types';
+import type { Asset, DirectorShotDraft, FilmProject, ModelFamily, Scene, Shot } from './types';
+import { MODEL_DEFAULTS } from './defaults';
+import { workflowCapabilityErrors } from './workflow-capabilities';
 import { shotRenderInputKey } from './shot-signature';
 
 export function sceneDirectorInputKey(project:FilmProject,scene:Scene):string{
@@ -74,6 +76,26 @@ export function continuityReviewInputKey(project:FilmProject,shot:Shot):string{
 export function filterDirectorAssetIds(project:FilmProject,kind:'character'|'location'|'reference'|'prop',ids:string[]):string[]{
   const allowed=kind==='prop'?new Set(['prop','wardrobe']):new Set([kind]);
   return [...new Set(ids)].filter(id=>{const asset=project.assets.find(item=>item.id===id);return Boolean(asset&&allowed.has(asset.kind));});
+}
+
+export function validatedVideoRouteForDirectorDraft(project:FilmProject,model:ModelFamily|undefined,draft:DirectorShotDraft){
+  if(!model)return undefined;
+  const defaults=MODEL_DEFAULTS[model];
+  return project.settings.workflowProfiles
+    .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&profile.modelFamily===model)
+    .filter(profile=>workflowCapabilityErrors(profile,{
+      generation:{modelFamily:model,mode:profile.mode,includeAudio:defaults.includeAudio??false},
+      characterAssetIds:draft.characterAssetIds??[],
+      locationAssetId:draft.locationAssetId,
+      propAssetIds:draft.propAssetIds??[],
+      referenceAssetIds:draft.referenceAssetIds??[]
+    }).length===0)
+    .sort((a,b)=>
+      Number(Boolean(b.validation?.lastSuccessfulRenderAt))-Number(Boolean(a.validation?.lastSuccessfulRenderAt))||
+      (b.validation?.successfulRenderCount??0)-(a.validation?.successfulRenderCount??0)||
+      (b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||
+      a.id.localeCompare(b.id)
+    )[0];
 }
 
 export function validatedVideoRouteForModel(project:FilmProject,model:ModelFamily|undefined){
