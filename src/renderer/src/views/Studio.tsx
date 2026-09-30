@@ -616,7 +616,7 @@ function ShotInspector({project,shot,latestPath,updateProject,setView,queueSelec
     <div className="studio-inspector-actions"><button className="ghost" onClick={()=>changeModel(chooseModelForShot(shot,{validatedModels:project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&Boolean(profile.workflowPath)&&profile.validation?.structuralStatus==='valid').map(profile=>profile.modelFamily)}))}>Auto route</button><button className="ghost" disabled={continuityBusy} onClick={reviewContinuity}>{continuityBusy?'Reviewing metadata…':'Metadata continuity review'}</button></div>
     <div className={`studio-route-status ${routeReady?'ready':route?'warn':'bad'}`}><span>VIDEO ROUTE</span><strong>{route?.name||'No matching workflow'}</strong><small>{routeIssue||'profile validated · runtime/files rechecked on queue'}</small></div>
     <div className="studio-production-state">
-      <div className="studio-panel-head compact"><div><span className="eyebrow">PRODUCTION STATE</span><strong>{shot.canonicalRenderId?'Canonical':'In progress'}</strong></div></div>
+      <div className="studio-panel-head compact"><div><span className="eyebrow">PRODUCTION STATE</span><strong>{shot.canonicalRenderId?(canonicalTakeReadiness(project,shot.id,shot.canonicalRenderId).ready?'Canonical':'Canonical stale'):'In progress'}</strong></div></div>
       <div className="studio-state-grid">
         <div><span>Actual start</span><Pill>{actualStart?.status||'missing'}</Pill></div>
         <div><span>Observed final</span><Pill>{observedFinal?.status||'missing'}</Pill></div>
