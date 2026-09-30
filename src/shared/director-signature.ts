@@ -1,17 +1,18 @@
-import type { Asset, DirectorShotDraft, FilmProject, ModelFamily, Scene, Shot } from './types';
-import { MODEL_DEFAULTS } from './defaults';
+import type { Asset, DirectorShotDraft, FilmProject, ModelFamily, Scene, Shot, WorkflowProfile } from './types';
+import { MODEL_DEFAULTS, PRIMARY_VIDEO_MODEL } from './defaults';
 import { workflowCapabilityErrors } from './workflow-capabilities';
 import { shotRenderInputKey } from './shot-signature';
 
 export function sceneDirectorInputKey(project:FilmProject,scene:Scene):string{
   const relevant=project.assets
     .filter(asset=>['character','location','prop','wardrobe','reference'].includes(asset.kind))
-    .map(asset=>({id:asset.id,kind:asset.kind,name:asset.name,tags:asset.tags,notes:asset.notes}))
+    .map(asset=>({id:asset.id,kind:asset.kind,name:asset.name,tags:asset.tags,notes:asset.notes,continuity:asset.continuity}))
     .sort((a,b)=>a.id.localeCompare(b.id));
   const availableRoutes=project.settings.workflowProfiles
     .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid')
     .map(profile=>({
       id:profile.id,modelFamily:profile.modelFamily,mode:profile.mode,workflowPath:profile.workflowPath,
+      bindings:profile.bindings,capabilities:profile.capabilities,
       sourceSha256:profile.validation?.sourceSha256,runtimeFingerprint:profile.validation?.runtimeFingerprint,
       modelFingerprint:profile.modelFingerprint,lastSuccessfulRenderAt:profile.validation?.lastSuccessfulRenderAt
     }))
@@ -62,7 +63,7 @@ export function continuityReviewInputKey(project:FilmProject,shot:Shot):string{
     ...(shot.endFrameAssetId?[shot.endFrameAssetId]:[])
   ]);
   const assets=[...ids].map(id=>project.assets.find(asset=>asset.id===id)).filter((asset):asset is Asset=>Boolean(asset))
-    .map(asset=>({id:asset.id,kind:asset.kind,name:asset.name,notes:asset.notes,tags:asset.tags})).sort((a,b)=>a.id.localeCompare(b.id));
+    .map(asset=>({id:asset.id,kind:asset.kind,name:asset.name,notes:asset.notes,tags:asset.tags,continuity:asset.continuity})).sort((a,b)=>a.id.localeCompare(b.id));
   return JSON.stringify({
     projectId:project.id,
     scene:scene?{id:scene.id,heading:scene.heading,body:scene.body}:undefined,
@@ -78,13 +79,17 @@ export function filterDirectorAssetIds(project:FilmProject,kind:'character'|'loc
   return [...new Set(ids)].filter(id=>{const asset=project.assets.find(item=>item.id===id);return Boolean(asset&&allowed.has(asset.kind));});
 }
 
+export function directorDraftIncludeAudio(draft:DirectorShotDraft,model:ModelFamily):boolean{
+  return Boolean(draft.dialogue?.trim())||Boolean(MODEL_DEFAULTS[model].includeAudio);
+}
+
 export function validatedVideoRouteForDirectorDraft(project:FilmProject,model:ModelFamily|undefined,draft:DirectorShotDraft){
   if(!model)return undefined;
-  const defaults=MODEL_DEFAULTS[model];
+  const includeAudio=directorDraftIncludeAudio(draft,model);
   return project.settings.workflowProfiles
     .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&profile.modelFamily===model)
     .filter(profile=>workflowCapabilityErrors(profile,{
-      generation:{modelFamily:model,mode:profile.mode,includeAudio:defaults.includeAudio??false},
+      generation:{modelFamily:model,mode:profile.mode,includeAudio},
       characterAssetIds:draft.characterAssetIds??[],
       locationAssetId:draft.locationAssetId,
       propAssetIds:draft.propAssetIds??[],
@@ -96,6 +101,39 @@ export function validatedVideoRouteForDirectorDraft(project:FilmProject,model:Mo
       (b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||
       a.id.localeCompare(b.id)
     )[0];
+}
+
+export interface ResolvedDirectorDraftRoute{
+  draft:DirectorShotDraft;
+  route:WorkflowProfile;
+  includeAudio:boolean;
+}
+
+export function resolveDirectorDraftRoute(project:FilmProject,draft:DirectorShotDraft):ResolvedDirectorDraftRoute|undefined{
+  const seen=new Set<ModelFamily>(),models:ModelFamily[]=[];
+  const push=(model:ModelFamily|undefined)=>{if(model&&!seen.has(model)){seen.add(model);models.push(model);}};
+  push(draft.preferredModel);
+  push(PRIMARY_VIDEO_MODEL);
+  const otherModels=[...new Set(project.settings.workflowProfiles
+    .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid')
+    .map(profile=>profile.modelFamily))]
+    .sort((a,b)=>a.localeCompare(b));
+  for(const model of otherModels)push(model);
+  for(const model of models){
+    const route=validatedVideoRouteForDirectorDraft(project,model,draft);
+    if(route)return{draft,route,includeAudio:directorDraftIncludeAudio(draft,model)};
+  }
+  return undefined;
+}
+
+export function resolveDirectorProposalRoutes(project:FilmProject,drafts:DirectorShotDraft[]):ResolvedDirectorDraftRoute[]{
+  const resolved=drafts.map(draft=>resolveDirectorDraftRoute(project,draft));
+  const missing=drafts.filter((_,index)=>!resolved[index]);
+  if(missing.length){
+    const names=missing.slice(0,8).map(draft=>draft.title||'(untitled shot)').join(', ');
+    throw new Error(`Director proposal cannot be applied atomically because ${missing.length} proposed shot(s) have no compatible validated local video route: ${names}. Fix/provision the routes or regenerate the proposal; no shots were added.`);
+  }
+  return resolved as ResolvedDirectorDraftRoute[];
 }
 
 export function validatedVideoRouteForModel(project:FilmProject,model:ModelFamily|undefined){
