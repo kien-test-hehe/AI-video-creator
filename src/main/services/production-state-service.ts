@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  CharacterContinuityState, CreateHumanTaskRequest, FilmProject, HumanTask, PropContinuityState,
+  Asset, CharacterContinuityState, CreateHumanTaskRequest, FilmProject, HumanTask, PropContinuityState,
   PromoteCanonicalTakeRequest, QcIssue, RecordObservedFinalStateRequest, RecordShotQcRequest,
   ResolveHumanTaskRequest, ShotQcResult, ShotState
 } from '../../shared/types';
@@ -9,6 +9,8 @@ import {
   currentProductionInputKeyForOutput, refreshCanonicalRender, renderOutputProductionInputKey, shotQcInputKey, shotStateFingerprint
 } from '../../shared/production-state';
 import { ProjectService } from './project-service';
+import { keyframeProjectInputKey } from '../../shared/shot-signature';
+import { GENERATED_KEYFRAME_APPROVED_TAG, GENERATED_KEYFRAME_CANDIDATE_TAG, GENERATED_KEYFRAME_REJECTED_TAG, generatedKeyframeCandidateInfo } from '../../shared/keyframe-review';
 
 const HUMAN_TASK_LIMIT=100_000;
 const QC_RESULT_LIMIT=300_000;
@@ -145,6 +147,7 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
       const verdictIsAfterReview=Boolean(verdict&&verdict.id!==linkedQc.id&&verdict.createdAt>=linkedQc.createdAt);
       if(!verdictIsAfterReview||!verdict||!['pass','fail'].includes(verdict.status))throw new Error('QC review tasks require a current PASS or FAIL verdict before they can be closed.');
     }
+    applyGeneratedKeyframeReview(project,task,request.status);
     task.status=request.status;
     task.resolution=requireString(request.resolution,20_000,'human task resolution');
     task.resolvedAt=new Date().toISOString();
@@ -162,6 +165,35 @@ export async function resolveHumanTask(projects:ProjectService,request:ResolveHu
   });
 }
 
+export function applyGeneratedKeyframeReview(project:FilmProject,task:HumanTask,status:'resolved'|'dismissed'):boolean{
+  if(task.type!=='verify-keyframe'||!task.shotId)return false;
+  const candidates=task.relatedAssetIds
+    .map(id=>project.assets.find(asset=>asset.id===id))
+    .filter((asset):asset is Asset=>Boolean(asset&&generatedKeyframeCandidateInfo(asset)));
+  if(!candidates.length)return false;
+  if(candidates.length!==1)throw new Error('Generated keyframe review task must reference exactly one candidate keyframe.');
+  const asset=candidates[0],info=generatedKeyframeCandidateInfo(asset)!;
+  const shot=project.shots.find(item=>item.id===task.shotId);
+  if(!shot)throw new Error('Generated keyframe review references a missing shot.');
+
+  if(status==='resolved'){
+    const profile=project.settings.workflowProfiles.find(item=>item.id===info.profileId);
+    if(!profile)throw new Error('Generated keyframe candidate is stale because its image workflow profile no longer exists.');
+    const currentInputKey=keyframeProjectInputKey(project,shot,info.role,profile);
+    if(currentInputKey!==info.inputKey)throw new Error('Generated keyframe candidate is stale because the shot, references, or image workflow changed after generation.');
+    if(info.role==='start')shot.startFrameAssetId=asset.id;else shot.endFrameAssetId=asset.id;
+    asset.tags=asset.tags.filter(tag=>tag!==GENERATED_KEYFRAME_CANDIDATE_TAG&&tag!==GENERATED_KEYFRAME_REJECTED_TAG);
+    if(!asset.tags.includes(GENERATED_KEYFRAME_APPROVED_TAG))asset.tags.push(GENERATED_KEYFRAME_APPROVED_TAG);
+    shot.latestRenderId=undefined;shot.canonicalRenderId=undefined;
+    invalidateObservedFinalState(project,shot.id,`${info.role==='start'?'Start':'End'} keyframe candidate was approved by a human; prior rendered continuity state is stale.`);
+    if(['draft','rendered','failed'].includes(shot.status))shot.status='ready';
+  }else{
+    asset.tags=asset.tags.filter(tag=>tag!==GENERATED_KEYFRAME_CANDIDATE_TAG&&tag!==GENERATED_KEYFRAME_APPROVED_TAG);
+    if(!asset.tags.includes(GENERATED_KEYFRAME_REJECTED_TAG))asset.tags.push(GENERATED_KEYFRAME_REJECTED_TAG);
+  }
+  return true;
+}
+
 export async function promoteCanonicalTake(projects:ProjectService,request:PromoteCanonicalTakeRequest):Promise<FilmProject>{
   return projects.mutate(project=>{
     assertProject(project,request.projectRoot);
@@ -172,7 +204,7 @@ export async function promoteCanonicalTake(projects:ProjectService,request:Promo
   });
 }
 
-function createHumanTaskRecord(project:FilmProject,request:CreateHumanTaskRequest):HumanTask{
+export function createHumanTaskRecord(project:FilmProject,request:CreateHumanTaskRequest):HumanTask{
   if(project.humanTasks.length>=HUMAN_TASK_LIMIT)throw new Error(`Human-task history would exceed the ${HUMAN_TASK_LIMIT}-item safety limit.`);
   const allowedTypes=new Set(['create-asset','approve-asset','verify-keyframe','verify-previz','verify-continuity','choose-take','manual-qc','route-unsupported']);
   if(!allowedTypes.has(request.type))throw new Error('Invalid human task type.');
