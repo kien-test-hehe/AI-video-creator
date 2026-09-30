@@ -207,6 +207,15 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
   const format = enumOrDefault(source.workflowFormat,new Set(['wangp-settings','ui','api'] as const),'api','workflow format');
   const runtime = source.runtime==null||source.runtime===''?(format==='wangp-settings'?'wangp':'comfyui'):enumOrDefault(source.runtime,new Set(['wangp','comfyui'] as const),'comfyui','workflow runtime');
   const validationSource = optionalObject(source.validation,'workflow validation') ?? {};
+  const capabilitiesSource = optionalObject(source.capabilities,'workflow capabilities');
+  const capabilities=capabilitiesSource?{
+    maxGenericReferences:boundedOptionalNumber(capabilitiesSource.maxGenericReferences,0,64,'workflow max generic references'),
+    supportsStartImage:capabilitiesSource.supportsStartImage==null?undefined:booleanOrDefault(capabilitiesSource.supportsStartImage,false,'workflow start-image capability'),
+    supportsEndImage:capabilitiesSource.supportsEndImage==null?undefined:booleanOrDefault(capabilitiesSource.supportsEndImage,false,'workflow end-image capability'),
+    supportsInputAudio:capabilitiesSource.supportsInputAudio==null?undefined:booleanOrDefault(capabilitiesSource.supportsInputAudio,false,'workflow input-audio capability'),
+    supportsInputVideo:capabilitiesSource.supportsInputVideo==null?undefined:booleanOrDefault(capabilitiesSource.supportsInputVideo,false,'workflow input-video capability'),
+    supportsGeneratedAudio:capabilitiesSource.supportsGeneratedAudio==null?undefined:booleanOrDefault(capabilitiesSource.supportsGeneratedAudio,false,'workflow generated-audio capability')
+  }:undefined;
   return {
     id: safeId(source.id),
     runtime,
@@ -217,6 +226,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
     workflowPath: str(source.workflowPath, '', 4096),
     workflowFormat: format,
     bindings: boundedArray(source.bindings,'workflow bindings',WORKFLOW_BINDING_LIMIT).map(sanitizeBinding),
+    capabilities,
     enabled: booleanOrDefault(source.enabled,false,'workflow enabled flag'),
     notes: str(source.notes, '', WORKFLOW_PROFILE_NOTES_LIMIT) || undefined,
     modelFingerprint: str(source.modelFingerprint, '', 512) || undefined,
