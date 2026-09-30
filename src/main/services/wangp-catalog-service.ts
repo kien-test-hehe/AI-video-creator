@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { app } from 'electron';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { AppMachineSettings, FilmProject, GenerationMode, ModelFamily, WanGpCatalogEntry, WorkflowProfile } from '../../shared/types';
+import type { AppMachineSettings, FilmProject, GenerationMode, ModelFamily, WanGpCatalogEntry, WorkflowCapabilities, WorkflowProfile } from '../../shared/types';
 import { AppSettingsService } from './app-settings-service';
 import { assertSafeWritePath, ensureSafeDirectory } from './path-safety';
 import { ProjectService } from './project-service';
@@ -58,7 +58,7 @@ export async function provisionRecommendedWanGpProfiles(projects:ProjectService,
     await writeFile(workflowPath,JSON.stringify(settingsJson,null,2),'utf8');
     const profile:WorkflowProfile={
       id,runtime:'wangp',purpose:pick.purpose,name:profileName,modelFamily:mapModelFamily(pick.entry),mode:pick.mode,
-      workflowPath,workflowFormat:'wangp-settings',bindings:analyzed.bindings,enabled:false,
+      workflowPath,workflowFormat:'wangp-settings',bindings:analyzed.bindings,capabilities:catalogWorkflowCapabilities(pick.entry,analyzed.bindings),enabled:false,
       notes:profileNotes,
       validation:{structuralStatus:'unvalidated'}
     };
@@ -109,6 +109,19 @@ export function pickRecommended(catalog:WanGpCatalogEntry[]):Array<{entry:WanGpC
   if(motion&&motion.modelType!==general?.modelType&&motion.modelType!==hero?.modelType)out.push({entry:motion,role:'motion',purpose:'video',mode:preferredVideoMode(motion)});
   if(keyframe)out.push({entry:keyframe,role:'keyframe',purpose:'image',mode:preferredImageMode(keyframe)});
   return out;
+}
+
+export function catalogWorkflowCapabilities(entry:WanGpCatalogEntry,bindings:WorkflowProfile['bindings']):WorkflowCapabilities{
+  const caps=entry.capabilities??{},inputs=new Set(entry.inputs.map(value=>value.toLowerCase())),outputs=new Set([...entry.mainOutput,...entry.outputs].map(value=>value.toLowerCase()));
+  const keys=new Set(bindings.map(binding=>binding.key));
+  const truth=(...names:string[])=>names.some(name=>caps[name]===true);
+  return{
+    supportsStartImage:keys.has('startImage')||inputs.has('image')||truth('image_to_video','first_last_frame_to_video','first_last_frame','image_audio_to_video'),
+    supportsEndImage:keys.has('endImage')||inputs.has('end_image')||truth('first_last_frame_to_video','first_last_frame'),
+    supportsInputAudio:keys.has('inputAudio')||inputs.has('audio')||truth('audio_to_video','image_audio_to_video'),
+    supportsInputVideo:keys.has('inputVideo')||inputs.has('video')||truth('video_to_video'),
+    supportsGeneratedAudio:keys.has('includeAudio')||outputs.has('audio')||truth('generated_audio','generate_audio','audio_output','audio_video')
+  };
 }
 
 export function preferredVideoMode(entry:WanGpCatalogEntry):Extract<GenerationMode,'t2v'|'i2v'|'flf2v'|'ia2v'|'v2v'>{
