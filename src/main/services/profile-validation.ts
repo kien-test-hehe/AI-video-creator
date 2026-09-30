@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { AppMachineSettings, FilmProject, WorkflowProfile } from '../../shared/types';
+import type { AppMachineSettings, FilmProject, Shot, WorkflowProfile } from '../../shared/types';
 import { ProjectService } from './project-service';
 import { assertExistingPathInside, assertPathInside } from './path-safety';
 import { fingerprintRuntime, sha256File } from './runtime-fingerprint';
@@ -8,6 +8,8 @@ import { validateWanGpProfile } from './wangp-engine';
 import { probeSystem } from './system-probe';
 import { ComfyClient } from './comfy-client';
 import { shotProjectRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { effectiveWorkflowCapabilities } from '../../shared/workflow-capabilities';
+import { planShotReferences } from './reference-plan';
 
 export async function validateAndRecordProfile(projects: ProjectService, machine: AppMachineSettings, profileId: string): Promise<FilmProject> {
   const project = projects.getCurrent();
@@ -66,10 +68,29 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
   });
 }
 
-export function profileCompatibilityErrors(profile: WorkflowProfile, shot: { generation: { modelFamily:string; mode:string } }): string[] {
-  const errors:string[]=[];
+export function profileCompatibilityErrors(profile: WorkflowProfile, shot: Shot): string[] {
+  const errors:string[]=[],caps=effectiveWorkflowCapabilities(profile);
   if(profile.modelFamily!==shot.generation.modelFamily)errors.push(`Profile model family ${profile.modelFamily} does not match shot model ${shot.generation.modelFamily}.`);
   if(profile.mode!==shot.generation.mode)errors.push(`Profile mode ${profile.mode} does not match shot mode ${shot.generation.mode}.`);
+  if((shot.generation.mode==='i2v'||shot.generation.mode==='flf2v'||shot.generation.mode==='ia2v'||Boolean(shot.startFrameAssetId))&&!caps.supportsStartImage){
+    errors.push('Shot requires a start-image input but this workflow profile has no declared/bound start-image capability.');
+  }
+  if((shot.generation.mode==='flf2v'||Boolean(shot.endFrameAssetId))&&!caps.supportsEndImage){
+    errors.push('Shot requires an end-image input but this workflow profile has no declared/bound end-image capability.');
+  }
+  if((shot.generation.mode==='ia2v'||Boolean(shot.audioAssetId))&&!caps.supportsInputAudio){
+    errors.push('Shot requires an input-audio binding but this workflow profile cannot accept input audio.');
+  }
+  if((shot.generation.mode==='v2v'||Boolean(shot.referenceVideoAssetId))&&!caps.supportsInputVideo){
+    errors.push('Shot requires an input-video binding but this workflow profile cannot accept input video.');
+  }
+  if(shot.generation.includeAudio&&!caps.supportsGeneratedAudio){
+    errors.push('Shot requests generated audio but this workflow profile does not declare or bind generated-audio support.');
+  }
+  const references=planShotReferences(shot,profile);
+  if(references.unservedIds.length){
+    errors.push(`Workflow reference capacity is insufficient: ${references.unservedIds.length} attached reference asset(s) cannot be bound.`);
+  }
   return errors;
 }
 
