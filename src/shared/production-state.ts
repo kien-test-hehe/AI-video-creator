@@ -51,7 +51,7 @@ function editorialShotCompare(project:Pick<FilmProject,'scenes'>,a:Shot,b:Shot):
 export function productionShotOrder(project:Pick<FilmProject,'shots'|'scenes'|'shotDependencies'>):Shot[]{
   const shots=[...project.shots].sort((a,b)=>editorialShotCompare(project,a,b));
   const byId=new Map(shots.map(shot=>[shot.id,shot] as const));
-  const indegree=new Map(shots.map(shot=>[shot.id,0] as const));
+  const indegree=new Map<string,number>(shots.map(shot=>[shot.id,0]));
   const outgoing=new Map<string,string[]>();
   for(const edge of project.shotDependencies){
     if(edge.relation==='parallel'||!byId.has(edge.fromShotId)||!byId.has(edge.toShotId))continue;
