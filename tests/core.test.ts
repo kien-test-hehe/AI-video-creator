@@ -3572,9 +3572,10 @@ describe('final Director/profile consistency',()=>{
 
 
 describe('final export and CapCut handoff correctness',()=>{
-  it('chooses master geometry from the best source rather than the first timeline clip',()=>{
+  it('chooses master geometry from the dominant orientation and best source rather than the first timeline clip',()=>{
     const master=selectMasterVideoGeometry([
       {width:1280,height:720,fps:24,hasAudio:true},
+      {width:1080,height:1920,fps:25,hasAudio:true},
       {width:1920,height:1080,fps:25,hasAudio:true},
       {width:768,height:432,fps:30,hasAudio:false}
     ],30);
@@ -3604,6 +3605,18 @@ describe('final export and CapCut handoff correctness',()=>{
       ]
     } as unknown as FilmProject;
     expect(capcutReferencedAssetIds(project)).toEqual(['audio','char','end','loc','prop','ref','start','video']);
+    const before=capcutHandoffInputKey({
+      ...project,id:'p',name:'p',rootPath:'/tmp/p',schemaVersion:3,createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'p',logline:'',script:'',notes:''},scenes:[],assets:[],renderJobs:[],renderOutputs:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject);
+    (project.shots[0] as any).referenceAssetIds=['different-missing-reference'];
+    const after=capcutHandoffInputKey({
+      ...project,id:'p',name:'p',rootPath:'/tmp/p',schemaVersion:3,createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'p',logline:'',script:'',notes:''},scenes:[],assets:[],renderJobs:[],renderOutputs:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+    } as FilmProject);
+    expect(after).not.toBe(before);
   });
 
   it('does not let an unrelated missing asset break CapCut handoff and preserves structured continuity for relevant assets',async()=>{
