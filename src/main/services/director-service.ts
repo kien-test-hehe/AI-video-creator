@@ -1,7 +1,7 @@
 import type { AppMachineSettings, Asset, ContinuityReview, DirectorShotDraft, FilmProject, Scene, Shot } from '../../shared/types';
 import { assertLocalUrl, fetchLocalUrl } from './local-url';
 import { readResponseJsonLimited, readResponseTextLimited } from './http-response';
-import { continuityPredecessorShots } from '../../shared/director-signature';
+import { continuityPredecessorShots, directorProfileCanServeDraft } from '../../shared/director-signature';
 
 interface ChatResponse{choices?:Array<{message?:{content?:string}}>}
 export class LocalDirectorJsonError extends Error{}
@@ -54,7 +54,7 @@ export async function planSceneWithLocalDirector(project:FilmProject,scene:Scene
     .slice(0,40)
     .map(item=>item.asset);
   const assetContext=relevantAssets.map(directorAssetContinuityContext).join('\n');
-  const availableModels=[...new Set(project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid').map(profile=>profile.modelFamily))];
+  const availableModels=[...new Set(project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&directorProfileCanServeDraft(profile)).map(profile=>profile.modelFamily))];
   const modelInstruction=availableModels.length?`preferredModel must be one of: ${availableModels.join(' | ')}. Use an empty string if no preference is necessary.`:'Set preferredModel to an empty string because no validated video route is currently available.';
   const system='You are a film director and storyboard planner for a local generative-video pipeline. Return strict JSON only. Plan shots that can be generated independently while preserving continuity. Avoid redundant coverage. Each visual prompt must describe subject identity, environment, lighting, composition and motion. Camera language should be practical and concise. You may ONLY reference asset ids supplied by the user.';
   const user=`FILM: ${clipText(project.story.title,500)}\nLOGLINE: ${clipText(project.story.logline,2000)}\nSTORY BIBLE: ${clipText(project.story.notes,8000)}\n\nSCENE ${scene.index}: ${clipText(scene.heading,1000)}\n${clipText(scene.body,16000)}\n\nKNOWN ASSETS (most scene-relevant, capped):\n${assetContext||'(none)'}\n\n${modelInstruction}\nReturn {"shots":[{"title":"...","prompt":"...","camera":"...","action":"...","dialogue":"...","continuityNotes":"...","quality":"preview|balanced|hero","preferredModel":"validated-model-or-empty","characterAssetIds":["exact-known-id"],"locationAssetId":"exact-known-id-or-empty","referenceAssetIds":["exact-known-id"],"propAssetIds":["exact-known-id"]}]}. Use 2-8 shots depending on scene complexity.`;
