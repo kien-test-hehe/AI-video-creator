@@ -73,7 +73,7 @@ export function parseVisualProblemDurations(text:string):VisualProblemDurations{
   return{
     blackDetected,
     freezeDetected,
-    maxBlackSec:black.length?Math.max(...black):(blackDetected?.5:0),
+    maxBlackSec:black.length?Math.max(...black):(blackDetected?0.5:0),
     maxFreezeSec:freeze.length?Math.max(...freeze):(freezeDetected?2:0)
   };
 }
