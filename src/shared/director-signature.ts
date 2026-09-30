@@ -9,7 +9,7 @@ export function sceneDirectorInputKey(project:FilmProject,scene:Scene):string{
     .map(asset=>({id:asset.id,kind:asset.kind,name:asset.name,tags:asset.tags,notes:asset.notes,continuity:asset.continuity}))
     .sort((a,b)=>a.id.localeCompare(b.id));
   const availableRoutes=project.settings.workflowProfiles
-    .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid')
+    .filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&directorProfileCanServeDraft(profile))
     .map(profile=>({
       id:profile.id,modelFamily:profile.modelFamily,mode:profile.mode,workflowPath:profile.workflowPath,
       bindings:profile.bindings,capabilities:profile.capabilities,
