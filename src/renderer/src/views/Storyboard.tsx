@@ -44,9 +44,9 @@ export function Storyboard(){
           const validatedModel=route?.modelFamily;
           if(!validatedModel||!route)continue;
           index+=1;added+=1;const d=MODEL_DEFAULTS[validatedModel],id=crypto.randomUUID();
-          const characterAssetIds=filterDirectorAssetIds(p,'character',draft.characterAssetIds||[]).slice(0,4);
-          const referenceAssetIds=filterDirectorAssetIds(p,'reference',draft.referenceAssetIds||[]).slice(0,4);
-          const propAssetIds=filterDirectorAssetIds(p,'prop',draft.propAssetIds||[]).slice(0,2);
+          const characterAssetIds=filterDirectorAssetIds(p,'character',draft.characterAssetIds||[]).slice(0,16);
+          const referenceAssetIds=filterDirectorAssetIds(p,'reference',draft.referenceAssetIds||[]).slice(0,16);
+          const propAssetIds=filterDirectorAssetIds(p,'prop',draft.propAssetIds||[]).slice(0,16);
           const locationAssetId=filterDirectorAssetIds(p,'location',draft.locationAssetId?[draft.locationAssetId]:[])[0];
           const shot:Shot={id,sceneId,index,title:draft.title||('Shot '+scene.index+'.'+index),prompt:draft.prompt,camera:draft.camera,action:draft.action,dialogue:draft.dialogue,continuityNotes:draft.continuityNotes,characterAssetIds,locationAssetId,propAssetIds,referenceAssetIds,status:'draft',generation:{modelFamily:validatedModel,mode:route.mode,quality:draft.quality,width:d.width||768,height:d.height||432,frames:d.frames||97,fps:d.fps||24,steps:d.steps,cfg:d.cfg,seed:Math.floor(Math.random()*2147483647),negativePrompt:'',includeAudio:d.includeAudio??false,workflowProfileId:route.id}};
           p.shots.push(shot);scene.shotIds.push(id);
