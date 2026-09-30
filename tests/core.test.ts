@@ -1311,12 +1311,15 @@ describe('Director continuity dependency context',()=>{
 });
 
 describe('AI Director validated route selection',()=>{
-  it('returns the actual validated workflow mode for a model family',()=>{
+  it('returns the actual validated workflow mode for a model family deterministically',()=>{
     const project={settings:{workflowProfiles:[
-      {id:'wf',runtime:'wangp',purpose:'video',name:'WF',modelFamily:'ltx-2.5-fast',mode:'t2v',workflowPath:'/tmp/wf.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid'}}
+      {id:'wf-old',runtime:'wangp',purpose:'video',name:'Old',modelFamily:'ltx-2.5-fast',mode:'t2v',workflowPath:'/tmp/old.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-01-01T00:00:00.000Z'}},
+      {id:'wf-new',runtime:'wangp',purpose:'video',name:'New',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'/tmp/new.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',lastSuccessfulRenderAt:'2026-02-01T00:00:00.000Z'}}
     ]}} as unknown as FilmProject;
     const route=validatedVideoRouteForModel(project,'ltx-2.5-fast');
-    expect(route?.id).toBe('wf');expect(route?.mode).toBe('t2v');
+    expect(route?.id).toBe('wf-new');expect(route?.mode).toBe('i2v');
+    project.settings.workflowProfiles.reverse();
+    expect(validatedVideoRouteForModel(project,'ltx-2.5-fast')?.id).toBe('wf-new');
   });
 });
 describe('binding-aware continuity reference planning',()=>{
@@ -3274,6 +3277,11 @@ describe('final correctness sweep',()=>{
     const before=sceneDirectorInputKey(project,scene);
     project.shots[0].prompt='edited after proposal';
     expect(sceneDirectorInputKey(project,scene)).not.toBe(before);
+    project.shots[0].prompt='base prompt';
+    project.settings.workflowProfiles=[{id:'director-route',runtime:'wangp',purpose:'video',name:'Director route',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'workflows/director.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',sourceSha256:'a'}}];
+    const routeSignature=sceneDirectorInputKey(project,scene);
+    project.settings.workflowProfiles[0].mode='t2v';
+    expect(sceneDirectorInputKey(project,scene)).not.toBe(routeSignature);
     const source=await readFile(join(process.cwd(),'src','renderer','src','views','Storyboard.tsx'),'utf8');
     expect(source).toMatch(/directorProposals/);
     expect(source).toMatch(/Nothing has been added to the project yet/);
