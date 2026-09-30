@@ -8,6 +8,7 @@ import { validateWanGpProfile } from './wangp-engine';
 import { probeSystem } from './system-probe';
 import { ComfyClient } from './comfy-client';
 import { shotProjectRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { workflowCapabilityErrors, type WorkflowCapabilityShot } from '../../shared/workflow-capabilities';
 
 export async function validateAndRecordProfile(projects: ProjectService, machine: AppMachineSettings, profileId: string): Promise<FilmProject> {
   const project = projects.getCurrent();
@@ -66,11 +67,8 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
   });
 }
 
-export function profileCompatibilityErrors(profile: WorkflowProfile, shot: { generation: { modelFamily:string; mode:string } }): string[] {
-  const errors:string[]=[];
-  if(profile.modelFamily!==shot.generation.modelFamily)errors.push(`Profile model family ${profile.modelFamily} does not match shot model ${shot.generation.modelFamily}.`);
-  if(profile.mode!==shot.generation.mode)errors.push(`Profile mode ${profile.mode} does not match shot mode ${shot.generation.mode}.`);
-  return errors;
+export function profileCompatibilityErrors(profile: WorkflowProfile, shot: WorkflowCapabilityShot): string[] {
+  return workflowCapabilityErrors(profile,shot);
 }
 
 
