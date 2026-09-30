@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseScreenplay } from '../src/main/services/script-parser';
 import { applyBindings, detectWorkflowFormat, suggestBindings, uiWorkflowToApi, validateComfyNodeAvailability, validateProfileBindings, type ApiWorkflow } from '../src/main/services/workflow-engine';
 import { assertLocalUrl } from '../src/main/services/local-url';
@@ -47,10 +47,12 @@ import { buildWorkflowImportNotes, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDIN
 import { DEFAULT_CONTINUITY_FIELDS, OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, continuityFrameForShot, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, latestShotQcResult, productionShotOrder, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, requiresHumanContinuityMerge, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
 import { syncRuntimeShotFields, useAppStore } from '../src/renderer/src/store';
 import { advisePreviz } from '../src/main/services/previz-service';
-import { evaluateContinuityQc, observedStateDraftFingerprint, observedStateDraftFromVisionResult, observedStateReviewTitle } from '../src/main/services/automatic-qc-service';
+import { evaluateContinuityQc, evaluateSemanticQc, observedStateDraftFingerprint, observedStateDraftFromVisionResult, observedStateReviewTitle, semanticReferenceAssetIds } from '../src/main/services/automatic-qc-service';
 import { AutomationJournal } from '../src/main/services/automation-journal';
 import { assertExternalDependenciesReady, automationTaskDisposition, buildAutomationTimelineIfEmpty } from '../src/main/services/production-runtime-service';
 import { qcFailureAutoRetryDecision, renderFailureAutoRetryDecision } from '../src/shared/retry-policy';
+import { videoFrameExtractionArgs } from '../src/main/services/media-analysis';
+import { analyzeImagesWithLocalVision, parseLocalVisionJsonObject } from '../src/main/services/local-vision-service';
 import { directorModelListContains } from '../src/main/services/workstation-readiness';
 
 const api: ApiWorkflow = {
@@ -2861,5 +2863,88 @@ describe('runtime route, technical QC and readiness hardening',()=>{
     expect(directorModelListContains({data:[{id:'other'}]},'qwen3-vl:4b')).toBe(false);
     expect(directorModelListContains({models:[{name:'qwen3-vl:4b'}]},'qwen3-vl:4b')).toBe(false);
     expect(directorModelListContains(null,'qwen3-vl:4b')).toBe(false);
+  });
+});
+
+
+describe('AI-QC epistemic hardening',()=>{
+  const machine={
+    director:{baseUrl:'http://127.0.0.1:11434/v1',model:'qwen3-vl:4b',temperature:.2}
+  } as AppMachineSettings;
+
+  it('repairs malformed local VLM JSON with one bounded re-evaluation request',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-vlm-json-repair-')),image=join(root,'frame.jpg');
+    await writeFile(image,Buffer.from([0xff,0xd8,0xff,0xd9]));
+    const calls:string[]=[];
+    const fetchMock=vi.fn(async(_input:any,init?:RequestInit)=>{
+      const body=String(init?.body??'');calls.push(body);
+      const content=calls.length===1?'{"status":"pass"': '{"status":"pass","issues":[]}';
+      return new Response(JSON.stringify({choices:[{message:{content}}]}),{status:200,headers:{'content-type':'application/json'}});
+    });
+    const original=globalThis.fetch;(globalThis as any).fetch=fetchMock;
+    try{
+      const result=await analyzeImagesWithLocalVision(machine,'Return status JSON.',[image]);
+      expect(result).toEqual({status:'pass',issues:[]});
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toMatch(/previous response was not parseable JSON/i);
+    }finally{(globalThis as any).fetch=original;await rm(root,{recursive:true,force:true});}
+  });
+
+  it('keeps the local JSON parser strict after stripping a single markdown fence',()=>{
+    const fence=String.fromCharCode(96).repeat(3);
+    expect(parseLocalVisionJsonObject(fence+'json\n{"ok":true}\n'+fence)).toEqual({ok:true});
+    expect(()=>parseLocalVisionJsonObject('{"ok":true')).toThrow(/JSON object|malformed JSON/i);
+  });
+
+  it('extracts frame zero without approximate pre-input seeking while later samples use accurate post-input seeking',()=>{
+    const first=videoFrameExtractionArgs('take.mp4','first.jpg',0);
+    expect(first).not.toContain('-ss');
+    expect(first.slice(first.indexOf('-i'),first.indexOf('-frames:v'))).toEqual(['-i','take.mp4']);
+    const later=videoFrameExtractionArgs('take.mp4','later.jpg',1.25);
+    expect(later.indexOf('-ss')).toBeGreaterThan(later.indexOf('-i'));
+    expect(later[later.indexOf('-ss')+1]).toBe('1.250');
+  });
+
+  it('does not promote camera movement or dialogue state from one observed still frame',()=>{
+    const shot:Shot={
+      id:'still-shot',sceneId:'scene',index:1,title:'Still',prompt:'',camera:'',action:'',dialogue:'spoken line',continuityNotes:'',
+      characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:true}
+    };
+    const project={assets:[],scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:['still-shot']}]} as any as FilmProject;
+    const draft=observedStateDraftFromVisionResult(project,shot,{camera:{movement:'fast dolly in',shotSize:'close-up'},dialogueState:'line completed',confidence:.8});
+    expect(draft.camera.shotSize).toBe('close-up');
+    expect(draft.camera.movement).toBeUndefined();
+    expect(draft.dialogueState).toBe('unknown');
+  });
+
+  it('grounds semantic QC with prioritized visual identity/location references and labels them separately from generated frames',async()=>{
+    const shot:Shot={
+      id:'semantic-shot',sceneId:'scene',index:1,title:'Semantic',prompt:'Hero enters room',camera:'wide',action:'enter',dialogue:'',continuityNotes:'',
+      characterAssetIds:['char-1','char-2'],locationAssetId:'loc-1',propAssetIds:['prop-1'],referenceAssetIds:['ref-1'],status:'ready',
+      generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+    };
+    expect(semanticReferenceAssetIds(shot)).toEqual(['char-1','char-2','loc-1','prop-1']);
+
+    const root=await mkdtemp(join(tmpdir(),'cineforge-semantic-refs-')),frame=join(root,'frame.jpg'),reference=join(root,'hero.jpg');
+    await Promise.all([writeFile(frame,Buffer.from([0xff,0xd8,0xff,0xd9])),writeFile(reference,Buffer.from([0xff,0xd8,0xff,0xd9]))]);
+    const project={
+      assets:[{id:'char-1',kind:'character',name:'Hero',sourcePath:'hero.jpg',projectPath:'assets/character/hero.jpg',tags:[],notes:'',createdAt:'2026-01-01T00:00:00.000Z'}]
+    } as any as FilmProject;
+    let captured:any;
+    const original=globalThis.fetch;(globalThis as any).fetch=vi.fn(async(_input:any,init?:RequestInit)=>{
+      captured=JSON.parse(String(init?.body??'{}'));
+      return new Response(JSON.stringify({choices:[{message:{content:'{"status":"pass","issues":[]}'}}]}),{status:200,headers:{'content-type':'application/json'}});
+    });
+    try{
+      const result=await evaluateSemanticQc(machine,project,shot,[frame],[{path:reference,label:'character: Hero [char-1]'}]);
+      expect(result.status).toBe('pass');
+      const userContent=captured.messages[1].content;
+      expect(userContent).toHaveLength(3);
+      expect(userContent[0].text).toMatch(/Images 1-1 are chronological frames from the GENERATED TAKE/i);
+      expect(userContent[0].text).toMatch(/Image 2: REFERENCE · character: Hero/i);
+      expect(userContent[1].type).toBe('image_url');
+      expect(userContent[2].type).toBe('image_url');
+    }finally{(globalThis as any).fetch=original;await rm(root,{recursive:true,force:true});}
   });
 });

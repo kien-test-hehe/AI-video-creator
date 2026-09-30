@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { copyFile, mkdir } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AutomationRunRequest, AutomationStatus, FilmProject, HumanTaskType, QcLayer, RenderOutput, Shot } from '../../shared/types';
 import { OBSERVED_STATE_CONFIDENCE_TASK_PREFIX, canonicalTakeReadiness, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, incomingContinuityEdges, invalidateObservedFinalState, invalidateStateCascade, isApprovedObservedStateReview, productionShotOrder, renderOutputProductionInputKey, requiresHumanContinuityMerge, shotProductionInputKey, shotQcInputKey } from '../../shared/production-state';
@@ -10,7 +10,7 @@ import { RenderQueueService } from './render-queue';
 import { preflightProject } from './preflight-service';
 import { assertExistingPathInside, assertExistingRelativeProjectPath, assertSafeWritePath } from './path-safety';
 import { sampleVideoFrames, type SampledVideoFrames } from './media-analysis';
-import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, observedStateDraftFingerprint, observedStateReviewTitle, selectStableFinalFrame } from './automatic-qc-service';
+import { evaluateContinuityQc, evaluateSemanticQc, evaluateVisualQc, extractObservedStateDraft, observedStateDraftFingerprint, observedStateReviewTitle, selectStableFinalFrame, semanticReferenceAssetIds, type SemanticReferenceImage } from './automatic-qc-service';
 import { createHumanTask, recordObservedFinalState, recordShotQc } from './production-state-service';
 import { ensurePrevizPlan } from './previz-service';
 import { releaseLocalVisionModel } from './local-vision-service';
@@ -302,8 +302,18 @@ export class ProductionRuntimeService extends EventEmitter{
     if(existing&&['pass','fail','human-verify'].includes(existing.status))return;
     let evaluation;
     if(layer==='visual')evaluation=await evaluateVisualQc(this.settings.get(),shot,frames.contactFrames);
-    else if(layer==='semantic')evaluation=await evaluateSemanticQc(this.settings.get(),project,shot,frames.contactFrames);
-    else{
+    else if(layer==='semantic'){
+      const referenceImages:SemanticReferenceImage[]=[];
+      for(const assetId of semanticReferenceAssetIds(shot)){
+        const asset=project.assets.find(item=>item.id===assetId);if(!asset)continue;
+        const ext=extname(asset.projectPath).toLowerCase();
+        const imageLike=asset.mimeType?.toLowerCase().startsWith('image/')||['.png','.jpg','.jpeg','.webp'].includes(ext);
+        if(!imageLike)continue;
+        const path=await assertExistingRelativeProjectPath(project.rootPath,asset.projectPath,'assets',`semantic QC reference for ${asset.name}`).catch(()=>undefined);
+        if(path)referenceImages.push({path,label:`${asset.kind}: ${asset.name} [${asset.id}]`});
+      }
+      evaluation=await evaluateSemanticQc(this.settings.get(),project,shot,frames.contactFrames,referenceImages);
+    }else{
       const incoming=project.shotDependencies
         .filter(edge=>edge.toShotId===shotId&&edge.relation!=='parallel'&&edge.propagate.length>0)
         .sort((a,b)=>a.id.localeCompare(b.id));
