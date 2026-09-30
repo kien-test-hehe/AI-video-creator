@@ -93,7 +93,6 @@ function sanitizeV3(source: Record<string, any>, openedRoot: string): FilmProjec
   const shotDependencies = boundedArray(source.shotDependencies,'shot dependencies',200_000).map(value=>sanitizeShotDependency(value,shotIds));
   const qcResults = boundedArray(source.qcResults,'shot QC results',300_000).map(value=>sanitizeShotQcResult(value,shotIds,outputById));
   const humanTasks = boundedArray(source.humanTasks,'human tasks',100_000).map(value=>sanitizeHumanTask(value,shotIds,assetIds,outputById));
-  const humanTaskIds=new Set(humanTasks.map(task=>task.id));
   const cutRevisions = boundedArray(source.cutRevisions,'cut revisions',10_000).map(value=>sanitizeCutRevision(value,new Set(timeline.map(clip=>clip.id))));
   const unsafeActualStartStateIds:string[]=[];
 
