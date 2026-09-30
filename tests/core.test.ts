@@ -45,7 +45,7 @@ import { loadPortableProject } from '../src/main/services/project-schema';
 import { writeResponseBodyToFileLimited } from '../src/main/services/http-response';
 import { buildWorkflowImportNotes, WORKFLOW_BINDING_INPUT_LIMIT, WORKFLOW_BINDING_LIMIT, WORKFLOW_BINDING_NODE_ID_LIMIT, WORKFLOW_PROFILE_NOTES_LIMIT } from '../src/shared/workflow-limits';
 import { DEFAULT_CONTINUITY_FIELDS, OBSERVED_STATE_APPROVAL_PREFIX, canonicalTakeReadiness, continuityFrameForShot, currentActualStartFrameAssetId, currentProductionInputKeyForOutput, invalidateObservedFinalState, isApprovedObservedStateReview, latestShotQcResult, productionShotOrder, propagateObservedFinalState, rebuildDefaultSequentialDependencies, reconcileHumanQcTasks, requiresHumanContinuityMerge, shotProductionInputKey, shotQcInputKey } from '../src/shared/production-state';
-import { useAppStore } from '../src/renderer/src/store';
+import { syncRuntimeShotFields, useAppStore } from '../src/renderer/src/store';
 import { advisePreviz } from '../src/main/services/previz-service';
 import { evaluateContinuityQc, observedStateDraftFingerprint, observedStateDraftFromVisionResult, observedStateReviewTitle } from '../src/main/services/automatic-qc-service';
 import { AutomationJournal } from '../src/main/services/automation-journal';
@@ -1774,6 +1774,10 @@ describe('production topology and destructive mutation regression guards',()=>{
       const saved=await service.saveFromRenderer(edited),b=saved.shots.find(item=>item.id==='b')!;
       const actual=saved.shotStates.find(state=>state.id===b.actualStartStateId)!;
       expect(actual).toMatchObject({role:'actual-start',source:'human',status:'current',frameAssetId:'human-frame'});
+      expect(actual.environment).toEqual({});
+      expect(actual.actionPhase).toBe('');
+      expect(actual.dialogueState).toBe('');
+      expect(actual.confidence).toBeUndefined();
       expect(saved.shotStates.find(state=>state.id==='start-b')?.status).toBe('stale');
       expect(saved.shotStates.find(state=>state.id==='final-b')?.status).toBe('stale');
       expect(b.observedFinalStateId).toBeUndefined();
@@ -2694,5 +2698,97 @@ describe('destructive mutation and human-task integrity next-five',()=>{
       })).rejects.toThrow(/shot a cannot reference render output out-b from shot b/i);
       expect(service.getCurrent()!.humanTasks).toHaveLength(0);
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+
+describe('post-P1 renderer and persisted-link integrity',()=>{
+  const generation={modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,quality:'balanced' as const,width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false};
+  const makeShot=(id:string,index:number,sceneId='scene-integrity'):Shot=>({
+    id,sceneId,index,title:id,prompt:id,camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{...generation,seed:index}
+  });
+  const portableBase=():FilmProject=>({
+    schemaVersion:3,id:'link-integrity',name:'Link integrity',rootPath:'/tmp/link-integrity',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+    story:{title:'Link integrity',logline:'',script:'',notes:''},
+    scenes:[{id:'scene-integrity',index:1,heading:'',body:'',shotIds:['a','b']}],
+    assets:[],shots:[makeShot('a',1),makeShot('b',2)],renderJobs:[],renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+    settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[]}
+  });
+
+  it('clears a stale renderer start frame when main-process runtime invalidates the actual-start state',()=>{
+    const local=makeShot('a',1),server=structuredClone(local);
+    local.startFrameAssetId='stale-frame';local.actualStartStateId='stale-state';
+    server.startFrameAssetId=undefined;server.actualStartStateId=undefined;
+    syncRuntimeShotFields(local,server,false);
+    expect(local.actualStartStateId).toBeUndefined();
+    expect(local.startFrameAssetId).toBeUndefined();
+  });
+
+  it('removes deleted render-output ids from both open and historical human tasks',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cineforge-output-task-cleanup-'));
+    try{
+      const service=new ProjectService();await service.createAt(root,'Output task cleanup');
+      await service.mutate(project=>{
+        project.scenes.push({id:'scene-integrity',index:1,heading:'',body:'',shotIds:['a']});
+        project.shots.push(makeShot('a',1));
+        project.renderOutputs.push({id:'out-a',jobId:'orphaned',shotId:'a',path:join(root,'renders','out-a.mp4'),filename:'out-a.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:00.000Z'});
+      });
+      const first=await createHumanTask(service,{projectRoot:root,type:'choose-take',shotId:'a',title:'Historical choice',reason:'Review old take.',relatedRenderOutputIds:['out-a']});
+      const historicalId=first.humanTasks.find(task=>task.status==='open')!.id;
+      await resolveHumanTask(service,{projectRoot:root,taskId:historicalId,status:'resolved',resolution:'Kept for audit history.'});
+      const second=await createHumanTask(service,{projectRoot:root,type:'choose-take',shotId:'a',title:'Open choice',reason:'Still open.',relatedRenderOutputIds:['out-a']});
+      const openId=second.humanTasks.find(task=>task.status==='open')!.id;
+      const saved=await service.deleteRenderOutput('out-a');
+      const historical=saved.humanTasks.find(task=>task.id===historicalId)!;
+      const open=saved.humanTasks.find(task=>task.id===openId)!;
+      expect(historical.status).toBe('resolved');
+      expect(historical.resolution).toBe('Kept for audit history.');
+      expect(historical.relatedRenderOutputIds).toEqual([]);
+      expect(open.status).toBe('dismissed');
+      expect(open.relatedRenderOutputIds).toEqual([]);
+      expect(open.resolution).toMatch(/render output out-a was deleted/i);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+  it('rejects a persisted shot-scoped human task that references another shot output',()=>{
+    const project=portableBase();
+    project.renderOutputs.push({id:'out-b',jobId:'orphaned',shotId:'b',path:'/tmp/link-integrity/renders/out-b.mp4',filename:'out-b.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'});
+    project.humanTasks.push({
+      id:'task-cross',type:'choose-take',status:'open',shotId:'a',title:'Wrong output',reason:'Invalid persisted relation.',
+      relatedAssetIds:[],relatedRenderOutputIds:['out-b'],createdAt:'2026-01-01T00:00:02.000Z'
+    });
+    expect(()=>loadPortableProject(project,'/tmp/link-integrity')).toThrow(/shot a cannot reference render output out-b from shot b/i);
+  });
+
+  it('rejects a persisted QC override link whose task does not cover the QC render output',()=>{
+    const project=portableBase();
+    const shot=project.shots[0];
+    const output:RenderOutput={id:'out-a',jobId:'orphaned',shotId:'a',path:'/tmp/link-integrity/renders/out-a.mp4',filename:'out-a.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'};
+    project.renderOutputs.push(output);
+    project.humanTasks.push({
+      id:'task-qc',type:'manual-qc',status:'open',shotId:'a',title:'QC review',reason:'Review output.',
+      relatedAssetIds:[],relatedRenderOutputIds:[],createdAt:'2026-01-01T00:00:02.000Z'
+    });
+    project.qcResults.push({
+      id:'qc-a',shotId:'a',renderOutputId:'out-a',layer:'visual',status:'human-verify',issues:[],
+      inputKey:'persisted-key',createdAt:'2026-01-01T00:00:03.000Z',humanOverrideTaskId:'task-qc'
+    });
+    expect(()=>loadPortableProject(project,'/tmp/link-integrity')).toThrow(/does not reference render output out-a/i);
+    void shot;
+  });
+
+  it('rejects a persisted QC override link to an incompatible human-task type',()=>{
+    const project=portableBase();
+    project.renderOutputs.push({id:'out-a',jobId:'orphaned',shotId:'a',path:'/tmp/link-integrity/renders/out-a.mp4',filename:'out-a.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z'});
+    project.humanTasks.push({
+      id:'task-wrong-type',type:'choose-take',status:'open',shotId:'a',title:'Not QC',reason:'Wrong task type.',
+      relatedAssetIds:[],relatedRenderOutputIds:['out-a'],createdAt:'2026-01-01T00:00:02.000Z'
+    });
+    project.qcResults.push({
+      id:'qc-a',shotId:'a',renderOutputId:'out-a',layer:'visual',status:'human-verify',issues:[],
+      inputKey:'persisted-key',createdAt:'2026-01-01T00:00:03.000Z',humanOverrideTaskId:'task-wrong-type'
+    });
+    expect(()=>loadPortableProject(project,'/tmp/link-integrity')).toThrow(/incompatible human task type choose-take/i);
   });
 });
