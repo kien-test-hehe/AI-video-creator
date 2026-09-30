@@ -55,13 +55,20 @@ export async function analyzeImagesWithLocalVision(machine:AppMachineSettings,in
       }),signal:AbortSignal.timeout(180_000)});
     }catch(error){throw new LocalVisionUnavailableError(`Local visual evaluator is unavailable: ${error instanceof Error?error.message:String(error)}`);}
     if(!res.ok){
-      const detail=(await readResponseTextLimited(res,'Local visual evaluator error',1024*1024)).slice(0,1200);
-      if(res.status===400||res.status===404||res.status===422)throw new LocalVisionUnavailableError(`Configured local model may not support image input (HTTP ${res.status}): ${detail}`);
-      throw new Error(`Local visual evaluator HTTP ${res.status}: ${detail}`);
+      let detail='';
+      try{detail=(await readResponseTextLimited(res,'Local visual evaluator error',1024*1024)).slice(0,1200);}
+      catch(error){detail=error instanceof Error?error.message:String(error);}
+      throw new LocalVisionUnavailableError(
+        res.status===400||res.status===404||res.status===422
+          ?`Configured local model may not support image input (HTTP ${res.status}): ${detail}`
+          :`Local visual evaluator HTTP ${res.status}: ${detail}`
+      );
     }
-    const payload=await readResponseJsonLimited<ChatResponse>(res,'Local visual evaluator response',8*1024*1024);
+    let payload:ChatResponse;
+    try{payload=await readResponseJsonLimited<ChatResponse>(res,'Local visual evaluator response',8*1024*1024);}
+    catch(error){throw new LocalVisionUnavailableError(`Local visual evaluator returned an invalid protocol response: ${error instanceof Error?error.message:String(error)}`);}
     const text=payload.choices?.[0]?.message?.content;
-    if(!text)throw new Error('Local visual evaluator returned no message content.');
+    if(!text)throw new LocalVisionUnavailableError('Local visual evaluator returned no message content.');
     return text;
   };
 
@@ -69,7 +76,12 @@ export async function analyzeImagesWithLocalVision(machine:AppMachineSettings,in
   try{return parseLocalVisionJsonObject(first);}
   catch(error){
     if(!(error instanceof LocalVisionJsonError))throw error;
-    return parseLocalVisionJsonObject(await request(true));
+    const repaired=await request(true);
+    try{return parseLocalVisionJsonObject(repaired);}
+    catch(repairError){
+      if(repairError instanceof LocalVisionJsonError)throw new LocalVisionUnavailableError(`Local visual evaluator returned malformed JSON twice: ${repairError.message}`);
+      throw repairError;
+    }
   }
 }
 
