@@ -26,11 +26,21 @@ export function routeWorkflow(project: FilmProject, shot: Shot, forcedProfileId?
   );
   if (candidates.length === 0) throw new Error(`No enabled ${shot.generation.modelFamily}/${shot.generation.mode} workflow profile. Import, validate and enable a matching WanGP settings profile or ComfyUI workflow in Settings.`);
 
-  const validated = candidates
-    .filter(p=>p.validation?.structuralStatus==='valid')
-    .sort((a,b)=>(b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||a.id.localeCompare(b.id))[0];
-  if(!validated)throw new Error(`No validated ${shot.generation.modelFamily}/${shot.generation.mode} workflow profile. Validate a matching profile in Settings before rendering.`);
-  return validated;
+  const structural = candidates.filter(p=>p.validation?.structuralStatus==='valid');
+  const compatible = structural
+    .filter(profile=>profileCompatibilityErrors(profile,shot).length===0)
+    .sort((a,b)=>
+      Number(Boolean(b.validation?.lastSuccessfulRenderAt))-Number(Boolean(a.validation?.lastSuccessfulRenderAt))||
+      (b.validation?.successfulRenderCount??0)-(a.validation?.successfulRenderCount??0)||
+      (b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||
+      a.id.localeCompare(b.id)
+    );
+  if(compatible[0])return compatible[0];
+  if(structural.length){
+    const details=structural.slice(0,4).map(profile=>`${profile.name}: ${profileCompatibilityErrors(profile,shot).join(' ')}`).join(' | ');
+    throw new Error(`Validated ${shot.generation.modelFamily}/${shot.generation.mode} profiles exist, but none can satisfy this shot's actual input/reference/audio requirements. ${details}`);
+  }
+  throw new Error(`No validated ${shot.generation.modelFamily}/${shot.generation.mode} workflow profile. Validate a matching profile in Settings before rendering.`);
 }
 
 function assertUsableProfile(profile: WorkflowProfile, shot: Shot): void {
