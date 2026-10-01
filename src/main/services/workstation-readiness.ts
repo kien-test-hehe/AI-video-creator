@@ -3,6 +3,7 @@ import { probeSystem } from './system-probe';
 import { assertLocalUrl, fetchLocalUrl } from './local-url';
 import { readResponseJsonLimited } from './http-response';
 import { profileHasCurrentRuntimeQualification } from '../../shared/shot-signature';
+import { profileHasCurrentRuntimeQualification } from '../../shared/shot-signature';
 
 interface DirectorModelList{data?:Array<{id?:string}>;}
 
