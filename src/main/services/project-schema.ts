@@ -236,6 +236,7 @@ function sanitizeWorkflowProfile(value: unknown): WorkflowProfile {
       sourceSha256: sha(validationSource.sourceSha256),
       runtimeFingerprint: str(validationSource.runtimeFingerprint, '', 512) || undefined,
       lastSuccessfulRenderAt: maybeIso(validationSource.lastSuccessfulRenderAt),
+      lastSuccessfulQualificationKey: str(validationSource.lastSuccessfulQualificationKey,'',4096)||undefined,
       successfulRenderCount: boundedOptionalNumber(validationSource.successfulRenderCount,0,1_000_000,'workflow successful render count'),
       lastRenderWallSec: boundedOptionalNumber(validationSource.lastRenderWallSec,0,7*24*60*60,'workflow last render wall seconds'),
       lastRenderWidth: boundedOptionalNumber(validationSource.lastRenderWidth,64,16_384,'workflow last render width'),
