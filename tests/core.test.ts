@@ -902,7 +902,7 @@ describe('foreground artifact input signatures',()=>{
     const storageReorder=structuredClone(base);storageReorder.timeline.reverse();expect(capcutHandoffInputKey(storageReorder)).toBe(before);
     const story=structuredClone(base);story.story.notes='changed';expect(capcutHandoffInputKey(story)).not.toBe(before);
     const asset=structuredClone(base);asset.assets[0].notes='changed';expect(capcutHandoffInputKey(asset)).not.toBe(before);
-    const continuity=structuredClone(base);continuity.assets[0].continuity={identityAnchors:['same face']};expect(capcutHandoffInputKey(continuity)).not.toBe(before);
+    const continuity=structuredClone(base);continuity.assets[0].continuity={identityAnchors:['same face'],forbiddenChanges:[]};expect(capcutHandoffInputKey(continuity)).not.toBe(before);
     const unrelated=structuredClone(base);unrelated.assets.push({id:'unused',kind:'reference',name:'Unused',sourcePath:'unused.png',projectPath:'assets/unused.png',tags:[],notes:'does not belong to the cut',createdAt:'2026-01-01T00:00:00.000Z'});expect(capcutHandoffInputKey(unrelated)).toBe(before);
     const shot=structuredClone(base);shot.shots[0].dialogue='changed';expect(capcutHandoffInputKey(shot)).not.toBe(before);
     const qc=structuredClone(base);qc.renderOutputs[0].technicalQc!.warnings=['warn'];expect(capcutHandoffInputKey(qc)).not.toBe(before);
