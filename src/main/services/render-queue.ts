@@ -873,6 +873,7 @@ export class RenderQueueService extends EventEmitter {
           lastRenderFrames:job.spec?.shot.generation.frames
         };
         profile!.validation.lastSuccessfulQualificationKey=workflowQualificationKey(profile!);
+        profile!.validation.lastSuccessfulQualificationKey=workflowQualificationKey(profile!);
       }
     });
     // The backend is already terminal and the project summary is durable. Clear the machine
