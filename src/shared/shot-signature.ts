@@ -91,6 +91,37 @@ export function workflowExecutionKey(profile:WorkflowProfile|undefined):string{
   });
 }
 
+export function workflowQualificationKey(profile:WorkflowProfile|undefined):string|undefined{
+  const validation=profile?.validation;
+  if(!profile||validation?.structuralStatus!=='valid'||!validation.sourceSha256||!validation.runtimeFingerprint)return undefined;
+  return JSON.stringify({
+    execution:workflowExecutionKey(profile),
+    sourceSha256:validation.sourceSha256,
+    runtimeFingerprint:validation.runtimeFingerprint,
+    modelFingerprint:profile.modelFingerprint??null
+  });
+}
+
+export function profileHasCurrentRuntimeQualification(profile:WorkflowProfile|undefined):boolean{
+  const key=workflowQualificationKey(profile);
+  return Boolean(
+    key&&
+    profile?.validation?.lastSuccessfulRenderAt&&
+    profile.validation.lastSuccessfulQualificationKey===key
+  );
+}
+
+export function clearRuntimeQualificationTelemetry(profile:WorkflowProfile):void{
+  if(!profile.validation)return;
+  profile.validation.lastSuccessfulRenderAt=undefined;
+  profile.validation.lastSuccessfulQualificationKey=undefined;
+  profile.validation.successfulRenderCount=undefined;
+  profile.validation.lastRenderWallSec=undefined;
+  profile.validation.lastRenderWidth=undefined;
+  profile.validation.lastRenderHeight=undefined;
+  profile.validation.lastRenderFrames=undefined;
+}
+
 export function canRefreshProfileValidationFromRender(profile:WorkflowProfile|undefined,spec:RenderJobSpec|undefined):boolean{
   if(!profile||!spec)return false;
   return workflowExecutionKey(profile)===workflowExecutionKey(spec.workflowProfile)
@@ -110,9 +141,9 @@ function effectiveWorkflowProfile(project:FilmProject,shot:Shot):WorkflowProfile
   const compatible=candidates
     .filter(profile=>profile.validation?.structuralStatus==='valid'&&workflowCapabilityErrors(profile,shot).length===0)
     .sort((a,b)=>
-      Number(Boolean(b.validation?.lastSuccessfulRenderAt))-Number(Boolean(a.validation?.lastSuccessfulRenderAt))||
-      (b.validation?.successfulRenderCount??0)-(a.validation?.successfulRenderCount??0)||
-      (b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||
+      Number(profileHasCurrentRuntimeQualification(b))-Number(profileHasCurrentRuntimeQualification(a))||
+      (profileHasCurrentRuntimeQualification(b)?(b.validation?.successfulRenderCount??0):0)-(profileHasCurrentRuntimeQualification(a)?(a.validation?.successfulRenderCount??0):0)||
+      (profileHasCurrentRuntimeQualification(b)?(b.validation?.lastSuccessfulRenderAt??''):'').localeCompare(profileHasCurrentRuntimeQualification(a)?(a.validation?.lastSuccessfulRenderAt??''):'')||
       a.id.localeCompare(b.id)
     );
   // Automatic routing truth must match main-process routeWorkflow(): an
