@@ -15,7 +15,7 @@ import { alternateShotTitle, appendProjectText, canonicalReadyOutputForShot, ins
 import { compileWanGpProfile, suggestWanGpBindings } from '../src/main/services/wangp-engine';
 import { planShotReferences } from '../src/main/services/reference-plan';
 import { ComfyClient, cineforgePromptIdentities, cineforgePromptIdentitiesByMetadata, hasActiveComfyPrompts, historyWasInterrupted, promptQueueState, validateComfyFileRef } from '../src/main/services/comfy-client';
-import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey } from '../src/shared/shot-signature';
+import { canRefreshProfileValidationFromRender, keyframeProjectInputKey, preserveTrustedProfileValidation, profileHasCurrentRuntimeQualification, reconcileRuntimeQualificationAfterValidation, shotKeyframeInputKey, shotProjectRenderInputKey, shotRenderInputKey, workflowExecutionKey, workflowQualificationKey } from '../src/shared/shot-signature';
 import { continuityPredecessorShots, continuityReviewInputKey, directorDraftIncludeAudio, directorDraftRequiresAudio, directorProfileCanServeDraft, filterDirectorAssetIds, resolveDirectorDraftRoute, resolveDirectorProposalRoutes, sceneDirectorInputKey, validatedVideoRouteForDirectorDraft, validatedVideoRouteForModel } from '../src/shared/director-signature';
 import { latestCurrentPassingVideoTake, latestPassingVideoTake, takeNeedsConfirmation, takeUseConfirmationMessage } from '../src/shared/take-policy';
 import { hasActiveRenderJobs, removedActiveRenderShotIds } from '../src/shared/project-guards';
@@ -3167,20 +3167,23 @@ describe('final QC/runtime hardening',()=>{
     expect(missing.join(' ')).toMatch(/expects dialogue\/audio/i);
   });
 
-  it('does not call structural-only profiles production-ready before a technical route qualification render',()=>{
+  it('does not call structural-only or legacy timestamp-only profiles production-ready before a current technical route qualification render',()=>{
     const project={
       settings:{workflowProfiles:[{
         id:'p',runtime:'wangp',purpose:'video',name:'Profile',modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:'workflows/p.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,
-        validation:{structuralStatus:'valid'}
+        validation:{structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime-a'}
       }]}
     } as any as FilmProject;
+    const profile=project.settings.workflowProfiles[0] as WorkflowProfile;
     const before=videoRouteQualification(project);
     expect(before.level).toBe('blocked');
     expect(before.runtimeQualifiedCount).toBe(0);
-    expect(before.detail).toMatch(/none has completed a technical runtime qualification/i);
-    project.settings.workflowProfiles[0].validation!.lastSuccessfulRenderAt='2026-09-30T00:00:00.000Z';
+    profile.validation!.lastSuccessfulRenderAt='2026-09-30T00:00:00.000Z';
+    expect(videoRouteQualification(project).level).toBe('blocked');
+    profile.validation!.lastSuccessfulQualificationKey=workflowQualificationKey(profile);
     const after=videoRouteQualification(project);
     expect(after.level).toBe('ready');
+    expect(after.runtimeQualifiedCount).toBe(1);
     expect(after.detail).toMatch(/not creative\/semantic production quality/i);
   });
 });
@@ -3649,5 +3652,91 @@ describe('final export and CapCut handoff correctness',()=>{
       expect(manifest.assets[0].id).toBe('ref');
       expect(manifest.assets[0].continuity.identityAnchors).toContain('scar over left eyebrow');
     }finally{await rm(root,{recursive:true,force:true});}
+  });
+});
+
+
+describe('runtime qualification provenance hardening',()=>{
+  const baseProfile=(id:string):WorkflowProfile=>({
+    id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'t2v',
+    workflowPath:`workflows/${id}.json`,workflowFormat:'wangp-settings',
+    bindings:[{key:'prompt',jsonPath:'prompt'}],enabled:true,
+    modelFingerprint:'model-a',
+    validation:{structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime-a'}
+  });
+  const baseShot=():Shot=>({
+    id:'qualification-shot',sceneId:'scene',index:1,title:'Qualification',prompt:'prompt',camera:'',action:'',dialogue:'',continuityNotes:'',
+    characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',
+    generation:{modelFamily:'ltx-2.5-fast',mode:'t2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}
+  });
+
+  it('does not trust a legacy successful-render timestamp without matching qualification provenance',()=>{
+    const profile=baseProfile('legacy');
+    profile.validation!.lastSuccessfulRenderAt='2026-09-30T00:00:00.000Z';
+    profile.validation!.successfulRenderCount=9;
+    expect(profileHasCurrentRuntimeQualification(profile)).toBe(false);
+    profile.validation!.lastSuccessfulQualificationKey=workflowQualificationKey(profile);
+    expect(profileHasCurrentRuntimeQualification(profile)).toBe(true);
+  });
+
+  it('clears successful-render telemetry when profile revalidation changes source/runtime identity',()=>{
+    const profile=baseProfile('revalidated');
+    profile.validation!.lastSuccessfulRenderAt='2026-09-30T00:00:00.000Z';
+    profile.validation!.successfulRenderCount=7;
+    profile.validation!.lastRenderWallSec=12;
+    profile.validation!.lastRenderWidth=1280;
+    profile.validation!.lastRenderHeight=704;
+    profile.validation!.lastRenderFrames=121;
+    const previousKey=workflowQualificationKey(profile)!;
+    profile.validation!.lastSuccessfulQualificationKey=previousKey;
+    const previousTrusted=profileHasCurrentRuntimeQualification(profile);
+    profile.validation!.runtimeFingerprint='runtime-b';
+    reconcileRuntimeQualificationAfterValidation(profile,previousKey,previousTrusted);
+    expect(profile.validation!.lastSuccessfulRenderAt).toBeUndefined();
+    expect(profile.validation!.lastSuccessfulQualificationKey).toBeUndefined();
+    expect(profile.validation!.successfulRenderCount).toBeUndefined();
+    expect(profile.validation!.lastRenderWallSec).toBeUndefined();
+  });
+
+  it('automatic routing prefers a currently qualified profile over a newer stale timestamp',()=>{
+    const stale=baseProfile('a-stale');
+    stale.validation!.lastSuccessfulRenderAt='2026-10-01T00:00:00.000Z';
+    stale.validation!.successfulRenderCount=99;
+    const qualified=baseProfile('b-qualified');
+    qualified.validation!.lastSuccessfulRenderAt='2026-09-01T00:00:00.000Z';
+    qualified.validation!.successfulRenderCount=1;
+    qualified.validation!.lastSuccessfulQualificationKey=workflowQualificationKey(qualified);
+    const project={settings:{workflowProfiles:[stale,qualified]}} as unknown as FilmProject;
+    expect(routeWorkflow(project,baseShot()).id).toBe('b-qualified');
+  });
+
+  it('workstation route readiness ignores stale qualification telemetry',()=>{
+    const stale=baseProfile('stale-ready');
+    stale.validation!.lastSuccessfulRenderAt='2026-10-01T00:00:00.000Z';
+    const project={settings:{workflowProfiles:[stale]}} as unknown as FilmProject;
+    expect(videoRouteQualification(project)).toMatchObject({level:'blocked',runtimeQualifiedCount:0});
+    stale.validation!.lastSuccessfulQualificationKey=workflowQualificationKey(stale);
+    expect(videoRouteQualification(project)).toMatchObject({level:'ready',runtimeQualifiedCount:1});
+  });
+
+  it('treats a render output as stale when the current profile runtime fingerprint differs from its immutable job snapshot',()=>{
+    const profile=baseProfile('runtime-output');
+    const shot=baseShot();shot.generation.workflowProfileId=profile.id;
+    const specProfile=structuredClone(profile);
+    const project={
+      schemaVersion:3,id:'runtime-output-project',name:'runtime',rootPath:'/tmp/runtime',createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',
+      story:{title:'runtime',logline:'',script:'',notes:''},scenes:[{id:'scene',index:1,heading:'',body:'',shotIds:[shot.id]}],assets:[],shots:[shot],
+      renderJobs:[{id:'job',shotId:shot.id,createdAt:'2026-01-01T00:00:00.000Z',updatedAt:'2026-01-01T00:00:00.000Z',status:'done',progress:1,message:'Done',modelFamily:shot.generation.modelFamily,workflowProfileId:profile.id,outputs:[],spec:{
+        shot:structuredClone(shot),workflowProfile:specProfile,effectivePrompt:'prompt',productionInputKey:'recorded',queuedProjectUpdatedAt:'2026-01-01T00:00:00.000Z',
+        workflowSha256:'a'.repeat(64),assetFingerprints:[],runtimeFingerprint:{backend:'wangp',executionMode:'native',environmentSha256:'runtime-a'},modelFingerprint:'model-a'
+      }}],
+      renderOutputs:[],timeline:[],shotStates:[],shotDependencies:[],qcResults:[],humanTasks:[],cutRevisions:[],
+      settings:{costPolicy:{mode:'codex-capcut-only',allowCapcutAiCredits:false},capcut:{enabled:true,pro:false},defaultFps:24,outputContainer:'mp4',workflowProfiles:[profile]}
+    } as FilmProject;
+    const output:RenderOutput={id:'out',jobId:'job',shotId:shot.id,path:'/tmp/runtime/out.mp4',filename:'out.mp4',mediaType:'video',createdAt:'2026-01-01T00:00:01.000Z',productionInputKey:'recorded'};
+    project.renderOutputs=[output];
+    expect(currentProductionInputKeyForOutput(project,shot,output)).toBeTruthy();
+    profile.validation!.runtimeFingerprint='runtime-b';
+    expect(currentProductionInputKeyForOutput(project,shot,output)).toBeUndefined();
   });
 });
