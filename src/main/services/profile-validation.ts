@@ -7,7 +7,7 @@ import { validateComfyNodeAvailability, validateProfileBindings } from './workfl
 import { validateWanGpProfile } from './wangp-engine';
 import { probeSystem } from './system-probe';
 import { ComfyClient } from './comfy-client';
-import { clearRuntimeQualificationTelemetry, profileHasCurrentRuntimeQualification, shotProjectRenderInputKey, workflowExecutionKey, workflowQualificationKey } from '../../shared/shot-signature';
+import { profileHasCurrentRuntimeQualification, reconcileRuntimeQualificationAfterValidation, shotProjectRenderInputKey, workflowExecutionKey, workflowQualificationKey } from '../../shared/shot-signature';
 import { workflowCapabilityErrors, type WorkflowCapabilityShot } from '../../shared/workflow-capabilities';
 
 export async function validateAndRecordProfile(projects: ProjectService, machine: AppMachineSettings, profileId: string): Promise<FilmProject> {
@@ -60,12 +60,7 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
       runtimeFingerprint: fingerprint.environmentSha256,
       lastError: errors.length ? errors.join('\n').slice(0,10_000) : undefined
     };
-    const nextQualificationKey=workflowQualificationKey(target);
-    if(errors.length||!previousQualificationTrusted||!previousQualificationKey||previousQualificationKey!==nextQualificationKey){
-      clearRuntimeQualificationTelemetry(target);
-    }else{
-      target.validation.lastSuccessfulQualificationKey=nextQualificationKey;
-    }
+    reconcileRuntimeQualificationAfterValidation(target,previousQualificationKey,previousQualificationTrusted);
     for(const shot of p.shots){
       if(before.get(shot.id)===shotProjectRenderInputKey(p,shot))continue;
       shot.latestRenderId=undefined;
