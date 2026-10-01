@@ -778,9 +778,9 @@ describe('stale creative result guards',()=>{
   });
   it('changes project render signatures when the effective workflow execution config changes',()=>{
     const base=shot();base.generation.workflowProfileId='wf';
-    const profile={id:'wf',runtime:'wangp' as const,purpose:'video' as const,name:'Workflow',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,modelFingerprint:'model-a',validation:{structuralStatus:'valid' as const}};
+    const profile={id:'wf',runtime:'wangp' as const,purpose:'video' as const,name:'Workflow',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/wf.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'},{key:'startImage' as const,jsonPath:'image'},{key:'referenceImages' as const,jsonPath:'refs'}],capabilities:{maxGenericReferences:4},enabled:true,modelFingerprint:'model-a',validation:{structuralStatus:'valid' as const}};
     const project={assets:[{id:'char',kind:'character',name:'Hero',sourcePath:'',projectPath:'assets/char.png',tags:[],notes:'',createdAt:'x'},{id:'loc',kind:'location',name:'Room',sourcePath:'',projectPath:'assets/loc.png',tags:[],notes:'',createdAt:'x'}],settings:{workflowProfiles:[profile]}} as unknown as FilmProject;
-    const beforeWorkflow=workflowExecutionKey(profile),before=shotProjectRenderInputKey(project,base);project.settings.workflowProfiles[0].bindings=[{key:'prompt',jsonPath:'generation.prompt'}];
+    const beforeWorkflow=workflowExecutionKey(profile),before=shotProjectRenderInputKey(project,base);project.settings.workflowProfiles[0].bindings=[{key:'prompt',jsonPath:'generation.prompt'},{key:'startImage',jsonPath:'image'},{key:'referenceImages',jsonPath:'refs'}];
     expect(shotProjectRenderInputKey(project,base)).not.toBe(before);
     expect(workflowExecutionKey(project.settings.workflowProfiles[0])).not.toBe(beforeWorkflow);
   });
@@ -797,8 +797,8 @@ describe('stale creative result guards',()=>{
   });
   it('changes project render signatures when profile validation changes the auto-selected route',()=>{
     const base=shot();base.generation.workflowProfileId=undefined;
-    const first={id:'a',runtime:'wangp' as const,purpose:'video' as const,name:'A',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/a.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'unvalidated' as const}};
-    const second={id:'b',runtime:'wangp' as const,purpose:'video' as const,name:'B',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/b.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'}],enabled:true,validation:{structuralStatus:'valid' as const}};
+    const first={id:'a',runtime:'wangp' as const,purpose:'video' as const,name:'A',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/a.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'},{key:'startImage' as const,jsonPath:'image'},{key:'referenceImages' as const,jsonPath:'refs'}],capabilities:{maxGenericReferences:4},enabled:true,validation:{structuralStatus:'unvalidated' as const}};
+    const second={id:'b',runtime:'wangp' as const,purpose:'video' as const,name:'B',modelFamily:'ltx-2.5-fast' as const,mode:'i2v' as const,workflowPath:'workflows/b.json',workflowFormat:'wangp-settings' as const,bindings:[{key:'prompt' as const,jsonPath:'prompt'},{key:'startImage' as const,jsonPath:'image'},{key:'referenceImages' as const,jsonPath:'refs'}],capabilities:{maxGenericReferences:4},enabled:true,validation:{structuralStatus:'valid' as const}};
     const project={assets:[{id:'char',kind:'character',name:'Hero',sourcePath:'',projectPath:'assets/char.png',tags:[],notes:'',createdAt:'x'},{id:'loc',kind:'location',name:'Room',sourcePath:'',projectPath:'assets/loc.png',tags:[],notes:'',createdAt:'x'}],settings:{workflowProfiles:[first,second]}} as unknown as FilmProject;
     const before=shotProjectRenderInputKey(project,base);
     project.settings.workflowProfiles[0].validation!.structuralStatus='valid';
@@ -1431,7 +1431,7 @@ describe('WanGP settings binding',()=>{it('infers current WanGP timing and refer
 describe('render production provenance workflow identity',()=>{
   it('binds a take to the workflow profile actually used instead of whichever matching profile auto-routing would choose later',()=>{
     const shot:Shot={id:'s',sceneId:'scene',index:1,title:'S',prompt:'p',camera:'',action:'',dialogue:'',continuityNotes:'',characterAssetIds:[],propAssetIds:[],referenceAssetIds:[],status:'ready',generation:{modelFamily:'ltx-2.5-fast',mode:'i2v',quality:'balanced',width:768,height:432,frames:97,fps:24,steps:8,cfg:1,seed:1,negativePrompt:'',includeAudio:false}};
-    const profile=(id:string,path:string):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:path,workflowFormat:'wangp-settings',bindings:[],enabled:true,validation:{structuralStatus:'valid',sourceSha256:'0'.repeat(64)}});
+    const profile=(id:string,path:string):WorkflowProfile=>({id,runtime:'wangp',purpose:'video',name:id,modelFamily:'ltx-2.5-fast',mode:'i2v',workflowPath:path,workflowFormat:'wangp-settings',bindings:[{key:'startImage',jsonPath:'image'}],enabled:true,validation:{structuralStatus:'valid',sourceSha256:'0'.repeat(64),runtimeFingerprint:'0'.repeat(64)}});
     const a=profile('a','/tmp/a.json'),b=profile('b','/tmp/b.json');
     const project={shots:[shot],assets:[],shotStates:[],renderJobs:[],renderOutputs:[],settings:{workflowProfiles:[a,b]}} as unknown as FilmProject;
     const aKey=shotProductionInputKey(project,shot,a),bKey=shotProductionInputKey(project,shot,b);
@@ -2814,7 +2814,7 @@ describe('runtime route, technical QC and readiness hardening',()=>{
   it('invalidates canonical and observed continuity truth when managed route inputs change',()=>{
     const profile:WorkflowProfile={
       id:'profile-a',runtime:'wangp',purpose:'video',name:'A',modelFamily:'wan-2.2-5b',mode:'i2v',
-      workflowPath:'/tmp/workflow-a.json',workflowFormat:'wangp-settings',bindings:[],enabled:true,
+      workflowPath:'/tmp/workflow-a.json',workflowFormat:'wangp-settings',bindings:[{key:'startImage',jsonPath:'image'}],enabled:true,
       validation:{structuralStatus:'valid',sourceSha256:'a'.repeat(64),runtimeFingerprint:'runtime-a'}
     };
     const shot:Shot={
