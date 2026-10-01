@@ -3522,10 +3522,10 @@ describe('final Director/profile consistency',()=>{
   it('makes structured asset continuity part of immutable render provenance',()=>{
     const project=projectBase(),shot=project.shots[0];
     project.settings.workflowProfiles=[profile('route','ltx-2.5-fast',[{key:'startImage',jsonPath:'image'}],{supportsStartImage:true})];
-    const asset:Asset={id:'hero-render',kind:'character',name:'Hero',sourcePath:'hero.png',projectPath:'assets/hero.png',tags:[],notes:'same notes',continuity:{identityAnchors:['scar left brow']},createdAt:'2026-01-01T00:00:00.000Z'};
+    const asset:Asset={id:'hero-render',kind:'character',name:'Hero',sourcePath:'hero.png',projectPath:'assets/hero.png',tags:[],notes:'same notes',continuity:{identityAnchors:['scar left brow'],forbiddenChanges:[]},createdAt:'2026-01-01T00:00:00.000Z'};
     project.assets=[asset];shot.characterAssetIds=[asset.id];
     const before=shotProjectRenderInputKey(project,shot);
-    asset.continuity={identityAnchors:['scar right brow']};
+    asset.continuity={identityAnchors:['scar right brow'],forbiddenChanges:[]};
     expect(shotProjectRenderInputKey(project,shot)).not.toBe(before);
   });
 
