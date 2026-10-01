@@ -401,6 +401,7 @@ export function currentProductionInputKeyForOutput(project:FilmProject,shot:Shot
     const currentProfile=project.settings.workflowProfiles.find(profile=>profile.id===specProfile.id);
     if(!currentProfile||!currentProfile.enabled||(currentProfile.purpose??'video')!=='video'||!currentProfile.workflowPath||currentProfile.validation?.structuralStatus!=='valid')return undefined;
     if(job?.spec?.workflowSha256&&currentProfile.validation?.sourceSha256!==job.spec.workflowSha256)return undefined;
+    if(job?.spec?.runtimeFingerprint?.environmentSha256&&currentProfile.validation?.runtimeFingerprint!==job.spec.runtimeFingerprint.environmentSha256)return undefined;
     if((currentProfile.modelFingerprint||undefined)!==(job?.spec?.modelFingerprint||undefined))return undefined;
     return shotProductionInputKey(project,shot,currentProfile);
   }
