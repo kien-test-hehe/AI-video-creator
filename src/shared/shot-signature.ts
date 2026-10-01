@@ -122,6 +122,19 @@ export function clearRuntimeQualificationTelemetry(profile:WorkflowProfile):void
   profile.validation.lastRenderFrames=undefined;
 }
 
+export function reconcileRuntimeQualificationAfterValidation(
+  profile:WorkflowProfile,
+  previousQualificationKey:string|undefined,
+  previousQualificationTrusted:boolean
+):void{
+  const nextQualificationKey=workflowQualificationKey(profile);
+  if(!previousQualificationTrusted||!previousQualificationKey||previousQualificationKey!==nextQualificationKey){
+    clearRuntimeQualificationTelemetry(profile);
+    return;
+  }
+  if(profile.validation)profile.validation.lastSuccessfulQualificationKey=nextQualificationKey;
+}
+
 export function canRefreshProfileValidationFromRender(profile:WorkflowProfile|undefined,spec:RenderJobSpec|undefined):boolean{
   if(!profile||!spec)return false;
   return workflowExecutionKey(profile)===workflowExecutionKey(spec.workflowProfile)
