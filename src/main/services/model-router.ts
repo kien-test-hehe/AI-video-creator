@@ -1,5 +1,6 @@
 import type { FilmProject, Shot, WorkflowProfile } from '../../shared/types';
 import { chooseModelForShot } from '../../shared/routing';
+import { profileHasCurrentRuntimeQualification } from '../../shared/shot-signature';
 import { profileCompatibilityErrors } from './profile-validation';
 
 export function routeWorkflow(project: FilmProject, shot: Shot, forcedProfileId?: string): WorkflowProfile {
@@ -30,9 +31,9 @@ export function routeWorkflow(project: FilmProject, shot: Shot, forcedProfileId?
   const compatible = structural
     .filter(profile=>profileCompatibilityErrors(profile,shot).length===0)
     .sort((a,b)=>
-      Number(Boolean(b.validation?.lastSuccessfulRenderAt))-Number(Boolean(a.validation?.lastSuccessfulRenderAt))||
-      (b.validation?.successfulRenderCount??0)-(a.validation?.successfulRenderCount??0)||
-      (b.validation?.lastSuccessfulRenderAt??'').localeCompare(a.validation?.lastSuccessfulRenderAt??'')||
+      Number(profileHasCurrentRuntimeQualification(b))-Number(profileHasCurrentRuntimeQualification(a))||
+      (profileHasCurrentRuntimeQualification(b)?(b.validation?.successfulRenderCount??0):0)-(profileHasCurrentRuntimeQualification(a)?(a.validation?.successfulRenderCount??0):0)||
+      (profileHasCurrentRuntimeQualification(b)?(b.validation?.lastSuccessfulRenderAt??''):'').localeCompare(profileHasCurrentRuntimeQualification(a)?(a.validation?.lastSuccessfulRenderAt??''):'')||
       a.id.localeCompare(b.id)
     );
   if(compatible[0])return compatible[0];
