@@ -24,7 +24,7 @@ import { technicalQcVideo } from './technical-qc';
 import { findExpectedProcessPids, isProcessAlive, killProcessTree } from './process-utils';
 import { probeSystem } from './system-probe';
 import { planShotReferences } from './reference-plan';
-import { canRefreshProfileValidationFromRender, currentGenerationState, shotRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { canRefreshProfileValidationFromRender, currentGenerationState, shotRenderInputKey, workflowExecutionKey, workflowQualificationKey } from '../../shared/shot-signature';
 import { currentProductionInputKeyForOutput, renderOutputProductionInputKey, shotProductionInputKey } from '../../shared/production-state';
 import { selectRecoveryJob, shotStatusAfterJobSettlement } from '../../shared/recovery-policy';
 import { stageWorkflowProfileSnapshot } from './workflow-snapshot';
@@ -872,6 +872,7 @@ export class RenderQueueService extends EventEmitter {
           lastRenderHeight:job.spec?.shot.generation.height,
           lastRenderFrames:job.spec?.shot.generation.frames
         };
+        profile!.validation.lastSuccessfulQualificationKey=workflowQualificationKey(profile!);
       }
     });
     // The backend is already terminal and the project summary is durable. Clear the machine
