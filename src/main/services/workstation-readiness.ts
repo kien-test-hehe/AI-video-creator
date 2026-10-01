@@ -2,6 +2,7 @@ import type { AppMachineSettings, FilmProject, WorkstationReadiness, Workstation
 import { probeSystem } from './system-probe';
 import { assertLocalUrl, fetchLocalUrl } from './local-url';
 import { readResponseJsonLimited } from './http-response';
+import { profileHasCurrentRuntimeQualification } from '../../shared/shot-signature';
 
 interface DirectorModelList{data?:Array<{id?:string}>;}
 
@@ -36,7 +37,7 @@ export function videoRouteQualification(project:FilmProject|undefined):{
 }{
   if(!project)return{structuralCount:0,runtimeQualifiedCount:0,level:'warning',detail:'Open a project to inspect local video-route qualification.'};
   const profiles=project.settings.workflowProfiles.filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid');
-  const runtimeQualified=profiles.filter(profile=>Boolean(profile.validation?.lastSuccessfulRenderAt));
+  const runtimeQualified=profiles.filter(profile=>profileHasCurrentRuntimeQualification(profile));
   if(runtimeQualified.length)return{
     structuralCount:profiles.length,runtimeQualifiedCount:runtimeQualified.length,level:'ready',
     detail:`${runtimeQualified.length} video profile(s) have completed a technical runtime render on this workstation/project. This proves executable routing, not creative/semantic production quality.`
@@ -72,7 +73,7 @@ export async function assessWorkstationReadiness(project:FilmProject|undefined,m
   add('runtime','Local generation runtime',localRuntimeReady?'ready':'blocked',probe.wangp.available?'WanGP is ready.':probe.comfy.reachable?'ComfyUI is reachable.':'Neither WanGP nor ComfyUI is ready.','Run setup.cmd or configure a dedicated local ComfyUI instance.');
 
   const routeQualification=videoRouteQualification(project);
-  const validatedProfiles=(project?.settings.workflowProfiles??[]).filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&Boolean(profile.validation?.lastSuccessfulRenderAt));
+  const validatedProfiles=(project?.settings.workflowProfiles??[]).filter(profile=>profile.enabled&&(profile.purpose??'video')==='video'&&profile.workflowPath&&profile.validation?.structuralStatus==='valid'&&profileHasCurrentRuntimeQualification(profile));
   add('profiles','Video route qualification',routeQualification.level,routeQualification.detail,routeQualification.action);
 
   const autoQcAvailable=directorModel.available;

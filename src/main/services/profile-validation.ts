@@ -7,7 +7,7 @@ import { validateComfyNodeAvailability, validateProfileBindings } from './workfl
 import { validateWanGpProfile } from './wangp-engine';
 import { probeSystem } from './system-probe';
 import { ComfyClient } from './comfy-client';
-import { shotProjectRenderInputKey, workflowExecutionKey } from '../../shared/shot-signature';
+import { profileHasCurrentRuntimeQualification, reconcileRuntimeQualificationAfterValidation, shotProjectRenderInputKey, workflowExecutionKey, workflowQualificationKey } from '../../shared/shot-signature';
 import { workflowCapabilityErrors, type WorkflowCapabilityShot } from '../../shared/workflow-capabilities';
 
 export async function validateAndRecordProfile(projects: ProjectService, machine: AppMachineSettings, profileId: string): Promise<FilmProject> {
@@ -50,15 +50,17 @@ export async function validateAndRecordProfile(projects: ProjectService, machine
     if(!target)throw new Error('Workflow profile was removed while validation was running. Validation result was discarded.');
     if(workflowExecutionKey(target)!==profileInputKey)throw new Error('Workflow profile configuration changed while validation was running. Validation result was discarded; validate again.');
     const before=new Map(p.shots.map(shot=>[shot.id,shotProjectRenderInputKey(p,shot)]));
+    const previousQualificationKey=workflowQualificationKey(target);
+    const previousQualificationTrusted=profileHasCurrentRuntimeQualification(target);
     target.validation = {
       ...(target.validation ?? { structuralStatus:'unvalidated' }),
       structuralStatus: errors.length ? 'invalid' : 'valid',
       validatedAt: now,
       sourceSha256,
       runtimeFingerprint: fingerprint.environmentSha256,
-      lastError: errors.length ? errors.join('\n').slice(0,10_000) : undefined,
-      lastSuccessfulRenderAt: target.validation?.lastSuccessfulRenderAt
+      lastError: errors.length ? errors.join('\n').slice(0,10_000) : undefined
     };
+    reconcileRuntimeQualificationAfterValidation(target,previousQualificationKey,previousQualificationTrusted);
     for(const shot of p.shots){
       if(before.get(shot.id)===shotProjectRenderInputKey(p,shot))continue;
       shot.latestRenderId=undefined;
