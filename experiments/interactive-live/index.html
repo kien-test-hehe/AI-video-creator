@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interactive LIVE — Temple Garden</title>
+</head>
+<body>
+  <main class="layout">
+    <section class="scene-shell">
+      <div id="scene"></div>
+      <div class="topline"><span class="dot"></span> LIVE WORLD <span id="connection">CONNECTING</span></div>
+      <div class="scene-heading"><small>AN INTERACTIVE 3D SPACE</small><h1>Temple Garden</h1><p>Every interaction changes the scene</p></div>
+      <div class="hud"><div><strong id="likes">0</strong><span>HEARTS</span></div><div><strong id="gifts">0</strong><span>LANTERNS</span></div><div><strong id="follows">0</strong><span>FRIENDS</span></div></div>
+      <div id="message" class="message">Welcome to the garden</div>
+    </section>
+    <aside class="controls">
+      <div class="eyebrow">LOCAL CONTROL ROOM · MVP 0.1</div>
+      <h2>Interactive LIVE</h2>
+      <p>Custom TikFinity-style event pipeline. Test the 3D scene before connecting TikTok.</p>
+      <div class="status"><span class="dot"></span> <span id="mode">Simulator online</span></div>
+      <h3>Simulate live events</h3>
+      <div class="buttons">
+        <button data-type="like">♥ Add 100 hearts</button>
+        <button data-type="gift">✦ Send gift</button>
+        <button data-type="follow">☀ New follower</button>
+      </div>
+      <form id="comment-form"><label for="comment-input">Viewer comment</label><input id="comment-input" maxlength="140" placeholder="Wishing everyone a peaceful day" required/><button type="submit">Send comment</button></form>
+      <label for="event-token">Event API token (only if enabled)</label><input id="event-token" type="password" autocomplete="off" placeholder="Optional token"/>
+      <div class="small">For OBS Browser Source use:<br/><code id="obs-url"></code></div>
+      <h3>Event log</h3><div id="log" class="log" aria-live="polite"></div>
+      <p class="warning">MVP: local simulation works without TikTok credentials. Live connection and RTMP publishing are separate, permission-dependent steps.</p>
+    </aside>
+  </main>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
