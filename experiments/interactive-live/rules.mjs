@@ -25,12 +25,18 @@ export function normalizeEvent(input) {
   return { type, id, user };
 }
 
-export function createEngine() {
+export function createEngine({ initialState = {}, initialIds = [] } = {}) {
+  const validCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
   const state = {
-    likes: 0, gifts: 0, follows: 0, wishes: 0, lastMessage: "",
-    lastAction: "The garden is peaceful", sequence: 0
+    likes: validCount(initialState.likes),
+    gifts: validCount(initialState.gifts),
+    follows: validCount(initialState.follows),
+    wishes: validCount(initialState.wishes),
+    lastMessage: "",
+    lastAction: "The garden is peaceful",
+    sequence: validCount(initialState.sequence)
   };
-  const seen = new Set();
+  const seen = new Set(Array.isArray(initialIds) ? initialIds.filter((id) => typeof id === "string" && id.length <= 120).slice(-2000) : []);
 
   function receive(raw) {
     const event = normalizeEvent(raw);
@@ -61,5 +67,17 @@ export function createEngine() {
     if (actions.length) state.lastAction = actions[actions.length - 1].label;
     return { duplicate: false, state: { ...state }, actions, event };
   }
-  return { receive, snapshot: () => ({ ...state }) };
+  return {
+    receive,
+    snapshot: () => ({ ...state }),
+    isDuplicate: (id) => Boolean(id) && seen.has(id),
+    persisted: () => ({
+      version: 1,
+      state: {
+        likes: state.likes, gifts: state.gifts, follows: state.follows,
+        wishes: state.wishes, sequence: state.sequence
+      },
+      recentEventIds: Array.from(seen)
+    })
+  };
 }

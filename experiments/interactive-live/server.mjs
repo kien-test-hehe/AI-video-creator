@@ -3,14 +3,20 @@ import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createEngine } from "./rules.mjs";
+import { createEngine, normalizeEvent } from "./rules.mjs";
+import { createSnapshotStore } from "./storage.mjs";
+import { createModerationPolicy } from "./moderation.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, "dist");
 const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
 
-export function makeServer({ token = process.env.EVENT_TOKEN || "", port = Number(process.env.PORT || 8787) } = {}) {
-  const engine = createEngine();
+export function makeServer({ token = process.env.EVENT_TOKEN || "", port = Number(process.env.PORT || 8787), stateFile = process.env.STATE_FILE || "" } = {}) {
+  const store = createSnapshotStore(stateFile);
+  const loaded = store.load();
+  const engine = createEngine({ initialState: loaded.state, initialIds: loaded.recentEventIds });
+  const moderation = createModerationPolicy();
+  const metrics = { accepted: 0, rejected: 0, duplicate: 0 };
   const listeners = new Set();
 
   function push(type, data) {
@@ -28,6 +34,10 @@ export function makeServer({ token = process.env.EVENT_TOKEN || "", port = Numbe
     if (req.method === "GET" && pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ ok: true, clients: listeners.size }));
+    }
+    if (req.method === "GET" && pathname === "/api/metrics") {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ ...metrics, clients: listeners.size }));
     }
     if (req.method === "GET" && pathname === "/api/state") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
@@ -55,11 +65,22 @@ export function makeServer({ token = process.env.EVENT_TOKEN || "", port = Numbe
           body += chunk.toString();
           if (body.length > 16384) return fail(413, "Body too large");
         }
-        const result = engine.receive(JSON.parse(body));
-        if (!result.duplicate) {
-          push("state", result.state);
-          for (const action of result.actions) push("action", action);
+        const event = normalizeEvent(JSON.parse(body));
+        if (engine.isDuplicate(event.id)) {
+          metrics.duplicate++;
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ duplicate: true, state: engine.snapshot(), actions: [] }));
         }
+        const verdict = moderation.check(event);
+        if (!verdict.allowed) {
+          metrics.rejected++;
+          return fail(429, verdict.reason);
+        }
+        const result = engine.receive(verdict.event);
+        metrics.accepted++;
+        store.schedule(engine.persisted());
+        push("state", result.state);
+        for (const action of result.actions) push("action", action);
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(JSON.stringify(result));
       } catch (error) { return fail(400, error.message); }
@@ -77,7 +98,8 @@ export function makeServer({ token = process.env.EVENT_TOKEN || "", port = Numbe
     } catch { return fail(404, "Not found"); }
   });
 
-  return { server, engine };
+  server.on("close", () => { void store.flush(); });
+  return { server, engine, store, metrics };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
