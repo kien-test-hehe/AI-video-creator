@@ -106,3 +106,9 @@ Do not commit `.local/` or the state file: it may contain event IDs, and it must
 - Rate limiting and dedupe are process-local. A restart recovers the most recent ID set only when `STATE_FILE` was configured and flushed.
 - The bounded connector queue is not durable; temporary backend outages can cause dropped events.
 - Keep OBS / scene renderer on the graphical Ubuntu host; use optional GLB only after checking model scale, performance and content rights.
+
+## Blender / Ubuntu runbook
+
+See [operator runbook](docs/UBUNTU_OBS.md) for CLI-based original GLB generation, OBS quality presets, smoke tests and a systemd user-service example.
+
+Run `npm run demo:replay` while the local server is active to generate a repeatable sample event sequence.

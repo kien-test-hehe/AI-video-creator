@@ -3,13 +3,16 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "vite build",
     "start": "node server.mjs",
     "dev:ui": "vite --host 127.0.0.1",
     "test": "node --test",
-    "connect:tiktok": "node connectors/tiktok.mjs"
+    "connect:tiktok": "node connectors/tiktok.mjs",
+    "demo:replay": "node scripts/replay-events.mjs"
   },
   "dependencies": {
     "three": "^0.170.0"

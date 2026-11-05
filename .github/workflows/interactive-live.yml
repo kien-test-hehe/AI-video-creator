@@ -21,3 +21,4 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm test
       - run: npm run build
+      - run: python3 -m py_compile scripts/generate_temple.py
