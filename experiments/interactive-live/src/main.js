@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import "./style.css";
 
 const overlay = new URLSearchParams(location.search).get("view") === "overlay";
@@ -13,7 +14,7 @@ const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 90);
 camera.position.set(10, 11, 24);
 camera.lookAt(0, 3.3, 0);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -62,6 +63,36 @@ for (const x of [-5.5, -2.75, 2.75, 5.5]) cyl(0.26, 0.26, 4.5, materials.gold, [
 for (const x of [-3.6, 3.6]) cube(2.8, 3.3, 0.15, new THREE.MeshStandardMaterial({ color: 0x42342d }), [x, 3.0, -1.46]);
 cube(3.4, 4, 0.12, new THREE.MeshStandardMaterial({ color: 0x161f28 }), [0, 3.0, -1.42]);
 for (let i = 0; i < 5; i++) cube(12 - i, 0.24, 0.75, materials.stone, [0, 0.12 - i * 0.22, 0.7 + i * 0.7]);
+
+// Optional user-supplied GLB made in Blender. Keep this local to avoid remote asset fetches.
+let assetMixer = null;
+const proceduralTemple = meshes.slice(1);
+if (new URLSearchParams(location.search).get("asset") === "temple") {
+  const assetStatus = document.getElementById("asset-status");
+  new GLTFLoader().load("/models/temple.glb", (gltf) => {
+    const model = gltf.scene;
+    const bounds = new THREE.Box3().setFromObject(model);
+    const size = bounds.getSize(new THREE.Vector3());
+    if (Math.min(size.x, size.y, size.z) <= 0) {
+      if (assetStatus) assetStatus.textContent = "Model invalid; procedural fallback";
+      return;
+    }
+    const center = bounds.getCenter(new THREE.Vector3());
+    const scale = Math.min(15 / size.x, 11 / size.y, 8 / size.z);
+    model.scale.setScalar(scale);
+    model.position.set(-center.x * scale, -bounds.min.y * scale, -5 - center.z * scale);
+    model.traverse((node) => { if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; } });
+    scene.add(model);
+    for (const mesh of proceduralTemple) mesh.visible = false;
+    if (gltf.animations.length) {
+      assetMixer = new THREE.AnimationMixer(model);
+      for (const clip of gltf.animations) assetMixer.clipAction(clip).play();
+    }
+    if (assetStatus) assetStatus.textContent = "Blender GLB loaded";
+  }, undefined, () => {
+    if (assetStatus) assetStatus.textContent = "GLB missing; procedural fallback";
+  });
+}
 const pond = cyl(4, 4, 0.15, materials.water, [7, -0.07, 5]);
 pond.scale.z = 0.62;
 const lotuses = [];
@@ -168,6 +199,7 @@ let previous = performance.now();
 function animate(now) {
   const elapsed = Math.min((now - previous) / 1000, 0.1); previous = now;
   const t = now / 1000;
+  if (assetMixer) assetMixer.update(elapsed);
   for (const m of monks) m.rotation.x = now < bowUntil ? Math.sin((bowUntil - now) / 1600 * Math.PI) * 0.38 : 0;
   for (const l of lanterns) {
     l.light.intensity = Math.max(0, l.light.intensity - elapsed * 0.27);

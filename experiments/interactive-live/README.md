@@ -57,8 +57,8 @@ This repo only produces the OBS scene; it **does not create, acquire or bypass**
 ## Honest boundaries
 
 - No AI-generated voice/TTS yet; no LLM needed for event-to-animation routing.
-- No databases, durable queue, live session manager, content moderation or retention policy yet.
-- State resets on restart; in-memory event dedupe is limited to 2,000 IDs.
+- No database, durable queue, live session manager, comprehensive content moderation or retention policy yet.
+- State resets on restart unless STATE_FILE is configured; bounded deduplication persists only when state snapshots are enabled.
 - This scene is procedural 3D; there are no downloaded models or licensed third-party assets.
 - Not a payment system, donation counter, religious authority or production streaming service.
 
@@ -75,3 +75,34 @@ This repo only produces the OBS scene; it **does not create, acquire or bypass**
 TikTok (optional) / Simulator -> Event Adapter -> Local Node API -> Rule Engine -> SSE -> Three.js 3D renderer -> OBS Browser Source -> permitted TikTok LIVE output.
 
 This repository's original CineForge app is unrelated. Keep this experiment isolated until moving it to a standalone repository.
+
+## Phase 2 additions (2026-11-05)
+
+- Optional persistent state with `STATE_FILE=./.local/state.json`: debounced atomic snapshots store aggregate counts and the most recent 2,000 event IDs, **not comments**. At crash time, up to ~250ms of updates can be lost; no exactly-once guarantee.
+- Comment cooldown (2.5 seconds per user) and basic URL redaction; this is not comprehensive moderation.
+- `GET /api/metrics` provides accepted/rejected/duplicate counts and connected overlay clients (metrics reset on restart).
+- TikTok adapter uses **FOLLOW event** instead of guessing from generic SOCIAL events; finalizes gift streaks before creating actions; bounded in-memory queue and reconnect/backoff.
+- Blender GLB: export a model to `public/models/temple.glb`, rebuild, open `/?view=overlay&asset=temple`. If GLB loading fails, procedural temple remains visible. Three.js GLTFLoader is imported from the existing MIT-licensed `three` package, with no vendored code.
+- Procedural monks, flowers and pond remain interactive even with the custom building model.
+
+### Reference projects and license decisions
+
+- [Three.js](https://github.com/mrdoob/three.js) — MIT; reuse GLTFLoader through the published npm dependency.
+- [TikTok-Live-Connector](https://github.com/zerodytrash/TikTok-Live-Connector) — AGPL-3.0; used only via optional external package; no source copied into this repo. Check reciprocal obligations before distributing a combined work.
+- No unlicensed 3D assets are bundled. Obtain explicit reuse/redistribution rights and attribution for downloaded GLB assets.
+
+### Persisted run (Ubuntu)
+
+```bash
+mkdir -p .local
+STATE_FILE=./.local/state.json EVENT_TOKEN=replace-me npm start
+```
+
+Do not commit `.local/` or the state file: it may contain event IDs, and it must remain on the local machine.
+
+### Known limitations
+
+- Connector payload mapping is based on current upstream documentation but **not yet tested against a live TikTok session**.
+- Rate limiting and dedupe are process-local. A restart recovers the most recent ID set only when `STATE_FILE` was configured and flushed.
+- The bounded connector queue is not durable; temporary backend outages can cause dropped events.
+- Keep OBS / scene renderer on the graphical Ubuntu host; use optional GLB only after checking model scale, performance and content rights.
