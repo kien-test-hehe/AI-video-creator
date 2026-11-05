@@ -1,0 +1,23 @@
+name: Interactive LIVE MVP
+on:
+  push:
+    branches:
+      - feature/interactive-live-ubuntu-mvp
+  pull_request:
+    paths:
+      - 'experiments/interactive-live/**'
+      - '.github/workflows/interactive-live.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: experiments/interactive-live
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - run: npm run build
