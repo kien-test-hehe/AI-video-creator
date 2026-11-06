@@ -39,3 +39,17 @@ code { color: #efd2a6; font-size: 11px; }
 .overlay .controls { display: none; }
 .overlay .scene-heading h1 { font-size: clamp(30px, 6vh, 58px); }
 @media (max-width: 800px) { .layout { display: block; padding: 0; } .scene-shell { min-height: 650px; height: 85vh; border-radius: 0; } .controls { padding: 24px; } }
+
+
+/* Scene Studio */
+.world-controls { margin-top: 24px; padding-top: 6px; border-top: 1px solid #425168; }
+.controls select { width: 100%; border: 1px solid #36465b; border-radius: 9px; background: #101e2b; color: #f5eadd; padding: 12px; }
+.studio-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.studio-actions button { flex: 1; min-width: 100px; }
+button.subtle { background: #334253; color: #f5eadd; }
+button.subtle:hover { background: #496075; }
+.inline-check { display: flex; align-items: center; gap: 8px; }
+.inline-check input { width: auto; accent-color: #c8a26b; }
+.axis-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.axis-grid input { width: 100%; padding: 8px; }
+#glb-file { font-size: 11px; }

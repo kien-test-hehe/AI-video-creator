@@ -29,6 +29,46 @@
       <label for="event-token">Event API token (only if enabled)</label><input id="event-token" type="password" autocomplete="off" placeholder="Optional token"/>
       <div class="small" id="asset-status">3D mode: procedural (append ?asset=temple to use a Blender GLB)</div>
       <div class="small">For OBS Browser Source use:<br/><code id="obs-url"></code></div>
+
+      <section class="world-controls">
+        <h3>3D Scene Studio</h3>
+        <p>Choose a fixed world slot, upload your GLB and set coordinates. No coding required.</p>
+        <label for="slot-select">Scene slot</label>
+        <select id="slot-select"></select>
+        <div id="selected-asset" class="small"></div>
+        <label for="glb-file">GLB asset (Blender export, maximum 30 MB)</label>
+        <input id="glb-file" type="file" accept=".glb,model/gltf-binary"/>
+        <div class="studio-actions">
+          <button id="upload-glb">Upload GLB</button>
+          <button id="delete-glb" class="subtle">Remove</button>
+        </div>
+        <label for="world-title">World title</label>
+        <input id="world-title" maxlength="60" value="Temple Garden"/>
+        <label class="inline-check"><input type="checkbox" id="world-grid"/> Show 3D grid (hide before LIVE)</label>
+        <label class="inline-check"><input type="checkbox" id="slot-enabled" checked/> Slot enabled</label>
+        <div class="axis-grid">
+          <label>X <input id="axis-x" type="number" step="0.1" min="-40" max="40" value="0"/></label>
+          <label>Y <input id="axis-y" type="number" step="0.1" min="-40" max="40" value="0"/></label>
+          <label>Z <input id="axis-z" type="number" step="0.1" min="-40" max="40" value="0"/></label>
+        </div>
+        <div class="axis-grid">
+          <label>Scale <input id="slot-scale" type="number" step="0.1" min="0.01" max="15" value="1"/></label>
+          <label>Yaw (radians) <input id="slot-yaw" type="number" step="0.1" min="-6.283" max="6.283" value="0"/></label>
+        </div>
+        <h3>Interaction mapping</h3>
+        <label for="like-threshold">Likes per lotus milestone</label>
+        <input id="like-threshold" type="number" min="1" max="100000" step="1" value="100"/>
+        <label for="gift-action">Gift action</label>
+        <select id="gift-action"><option>lantern</option><option>lotus</option><option>bow</option><option>wish</option><option>none</option></select>
+        <label for="follow-action">Follow action</label>
+        <select id="follow-action"><option>bow</option><option>lantern</option><option>lotus</option><option>wish</option><option>none</option></select>
+        <label for="comment-action">Comment action</label>
+        <select id="comment-action"><option>wish</option><option>bow</option><option>lantern</option><option>lotus</option><option>none</option></select>
+        <div class="studio-actions"><button id="save-world">Save world + rules</button><button id="export-world" class="subtle">Export JSON</button></div>
+        <label for="import-world">Import world JSON</label><input id="import-world" type="file" accept=".json,application/json"/>
+        <div id="studio-status" aria-live="polite" class="small"></div>
+        <div id="studio-metrics" class="small"></div>
+      </section>
       <h3>Event log</h3><div id="log" class="log" aria-live="polite"></div>
       <p class="warning">MVP: local simulation works without TikTok credentials. Live connection and RTMP publishing are separate, permission-dependent steps.</p>
     </aside>

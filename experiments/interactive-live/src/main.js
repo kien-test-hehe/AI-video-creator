@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { createWorldLayer } from "./world.js";
+import { setupStudio } from "./studio.js";
 import "./style.css";
 
 const overlay = new URLSearchParams(location.search).get("view") === "overlay";
@@ -64,35 +65,7 @@ for (const x of [-3.6, 3.6]) cube(2.8, 3.3, 0.15, new THREE.MeshStandardMaterial
 cube(3.4, 4, 0.12, new THREE.MeshStandardMaterial({ color: 0x161f28 }), [0, 3.0, -1.42]);
 for (let i = 0; i < 5; i++) cube(12 - i, 0.24, 0.75, materials.stone, [0, 0.12 - i * 0.22, 0.7 + i * 0.7]);
 
-// Optional user-supplied GLB made in Blender. Keep this local to avoid remote asset fetches.
-let assetMixer = null;
 const proceduralTemple = meshes.slice(1);
-if (new URLSearchParams(location.search).get("asset") === "temple") {
-  const assetStatus = document.getElementById("asset-status");
-  new GLTFLoader().load("/models/temple.glb", (gltf) => {
-    const model = gltf.scene;
-    const bounds = new THREE.Box3().setFromObject(model);
-    const size = bounds.getSize(new THREE.Vector3());
-    if (Math.min(size.x, size.y, size.z) <= 0) {
-      if (assetStatus) assetStatus.textContent = "Model invalid; procedural fallback";
-      return;
-    }
-    const center = bounds.getCenter(new THREE.Vector3());
-    const scale = Math.min(15 / size.x, 11 / size.y, 8 / size.z);
-    model.scale.setScalar(scale);
-    model.position.set(-center.x * scale, -bounds.min.y * scale, -5 - center.z * scale);
-    model.traverse((node) => { if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; } });
-    scene.add(model);
-    for (const mesh of proceduralTemple) mesh.visible = false;
-    if (gltf.animations.length) {
-      assetMixer = new THREE.AnimationMixer(model);
-      for (const clip of gltf.animations) assetMixer.clipAction(clip).play();
-    }
-    if (assetStatus) assetStatus.textContent = "Blender GLB loaded";
-  }, undefined, () => {
-    if (assetStatus) assetStatus.textContent = "GLB missing; procedural fallback";
-  });
-}
 const pond = cyl(4, 4, 0.15, materials.water, [7, -0.07, 5]);
 pond.scale.z = 0.62;
 const lotuses = [];
@@ -114,12 +87,12 @@ function addLotus(angle) {
 for (let i = 0; i < 6; i++) addLotus(i * 2.399);
 let activeLotus = 0;
 function lantern(x, z) {
-  cyl(0.13, 0.18, 4.6, materials.wood, [x, 2.3, z]);
+  const pole = cyl(0.13, 0.18, 4.6, materials.wood, [x, 2.3, z]);
   const lanternMesh = sphere(0.44, new THREE.MeshStandardMaterial({ color: 0xffa656, emissive: 0xff5f18, emissiveIntensity: 0.9 }), [x, 4.4, z]);
   const light = new THREE.PointLight(0xffa24c, 0, 7);
   light.position.set(x, 4.5, z);
   scene.add(light);
-  return { mesh: lanternMesh, light };
+  return { pole, mesh: lanternMesh, light };
 }
 const lanterns = [lantern(-8, 3), lantern(8, 1), lantern(-7, -6), lantern(7, -8)];
 let activeLanterns = 0;
@@ -138,6 +111,13 @@ for (let i = 0; i < 65; i++) {
   const x = Math.sin(i * 13.3) * 24, y = 12 + ((i * 13) % 17), z = -15 - ((i * 7) % 20);
   stars.push(sphere(i % 5 === 0 ? 0.07 : 0.035, new THREE.MeshBasicMaterial({ color: 0xf8ead2 }), [x, y, z]));
 }
+
+const worldLayer = createWorldLayer({
+  scene, proceduralTemple, monks, pond, lanterns,
+  assetStatus: document.getElementById("asset-status")
+});
+const studio = overlay ? null : setupStudio({});
+void worldLayer.refreshAssets();
 
 const ids = ["likes", "gifts", "follows"];
 function setState(state) {
@@ -163,6 +143,12 @@ const connectionLabel = document.getElementById("connection");
 const source = new EventSource("/events");
 source.addEventListener("state", (event) => setState(JSON.parse(event.data)));
 source.addEventListener("action", (event) => action(JSON.parse(event.data)));
+source.addEventListener("world", (event) => {
+  const next = JSON.parse(event.data);
+  worldLayer.setWorld(next);
+  studio?.setWorld(next);
+});
+source.addEventListener("asset", () => { void worldLayer.refreshAssets(); });
 source.onopen = () => { connectionLabel.textContent = "CONNECTED"; };
 source.onerror = () => { connectionLabel.textContent = "RECONNECTING"; };
 
@@ -199,7 +185,7 @@ let previous = performance.now();
 function animate(now) {
   const elapsed = Math.min((now - previous) / 1000, 0.1); previous = now;
   const t = now / 1000;
-  if (assetMixer) assetMixer.update(elapsed);
+  worldLayer.tick(elapsed);
   for (const m of monks) m.rotation.x = now < bowUntil ? Math.sin((bowUntil - now) / 1600 * Math.PI) * 0.38 : 0;
   for (const l of lanterns) {
     l.light.intensity = Math.max(0, l.light.intensity - elapsed * 0.27);
