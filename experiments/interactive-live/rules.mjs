@@ -25,7 +25,9 @@ export function normalizeEvent(input) {
   return { type, id, user };
 }
 
-export function createEngine({ initialState = {}, initialIds = [] } = {}) {
+export function createEngine({ initialState = {}, initialIds = [], rules = {} } = {}) {
+  let activeRules = { likeThreshold: 100, giftAction: "lantern", followAction: "bow", commentAction: "wish", ...rules };
+  const makeAction = (kind, label) => kind === "none" ? [] : [{ kind, label }];
   const validCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
   const state = {
     likes: validCount(initialState.likes),
@@ -47,21 +49,21 @@ export function createEngine({ initialState = {}, initialIds = [] } = {}) {
     }
     const actions = [];
     if (event.type === "like") {
-      const before = Math.floor(state.likes / 100);
+      const before = Math.floor(state.likes / activeRules.likeThreshold);
       state.likes += event.count;
-      if (Math.floor(state.likes / 100) > before) {
+      if (Math.floor(state.likes / activeRules.likeThreshold) > before) {
         actions.push({ kind: "lotus", label: "The lotus pond blooms" });
       }
     } else if (event.type === "gift") {
       state.gifts += event.count;
-      actions.push({ kind: "lantern", label: event.user + " lit a lantern" });
+      actions.push(...makeAction(activeRules.giftAction, event.user + " sent " + event.gift));
     } else if (event.type === "follow") {
       state.follows++;
-      actions.push({ kind: "bow", label: "Welcome " + event.user });
+      actions.push(...makeAction(activeRules.followAction, "Welcome " + event.user));
     } else if (event.type === "comment") {
       state.wishes++;
       state.lastMessage = event.user + ": " + event.message;
-      actions.push({ kind: "wish", label: state.lastMessage });
+      actions.push(...makeAction(activeRules.commentAction, state.lastMessage));
     }
     state.sequence++;
     if (actions.length) state.lastAction = actions[actions.length - 1].label;
@@ -70,6 +72,7 @@ export function createEngine({ initialState = {}, initialIds = [] } = {}) {
   return {
     receive,
     snapshot: () => ({ ...state }),
+    setRules: (next) => { activeRules = { ...activeRules, ...next }; },
     isDuplicate: (id) => Boolean(id) && seen.has(id),
     persisted: () => ({
       version: 1,
