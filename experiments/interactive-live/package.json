@@ -12,7 +12,12 @@
     "dev:ui": "vite --host 127.0.0.1",
     "test": "node --test",
     "connect:tiktok": "node connectors/tiktok.mjs",
-    "demo:replay": "node scripts/replay-events.mjs"
+    "demo:replay": "node scripts/replay-events.mjs",
+    "obs:probe": "node scripts/obs.mjs probe",
+    "obs:setup": "node scripts/obs.mjs setup",
+    "obs:start": "node scripts/obs.mjs start",
+    "obs:stop": "node scripts/obs.mjs stop",
+    "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {
     "three": "^0.170.0"
