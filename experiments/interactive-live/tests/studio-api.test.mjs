@@ -7,7 +7,7 @@ import { makeServer } from "../server.mjs";
 
 test("world edit, upload, download and delete flow is token protected", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "live-http-"));
-  const { server } = makeServer({
+  const { server, store } = makeServer({
     token: "secret", port: 0,
     worldFile: join(dir, "world.json"),
     stateFile: join(dir, "state.json"),
@@ -15,6 +15,7 @@ test("world edit, upload, download and delete flow is token protected", async (t
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   t.after(async () => {
+    await store.flush();
     await new Promise((resolve) => server.close(resolve));
     await rm(dir, { recursive: true, force: true });
   });

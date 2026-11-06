@@ -196,7 +196,7 @@ export function makeServer({
       return res.end(req.method === "HEAD" ? undefined : content);
     } catch { return fail(404, "Not found"); }
   });
-  server.on("close", () => { void store.flush(); });
+  server.on("close", () => { void store.flush().catch((error) => console.error("Final snapshot flush failed:", error)); });
   return { server, engine, store, world, assets, metrics, push };
 }
 
