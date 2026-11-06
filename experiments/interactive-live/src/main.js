@@ -149,6 +149,15 @@ source.addEventListener("world", (event) => {
   studio?.setWorld(next);
 });
 source.addEventListener("asset", () => { void worldLayer.refreshAssets(); });
+function connectorStatus(data) {
+  const el = document.getElementById("mode");
+  if (!el) return;
+  el.textContent = data.connected ? "TikTok connected (queued " + data.queue + ")" : "Simulator / TikTok disconnected";
+}
+source.addEventListener("connector", (event) => connectorStatus(JSON.parse(event.data)));
+if (!overlay) {
+  fetch("/api/connector/status").then((r) => r.json()).then(connectorStatus).catch(() => {});
+}
 const speechQueue = [];
 let speaking = false;
 async function playQueuedSpeech() {

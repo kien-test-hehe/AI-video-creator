@@ -58,6 +58,7 @@ export function makeServer({
   const runtimeNarrator = narrator || createNarrator();
   const runtimeVoice = voice;
   const listeners = new Set();
+  let connector = { connected: false, roomId: "", queue: 0, updatedAt: 0 };
 
   function push(type, data) {
     const packet = "event: " + type + "\ndata: " + JSON.stringify(data) + "\n\n";
@@ -93,6 +94,9 @@ export function makeServer({
     }
     if (req.method === "GET" && pathname === "/api/metrics") {
       return json(res, 200, { ...metrics, clients: listeners.size });
+    }
+    if (req.method === "GET" && pathname === "/api/connector/status") {
+      return json(res, 200, { ...connector, stale: Date.now() - connector.updatedAt > 15000 });
     }
     if (req.method === "GET" && pathname === "/api/state") return json(res, 200, engine.snapshot());
     if (req.method === "GET" && pathname === "/api/world") return json(res, 200, world.get());
@@ -131,6 +135,18 @@ export function makeServer({
     const mutating = ["POST", "PUT", "DELETE"].includes(req.method);
     if (mutating && !safeOrigin) return fail(403, "Untrusted origin");
     if (mutating && !authorized) return fail(401, "Invalid event token");
+    if (req.method === "POST" && pathname === "/api/connector/status") {
+      if (!String(req.headers["content-type"] || "").startsWith("application/json")) return fail(415, "JSON required");
+      try {
+        const data = JSON.parse((await readBounded(req, 1024)).toString("utf8"));
+        if (typeof data.connected !== "boolean" ||
+            typeof data.roomId !== "string" || data.roomId.length > 100 ||
+            !Number.isInteger(data.queue) || data.queue < 0 || data.queue > 100000) return fail(400, "Invalid status");
+        connector = { connected: data.connected, roomId: data.roomId, queue: data.queue, updatedAt: Date.now() };
+        push("connector", connector);
+        return json(res, 200, connector);
+      } catch (error) { return fail(clientError(error), "Malformed connector status"); }
+    }
     if (req.method === "POST" && pathname === "/api/events") {
       if (!String(req.headers["content-type"] || "").startsWith("application/json")) return fail(415, "JSON required");
       try {

@@ -4,6 +4,7 @@
  * Read-only listener; cannot send comments, gifts or automate TikTok account actions.
  */
 import { fromTikTokEvent } from "./event-mapper.mjs";
+import { createOutbox } from "./outbox.mjs";
 
 const username = (process.env.TIKTOK_USERNAME || "").replace(/^@/, "");
 const token = process.env.EVENT_TOKEN;
@@ -13,16 +14,29 @@ if (!token) throw new Error("Set EVENT_TOKEN to protect the local POST endpoint"
 const { TikTokLiveConnection, WebcastEvent, ControlEvent } = await import("tiktok-live-connector");
 const endpoint = "http://127.0.0.1:" + (process.env.PORT || "8787") + "/api/events";
 let stopping = false, connection = null;
-const queue = [];
+const outbox = createOutbox({ file: process.env.OUTBOX_FILE || ".local/connector-outbox.json" });
 let draining = false;
+let connected = false, roomId = "";
+const statusEndpoint = "http://127.0.0.1:" + (process.env.PORT || "8787") + "/api/connector/status";
+async function statusPing() {
+  try {
+    await fetch(statusEndpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-event-token": token },
+      body: JSON.stringify({ connected, roomId, queue: outbox.count() }),
+      signal: AbortSignal.timeout(2500)
+    });
+  } catch { /* reported by backend TTL */ }
+}
+const heartbeat = setInterval(() => { void statusPing(); }, 5000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function drain() {
   if (draining) return;
   draining = true;
   try {
-    while (queue.length && !stopping) {
-      const next = queue[0];
+    while (outbox.count() && !stopping) {
+      const next = outbox.peek();
       try {
         const response = await fetch(endpoint, {
           method: "POST",
@@ -30,9 +44,12 @@ async function drain() {
           body: JSON.stringify(next),
           signal: AbortSignal.timeout(5000)
         });
-        if (response.status === 429) { queue.shift(); continue; } // moderation cooldown
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        queue.shift();
+        if (response.status === 429 || response.ok) { await outbox.ack(); continue; }
+        if (response.status === 401 || response.status === 403) {
+          console.error("Connector authorization rejected; fix EVENT_TOKEN before retrying.");
+          break;
+        }
+        throw new Error("HTTP " + response.status);
       } catch (err) {
         console.error("Local event delivery failed:", err.message);
         await sleep(2000);
@@ -40,26 +57,30 @@ async function drain() {
     }
   } finally { draining = false; }
 }
-function enqueue(type, data) {
+async function enqueue(type, data) {
   const event = fromTikTokEvent(type, data);
   if (!event) return;
-  if (queue.length >= 500) {
-    // Prefer keeping gifts and comments when saturated; likes are best effort.
-    const likeIndex = queue.findIndex((item) => item.type === "like");
-    if (likeIndex >= 0) queue.splice(likeIndex, 1);
-    else { console.warn("Event backlog full; dropping an event"); return; }
-  }
-  queue.push(event);
-  void drain();
+  try {
+    if (!await outbox.enqueue(event)) {
+      console.error("Outbox full; cannot enqueue", event.type);
+      return;
+    }
+    void drain();
+  } catch (error) { console.error("Outbox write failed:", error.message); }
 }
 async function shutdown() {
   stopping = true;
+  clearInterval(heartbeat);
+  connected = false;
+  await statusPing();
   try { await connection?.disconnect(); } catch {}
+  await outbox.flush();
 }
 process.once("SIGINT", () => { void shutdown(); });
 process.once("SIGTERM", () => { void shutdown(); });
 
 let retry = 2000;
+void drain();
 while (!stopping) {
   connection = new TikTokLiveConnection(username, { processInitialData: false });
   connection.on(WebcastEvent.CHAT, (data) => enqueue("chat", data));
@@ -75,10 +96,14 @@ while (!stopping) {
     const state = await connection.connect();
     console.log("TikTok LIVE connected:", username, "room:", state.roomId);
     retry = 2000;
+    connected = true; roomId = String(state.roomId || "");
+    await statusPing();
     console.warn("TikTok connection ended:", await disconnected);
   } catch (e) {
     console.error("TikTok connect failed:", e.message);
   } finally {
+    connected = false; roomId = "";
+    void statusPing();
     try { await connection.disconnect(); } catch {}
     connection.removeAllListeners();
     connection = null;
