@@ -149,6 +149,34 @@ source.addEventListener("world", (event) => {
   studio?.setWorld(next);
 });
 source.addEventListener("asset", () => { void worldLayer.refreshAssets(); });
+const speechQueue = [];
+let speaking = false;
+async function playQueuedSpeech() {
+  if (speaking) return;
+  speaking = true;
+  try {
+    while (speechQueue.length) {
+      const url = speechQueue.shift();
+      try {
+        const audio = new Audio(url);
+        audio.preload = "auto";
+        await audio.play();
+        await new Promise((resolve) => {
+          audio.addEventListener("ended", resolve, { once: true });
+          audio.addEventListener("error", resolve, { once: true });
+          setTimeout(resolve, 30000);
+        });
+      } catch (error) { console.warn("Browser Source audio playback unavailable:", error.message); }
+    }
+  } finally { speaking = false; }
+}
+source.addEventListener("narration", (event) => action({ kind: "narration", label: JSON.parse(event.data).text }));
+source.addEventListener("speech", (event) => {
+  const url = JSON.parse(event.data).url;
+  if (!/^\/audio\/speech-[a-f0-9-]{36}\.wav$/.test(url)) return;
+  if (speechQueue.length < 3) speechQueue.push(url);
+  void playQueuedSpeech();
+});
 source.onopen = () => { connectionLabel.textContent = "CONNECTED"; };
 source.onerror = () => { connectionLabel.textContent = "RECONNECTING"; };
 

@@ -8,6 +8,8 @@ import { createSnapshotStore } from "./storage.mjs";
 import { createModerationPolicy } from "./moderation.mjs";
 import { createWorldStore, SLOT_IDS } from "./world.mjs";
 import { createAssetLibrary } from "./assets.mjs";
+import { createNarrator } from "./narrator.mjs";
+import { createPiperVoice } from "./voice.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, "dist");
@@ -41,7 +43,7 @@ export function makeServer({
   stateFile = process.env.STATE_FILE || "",
   worldFile = process.env.WORLD_FILE || "",
   assetsDir = process.env.ASSET_DIR || ".local/assets",
-  onEvent = null
+  onEvent = null, narrator = null, voice = null
 } = {}) {
   const store = createSnapshotStore(stateFile);
   const loaded = store.load();
@@ -53,6 +55,8 @@ export function makeServer({
   });
   const moderation = createModerationPolicy();
   const metrics = { accepted: 0, rejected: 0, duplicate: 0, errors: 0, startedAt: Date.now() };
+  const runtimeNarrator = narrator || createNarrator();
+  const runtimeVoice = voice;
   const listeners = new Set();
 
   function push(type, data) {
@@ -75,6 +79,17 @@ export function makeServer({
     const fail = (status, error) => json(res, status, { error });
     if (req.method === "GET" && pathname === "/health") {
       return json(res, 200, { ok: true, clients: listeners.size, uptimeSeconds: Math.floor(process.uptime()) });
+    }
+    if (req.method === "GET" && pathname === "/api/capabilities") {
+      return json(res, 200, { narrator: runtimeNarrator.status(), uploadGlb: true, livePublishing: false });
+    }
+    if (req.method === "GET" && pathname.startsWith("/audio/") && runtimeVoice) {
+      try {
+        const filename = pathname.slice("/audio/".length);
+        const bytes = await runtimeVoice.read(filename);
+        res.writeHead(200, { "content-type": "audio/wav", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+        return res.end(bytes);
+      } catch (error) { return fail(error.code === "ENOENT" ? 404 : 400, "Audio unavailable"); }
     }
     if (req.method === "GET" && pathname === "/api/metrics") {
       return json(res, 200, { ...metrics, clients: listeners.size });
@@ -134,6 +149,7 @@ export function makeServer({
         store.schedule(engine.persisted());
         push("state", result.state);
         for (const action of result.actions) push("action", action);
+        void runtimeNarrator.handle(result, push);
         if (typeof onEvent === "function") {
           try { void Promise.resolve(onEvent(result, { push })).catch((error) => console.error("onEvent failed:", error.message)); }
           catch (error) { console.error("onEvent failed:", error.message); }
@@ -205,8 +221,17 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   if (host !== "127.0.0.1" && host !== "localhost") throw Error("Local-only server; HOST must be loopback");
   if (process.env.LIVE_MODE === "1" && !process.env.EVENT_TOKEN) throw Error("EVENT_TOKEN is required in LIVE_MODE");
   const port = Number(process.env.PORT || 8787);
+  const piper = createPiperVoice({ model: process.env.PIPER_MODEL || "", executable: process.env.PIPER_BIN || "piper" });
+  const narrator = createNarrator({
+    enabled: process.env.AI_ENABLED === "1",
+    baseUrl: process.env.AI_BASE_URL || "http://127.0.0.1:11434/v1",
+    model: process.env.AI_MODEL || "",
+    apiKey: process.env.AI_API_KEY || "",
+    allowRemote: process.env.AI_ALLOW_REMOTE === "1",
+    voice: piper
+  });
   makeServer({
-    port,
+    port, narrator, voice: piper,
     stateFile: process.env.STATE_FILE || ".local/state.json",
     worldFile: process.env.WORLD_FILE || ".local/world.json",
     assetsDir: process.env.ASSET_DIR || ".local/assets"
